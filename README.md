@@ -57,5 +57,19 @@ MAINNET_RPC=http://127.0.0.1:9998 RPC_PASSWORD=… cargo run -- serve
 
 ## Deploy notes
 
-Production runs in container the host (`dash-nodes`, 192.0.2.10) on the host: the repo is at
-`/opt/dash-nodes` and the stack at `/opt/dash-nodes/deploy`. Cloudflare serves `nodes.dashhq.org`.
+Production runs in container the host (`dash-nodes`, 192.0.2.10, 8 cores / 12 GB / 150 GB on
+`local storage`) on the host. The source is unpacked at `/opt/dash-nodes` (the deployed commit is in
+`DEPLOYED_COMMIT`) and the stack runs from `/opt/dash-nodes/deploy`.
+
+- **Redeploy:** `git archive` or tar the tree (without `target/`, `deploy/secrets`, `deploy/.env`),
+  unpack it over `/opt/dash-nodes`, then `docker compose build app && docker compose up -d app`.
+  Restarting the app abandons a crawl in progress; the next one starts right away.
+- **Seeding dashd:** the datadirs were seeded on 2026-10-29 from a ZFS snapshot of another node's
+  (the host) v24.0.0-rc.4, txindex=1 datadirs (`blocks chainstate indexes evodb llmq`, rsynced on the
+  host host into `dash-nodes_dashd-{mainnet,testnet}` volumes, owner the mapped uid). Keep `DASHD_TAG` at or
+  above the version that wrote them.
+- **Public access:** Cloudflare serves `nodes.dashhq.org` through the remote-managed tunnel in the host
+  (`cloudflared`), whose public hostname points at `http://192.0.2.10:8080`. The compose
+  `tunnel` profile is the alternative if this stack should own its own tunnel.
+- **Data:** SQLite in the `dash-nodes_app-data` volume (`mainnet.sqlite`, `testnet.sqlite`,
+  `geo/`). Deleting a file rebuilds that network from scratch (history is lost).
