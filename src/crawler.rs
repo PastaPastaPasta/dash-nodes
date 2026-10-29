@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use futures::StreamExt;
+use rand::SeedableRng;
 use rand::seq::SliceRandom;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::{Value, json};
@@ -24,12 +25,16 @@ const ACTIVE_WINDOW: i64 = 7 * DAY;
 const GETADDR_EVERY: i64 = 6 * 3600;
 /// Addresses that never answered get this many tries (with backoff) before going to weekly retries.
 const NEW_ADDR_TRIES: i64 = 6;
-const MAX_DISCOVERED_PER_CRAWL: usize = 20_000;
+/// Never-reached addresses probed per crawl, per pass. The rest wait for the next crawl.
+const MAX_UNPROVEN_PER_CRAWL: usize = 5_000;
+/// The first crawl asks this many peers for addresses, to bootstrap the address table.
+const BOOTSTRAP_GETADDR: usize = 1_000;
 const PER_CRAWL_RETENTION: i64 = 14 * DAY;
 const MN_DAILY_RETENTION: i64 = 180 * DAY;
 const NODE_RETENTION: i64 = 30 * DAY;
 
 pub async fn run(ctx: Arc<NetCtx>) {
+    ctx.crawl_status.write().unwrap().running = false;
     while !ctx.mn_loaded.load(Ordering::Acquire) {
         tokio::time::sleep(Duration::from_secs(10)).await;
     }
@@ -94,6 +99,11 @@ async fn crawl_once(ctx: &NetCtx) -> Result<i64> {
         })
         .await?;
 
+    let first_crawl = ctx
+        .db
+        .read(|c| Ok(c.query_row("SELECT count(*) FROM crawls WHERE finished IS NOT NULL", [], |r| r.get::<_, i64>(0))? == 0))
+        .await?;
+    let mut rng = rand::rngs::StdRng::from_rng(&mut rand::rng());
     let usable = |a: &SocketAddr| p2p::is_routable(a) && (ctx.crawl_cfg.ipv6 || a.is_ipv4());
     let mut targets: HashMap<SocketAddr, bool> = HashMap::new();
     for a in mn_addrs.iter().filter_map(|s| s.parse().ok()).filter(usable) {
@@ -101,24 +111,34 @@ async fn crawl_once(ctx: &NetCtx) -> Result<i64> {
     }
     // Ask nodes that answered recently for addresses, a random sample each crawl.
     let mut getaddr_candidates = Vec::new();
+    let mut unproven = Vec::new();
     for (addr, last_success, last_getaddr) in &due {
         let Ok(a) = addr.parse::<SocketAddr>() else { continue };
         if !usable(&a) {
             continue;
         }
-        targets.entry(a).or_insert(false);
-        if last_success.is_some_and(|t| now - t < ACTIVE_WINDOW) && last_getaddr.is_none_or(|t| now - t > GETADDR_EVERY)
-        {
-            getaddr_candidates.push(a);
+        match last_success {
+            Some(t) if now - t < ACTIVE_WINDOW => {
+                targets.entry(a).or_insert(false);
+                if last_getaddr.is_none_or(|t| now - t > GETADDR_EVERY) {
+                    getaddr_candidates.push(a);
+                }
+            }
+            _ => unproven.push(a),
         }
     }
-    getaddr_candidates.shuffle(&mut rand::rng());
-    // Bootstrap: with nothing heard yet, ask whoever we have.
-    let first_crawl = due.iter().all(|(_, s, _)| s.is_none());
-    let limit = if first_crawl { usize::MAX } else { ctx.crawl_cfg.getaddr_per_crawl };
-    if first_crawl {
-        getaddr_candidates = targets.keys().copied().collect();
+    unproven.shuffle(&mut rng);
+    for a in unproven.into_iter().take(MAX_UNPROVEN_PER_CRAWL) {
+        targets.entry(a).or_insert(false);
     }
+    // Bootstrap: with nothing heard yet, ask a sample of whoever we have.
+    let limit = if first_crawl {
+        getaddr_candidates = targets.keys().copied().collect();
+        BOOTSTRAP_GETADDR
+    } else {
+        ctx.crawl_cfg.getaddr_per_crawl
+    };
+    getaddr_candidates.shuffle(&mut rng);
     for a in getaddr_candidates.into_iter().take(limit) {
         targets.insert(a, true);
     }
@@ -127,21 +147,20 @@ async fn crawl_once(ctx: &NetCtx) -> Result<i64> {
     let mut outcomes = probe_all(ctx, targets.iter().map(|(a, g)| (*a, *g)).collect(), tip).await;
 
     // Second pass: probe addresses we just learned about, so this crawl's picture is complete.
+    // Gossip is only trusted for the network's default port: anything else could aim us at
+    // arbitrary services on third-party hosts. Masternodes on other ports come from the list.
     let mut seen: HashSet<SocketAddr> = targets.keys().copied().collect();
-    let mut fresh = Vec::new();
-    for o in &outcomes {
-        if let Ok(p) = &o.result {
-            for a in &p.addrs {
-                if usable(a) && seen.insert(*a) {
-                    fresh.push(*a);
-                }
-            }
+    let mut gossip = Vec::new();
+    for o in &mut outcomes {
+        if let Ok(p) = &mut o.result {
+            gossip.extend(std::mem::take(&mut p.addrs).into_iter().filter(|a| usable(a) && a.port() == ctx.net.default_port()));
         }
     }
+    let mut fresh: Vec<SocketAddr> = gossip.iter().copied().filter(|a| seen.insert(*a)).collect();
     let discovered = fresh.len();
-    fresh.truncate(MAX_DISCOVERED_PER_CRAWL);
-    let gossip: Vec<SocketAddr> = outcomes.iter().filter_map(|o| o.result.as_ref().ok()).flat_map(|p| p.addrs.clone()).collect();
-    upsert_addrs(ctx, gossip.into_iter().filter(usable).collect(), "getaddr").await?;
+    fresh.shuffle(&mut rng);
+    fresh.truncate(MAX_UNPROVEN_PER_CRAWL);
+    upsert_addrs(ctx, gossip, "getaddr").await?;
     outcomes.extend(probe_all(ctx, fresh.into_iter().map(|a| (a, false)).collect(), tip).await);
 
     let tried = outcomes.len();
@@ -182,6 +201,7 @@ async fn learn_from_dashd(ctx: &NetCtx) -> Result<()> {
         }
         Err(e) => tracing::warn!(net = ctx.net.name(), "getnodeaddresses: {e:#}"),
     }
+    addrs.retain(|a| p2p::is_routable(a) && (ctx.crawl_cfg.ipv6 || a.is_ipv4()) && a.port() == ctx.net.default_port());
     let empty = ctx.db.read(|c| Ok(c.query_row("SELECT count(*) FROM nodes", [], |r| r.get::<_, i64>(0))? == 0)).await?;
     if addrs.is_empty() && empty {
         for seed in ctx.net.dns_seeds() {
@@ -398,8 +418,11 @@ fn aggregate(c: &Connection, id: i64, now: i64) -> Result<Aggregate> {
             continue;
         }
         mn_total += 1;
-        let ok = r.get::<_, Option<i64>>(2)? == Some(id) && r.get::<_, Option<i64>>(3)? == Some(1);
+        let checked = r.get::<_, Option<i64>>(2)? == Some(id);
+        let ok = checked && r.get::<_, Option<i64>>(3)? == Some(1);
         mn_reachable += i64::from(ok);
+        // Not checked: no usable service address (e.g. IPv6 while IPv6 crawling is off).
+        let reach = if ok { "yes" } else if checked { "no" } else { "unchecked" };
         let recent = r.get::<_, Option<i64>>(4)?.is_some_and(|t| now - t < ACTIVE_WINDOW);
         let ua = if recent { r.get::<_, Option<String>>(5)?.unwrap_or_default() } else { "Unknown".into() };
         let version = if recent { ua::version_label(&ua) } else { "Unknown".into() };
@@ -409,7 +432,7 @@ fn aggregate(c: &Connection, id: i64, now: i64) -> Result<Aggregate> {
         let scopes: &[&'static str] = if evo { &["mn", "evo"] } else { &["mn"] };
         for &s in scopes {
             add(s, "type", mn_type.clone());
-            add(s, "reachable", if ok { "yes".into() } else { "no".into() });
+            add(s, "reachable", reach.into());
             add(s, "ua", ua.clone());
             add(s, "version", version.clone());
             add(s, "protocol", protocol.clone().unwrap_or_else(|| "Unknown".into()));

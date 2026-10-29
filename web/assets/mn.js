@@ -145,11 +145,17 @@ function paymentsSection(m) {
   const more = el("button", { class: "btn", type: "button", text: "Load more", hidden: m.payments.length < 25 });
   more.addEventListener("click", async () => {
     more.disabled = true;
-    const r = await api(`${net}/masternodes/${protx}/payments?before=${last}&limit=100`);
-    tbody.append(...paymentRows(r.payments));
-    last = r.payments.at(-1)?.height ?? last;
-    more.hidden = r.payments.length < 100;
-    more.disabled = false;
+    try {
+      const r = await api(`${net}/masternodes/${protx}/payments?before=${last}&limit=100`);
+      tbody.append(...paymentRows(r.payments));
+      last = r.payments.at(-1)?.height ?? last;
+      more.hidden = r.payments.length < 100;
+      more.textContent = "Load more";
+    } catch (e) {
+      more.textContent = `Retry (${e.message})`;
+    } finally {
+      more.disabled = false;
+    }
   });
   const note = ps.indexed ? `indexed blocks ${fmt(ps.indexed.from)}–${fmt(ps.indexed.to)}` : "payment index not started yet";
   return el("section", {}, el("div", { class: "card-head" }, el("h2", { text: "Payments" }), el("span", { class: "sub", text: note })),

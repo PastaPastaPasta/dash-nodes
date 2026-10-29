@@ -3,8 +3,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{Context, Result, anyhow};
-use rusqlite::{Connection, params};
+use anyhow::{Context, Result, anyhow, bail};
+use rusqlite::{Connection, OptionalExtension, params};
 use serde::Serialize;
 use serde_json::{Value, json};
 
@@ -103,7 +103,7 @@ pub struct MnRow {
 pub fn parse_mn(v: &Value) -> Result<MnRow> {
     let st = &v["state"];
     let s = |x: &Value| x.as_str().filter(|s| !s.is_empty()).map(str::to_owned);
-    let first_addr = |purpose: &str| st["addresses"][purpose].as_array().and_then(|a| a.first()).and_then(&s);
+    let first_addr = |purpose: &str| st["addresses"][purpose].as_array().and_then(|a| a.first()).and_then(s);
     // Normalized through SocketAddr so it matches the crawler's `nodes.addr` keys.
     let service = first_addr("core_p2p")
         .or_else(|| s(&st["service"]))
@@ -114,10 +114,14 @@ pub fn parse_mn(v: &Value) -> Result<MnRow> {
         let host = service.as_deref()?.rsplit_once(':')?.0;
         Some(format!("{host}:{port}"))
     };
-    let payout_address = s(&st["payoutAddress"]).or_else(|| {
-        let addrs: Vec<String> = st["payouts"].as_array()?.iter().filter_map(|p| s(&p["address"])).collect();
+    // v24 multi-payout (`payouts[].address`) and shared masternodes (`shares[].rewardAddress`,
+    // `shares[].ownerAddress`, with no top-level owner) list several addresses; keep them all.
+    let join = |field: &str, key: &str| {
+        let addrs: Vec<String> = st[field].as_array()?.iter().filter_map(|p| s(&p[key])).collect();
         (!addrs.is_empty()).then(|| addrs.join(","))
-    });
+    };
+    let payout_address = s(&st["payoutAddress"]).or_else(|| join("payouts", "address")).or_else(|| join("shares", "rewardAddress"));
+    let owner_address = s(&st["ownerAddress"]).or_else(|| join("shares", "ownerAddress"));
     let collateral = match (s(&v["collateralHash"]), v["collateralIndex"].as_i64()) {
         (Some(h), Some(i)) => Some(format!("{h}-{i}")),
         _ => None,
@@ -134,7 +138,7 @@ pub fn parse_mn(v: &Value) -> Result<MnRow> {
         platform_node_id: s(&st["platformNodeID"]),
         payout_address,
         operator_payout_address: s(&st["operatorPayoutAddress"]),
-        owner_address: s(&st["ownerAddress"]),
+        owner_address,
         voting_address: s(&st["votingAddress"]),
         pubkey_operator: s(&st["pubKeyOperator"]),
         registered_height: st["registeredHeight"].as_i64(),
@@ -158,6 +162,13 @@ async fn sync_masternodes(ctx: &NetCtx) -> Result<()> {
     ctx.db
         .write(move |conn| {
             let now = db::now();
+            // A list that suddenly shrinks a lot is more likely a dashd hiccup than mass deregistration;
+            // update what we got but don't mark the rest removed.
+            let active: i64 = conn.query_row("SELECT count(*) FROM masternodes WHERE removed IS NULL", [], |r| r.get(0))?;
+            let trust_removals = (n as i64) * 5 >= active * 4;
+            if !trust_removals {
+                tracing::warn!("masternode list shrank from {active} to {n}; not marking removals this round");
+            }
             let tx = conn.transaction()?;
             {
                 let mut up = tx.prepare_cached(
@@ -189,7 +200,9 @@ async fn sync_masternodes(ctx: &NetCtx) -> Result<()> {
                     ])?;
                 }
             }
-            tx.execute("UPDATE masternodes SET removed = ?1 WHERE removed IS NULL AND updated < ?1", [now])?;
+            if trust_removals {
+                tx.execute("UPDATE masternodes SET removed = ?1 WHERE removed IS NULL AND updated < ?1", [now])?;
+            }
             tx.commit()?;
             Ok(())
         })
@@ -201,7 +214,9 @@ async fn sync_masternodes(ctx: &NetCtx) -> Result<()> {
 // ---- payments ------------------------------------------------------------------------------
 //
 // Indexed range is [pay_lo, pay_hi]. The collector extends it upward as blocks arrive; the
-// backfill task extends it downward to the DIP3 enforcement height (or --payments-floor).
+// backfill task extends it downward to the DIP3 enforcement height (or --payments-floor). Both
+// hold `ctx.pay_lock`, so the range and the tables only ever change one batch at a time, and every
+// batch is checked to link onto its stored neighbours, so the stored blocks always form a chain.
 
 fn range(conn: &Connection) -> Result<Option<(u32, u32)>> {
     let lo = get_meta(conn, "pay_lo")?.and_then(|v| v.parse().ok());
@@ -213,40 +228,54 @@ pub async fn payments_range(ctx: &NetCtx) -> Result<Option<(u32, u32)>> {
     ctx.db.read(range).await
 }
 
+/// Which end of the indexed range a batch extends.
+#[derive(Clone, Copy)]
+enum Extend {
+    First,
+    Up,
+    Down,
+}
+
+#[derive(Debug)]
+struct ChainMismatch;
+
+impl std::fmt::Display for ChainMismatch {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str("batch doesn't link onto stored blocks (reorg)")
+    }
+}
+
+impl std::error::Error for ChainMismatch {}
+
 async fn index_forward(ctx: &NetCtx, tip: u32) -> Result<()> {
-    let Some((lo, mut hi)) = payments_range(ctx).await? else {
+    let _guard = ctx.pay_lock.lock().await;
+    let Some((lo, hi)) = payments_range(ctx).await? else {
         // First run: start with just the tip; backfill takes it from there.
-        index_blocks(ctx, tip, tip).await?;
-        ctx.db
-            .write(move |c| {
-                set_meta(c, "pay_lo", &tip.to_string())?;
-                set_meta(c, "pay_hi", &tip.to_string())
-            })
-            .await?;
-        return Ok(());
+        return index_blocks(ctx, tip, tip, Extend::First).await;
     };
-    hi = unwind_reorg(ctx, lo, hi).await?;
+    // A batch that fails to link (ChainMismatch) means the stored top is off the active chain;
+    // the next tick's unwind finds and drops it.
+    let mut hi = unwind_reorg(ctx, lo, hi, tip).await?;
     let end = tip.min(hi + FORWARD_PER_TICK);
-    let mut from = hi + 1;
-    while from <= end {
-        let to = end.min(from + PAYMENT_CHUNK - 1);
-        index_blocks(ctx, from, to).await?;
-        ctx.db.write(move |c| set_meta(c, "pay_hi", &to.to_string())).await?;
-        from = to + 1;
+    while hi < end {
+        let to = end.min(hi + PAYMENT_CHUNK);
+        index_blocks(ctx, hi + 1, to, Extend::Up).await?;
+        hi = to;
     }
     Ok(())
 }
 
-/// If the top of the indexed range is no longer on the active chain, drop it back to the fork point.
-async fn unwind_reorg(ctx: &NetCtx, lo: u32, hi: u32) -> Result<u32> {
-    let mut h = hi;
+/// Drops stored blocks that are no longer on the active chain (or above the tip), from the top
+/// down. Returns the new top of the range, which falls below `lo` if the whole range was stale.
+async fn unwind_reorg(ctx: &NetCtx, lo: u32, hi: u32, tip: u32) -> Result<u32> {
+    let mut h = hi.min(tip);
     while h >= lo && hi - h < REORG_SEARCH {
         let stored: Option<String> = ctx
             .db
-            .read(move |c| Ok(c.query_row("SELECT hash FROM blocks WHERE height = ?1", [h], |r| r.get(0)).ok()))
+            .read(move |c| Ok(c.query_row("SELECT hash FROM blocks WHERE height = ?1", [h], |r| r.get(0)).optional()?))
             .await?;
         let actual: String = ctx.rpc.call("getblockhash", json!([h])).await?;
-        if stored.as_deref() == Some(actual.as_str()) {
+        if stored.as_deref() == Some(actual.as_str()) || h == 0 {
             break;
         }
         h -= 1;
@@ -259,6 +288,9 @@ async fn unwind_reorg(ctx: &NetCtx, lo: u32, hi: u32) -> Result<u32> {
                 tx.execute("DELETE FROM payments WHERE height > ?1", [h])?;
                 tx.execute("DELETE FROM blocks WHERE height > ?1", [h])?;
                 set_meta(&tx, "pay_hi", &h.to_string())?;
+                if h < lo {
+                    set_meta(&tx, "pay_lo", &(h + 1).to_string())?;
+                }
                 tx.commit()?;
                 Ok(())
             })
@@ -267,11 +299,15 @@ async fn unwind_reorg(ctx: &NetCtx, lo: u32, hi: u32) -> Result<u32> {
     Ok(h)
 }
 
-/// Fetches and stores payments for heights [from, to] (inclusive).
-pub async fn index_blocks(ctx: &NetCtx, from: u32, to: u32) -> Result<()> {
+/// Fetches payments for heights [from, to] (inclusive), checks the batch is a chain that links onto
+/// whatever is stored at from-1 and to+1, and stores it together with the new range bound.
+async fn index_blocks(ctx: &NetCtx, from: u32, to: u32, extend: Extend) -> Result<()> {
     let top: String = ctx.rpc.call("getblockhash", json!([to])).await?;
     let count = i64::from(to - from + 1);
     let blocks: Vec<Value> = ctx.rpc.call("masternode", json!(["payments", top, -count])).await?;
+    if blocks.len() != count as usize {
+        bail!("masternode payments returned {} blocks, expected {count}", blocks.len());
+    }
     let calls: Vec<(&str, Value)> =
         blocks.iter().map(|b| ("getblockheader", json!([b["blockhash"].clone(), true]))).collect();
     let headers = ctx.rpc.batch(&calls).await?;
@@ -279,45 +315,78 @@ pub async fn index_blocks(ctx: &NetCtx, from: u32, to: u32) -> Result<()> {
     struct Block {
         height: i64,
         hash: String,
+        prev: String,
         time: i64,
         amount: i64,
         payees: Vec<(String, i64)>,
     }
-    let mut rows = Vec::with_capacity(blocks.len());
+    let mut rows: Vec<Block> = Vec::with_capacity(blocks.len());
     for (b, h) in blocks.iter().zip(&headers) {
         let payees = b["masternodes"]
             .as_array()
             .map(|mns| {
                 mns.iter()
-                    .filter_map(|m| Some((m["proTxHash"].as_str()?.to_owned(), m["amount"].as_i64()?)))
+                    .filter_map(|m| {
+                        let protx = m["proTxHash"].as_str().filter(|p| !p.is_empty() && !p.bytes().all(|c| c == b'0'))?;
+                        Some((protx.to_owned(), m["amount"].as_i64()?))
+                    })
                     .collect()
             })
             .unwrap_or_default();
-        rows.push(Block {
+        let block = Block {
             height: b["height"].as_i64().ok_or_else(|| anyhow!("payments: no height"))?,
             hash: b["blockhash"].as_str().unwrap_or_default().to_owned(),
+            prev: h["previousblockhash"].as_str().unwrap_or_default().to_owned(),
             time: h["time"].as_i64().unwrap_or(0),
             amount: b["amount"].as_i64().unwrap_or(0),
             payees,
-        });
+        };
+        if let Some(below) = rows.last()
+            && (block.prev != below.hash || block.height != below.height + 1)
+        {
+            return Err(ChainMismatch.into());
+        }
+        rows.push(block);
     }
     ctx.db
         .write(move |c| {
             let tx = c.transaction()?;
+            let stored = |h: i64| -> rusqlite::Result<Option<(String, String)>> {
+                tx.query_row("SELECT hash, prev FROM blocks WHERE height = ?1", [h], |r| Ok((r.get(0)?, r.get(1)?))).optional()
+            };
+            let (first, last) = (&rows[0], &rows[rows.len() - 1]);
+            if let Some((hash, _)) = stored(first.height - 1)?
+                && hash != first.prev
+            {
+                return Err(ChainMismatch.into());
+            }
+            if let Some((_, prev)) = stored(last.height + 1)?
+                && prev != last.hash
+            {
+                return Err(ChainMismatch.into());
+            }
             {
                 let mut ins_block = tx.prepare_cached(
-                    "INSERT OR REPLACE INTO blocks (height, hash, time, mn_amount) VALUES (?1, ?2, ?3, ?4)",
+                    "INSERT OR REPLACE INTO blocks (height, hash, prev, time, mn_amount) VALUES (?1, ?2, ?3, ?4, ?5)",
                 )?;
                 let mut del = tx.prepare_cached("DELETE FROM payments WHERE height = ?1")?;
                 let mut ins_pay =
                     tx.prepare_cached("INSERT OR REPLACE INTO payments (height, protx, amount) VALUES (?1, ?2, ?3)")?;
                 for b in &rows {
-                    ins_block.execute(params![b.height, b.hash, b.time, b.amount])?;
+                    ins_block.execute(params![b.height, b.hash, b.prev, b.time, b.amount])?;
                     del.execute([b.height])?;
                     for (protx, amount) in &b.payees {
                         ins_pay.execute(params![b.height, protx, amount])?;
                     }
                 }
+            }
+            match extend {
+                Extend::First => {
+                    set_meta(&tx, "pay_lo", &from.to_string())?;
+                    set_meta(&tx, "pay_hi", &to.to_string())?;
+                }
+                Extend::Up => set_meta(&tx, "pay_hi", &to.to_string())?,
+                Extend::Down => set_meta(&tx, "pay_lo", &from.to_string())?,
             }
             tx.commit()?;
             Ok(())
@@ -328,14 +397,18 @@ pub async fn index_blocks(ctx: &NetCtx, from: u32, to: u32) -> Result<()> {
 /// Walks the payments index down to `floor`, newest first, so recent history is there early.
 pub async fn backfill(ctx: Arc<NetCtx>, floor: u32) {
     loop {
+        if !ctx.status.read().unwrap().synced {
+            tokio::time::sleep(Duration::from_secs(30)).await;
+            continue;
+        }
         let step: Result<bool> = async {
+            let _guard = ctx.pay_lock.lock().await;
             let Some((lo, _)) = payments_range(&ctx).await? else { return Ok(false) };
             if lo <= floor {
                 return Ok(true);
             }
             let from = floor.max(lo.saturating_sub(PAYMENT_CHUNK));
-            index_blocks(&ctx, from, lo - 1).await?;
-            ctx.db.write(move |c| set_meta(c, "pay_lo", &from.to_string())).await?;
+            index_blocks(&ctx, from, lo - 1, Extend::Down).await?;
             Ok(false)
         }
         .await;

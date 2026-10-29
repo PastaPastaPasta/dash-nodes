@@ -121,6 +121,7 @@ CREATE TABLE IF NOT EXISTS mn_versions (
 CREATE TABLE IF NOT EXISTS blocks (
     height    INTEGER PRIMARY KEY,
     hash      TEXT NOT NULL,
+    prev      TEXT NOT NULL,
     time      INTEGER NOT NULL,
     mn_amount INTEGER NOT NULL               -- duffs paid to masternodes in this block
 );
@@ -141,6 +142,13 @@ pub struct Db {
     path: PathBuf,
     writer: Arc<Mutex<Connection>>,
     readers: Arc<Mutex<Vec<Connection>>>,
+    /// Caps concurrent reads, so a burst of API requests queues instead of piling up threads.
+    read_slots: Arc<tokio::sync::Semaphore>,
+}
+
+/// A panic inside a closure poisons the mutex; the connection itself is still fine to use.
+fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 impl Db {
@@ -150,7 +158,12 @@ impl Db {
         conn.pragma_update(None, "synchronous", "NORMAL")?;
         conn.busy_timeout(std::time::Duration::from_secs(30))?;
         conn.execute_batch(SCHEMA).context("schema")?;
-        Ok(Db { path: path.to_owned(), writer: Arc::new(Mutex::new(conn)), readers: Arc::new(Mutex::new(Vec::new())) })
+        Ok(Db {
+            path: path.to_owned(),
+            writer: Arc::new(Mutex::new(conn)),
+            readers: Arc::new(Mutex::new(Vec::new())),
+            read_slots: Arc::new(tokio::sync::Semaphore::new(READERS)),
+        })
     }
 
     pub async fn write<F, R>(&self, f: F) -> Result<R>
@@ -159,7 +172,7 @@ impl Db {
         R: Send + 'static,
     {
         let writer = self.writer.clone();
-        tokio::task::spawn_blocking(move || f(&mut writer.lock().unwrap())).await?
+        tokio::task::spawn_blocking(move || f(&mut lock(&writer))).await?
     }
 
     pub async fn read<F, R>(&self, f: F) -> Result<R>
@@ -168,8 +181,9 @@ impl Db {
         R: Send + 'static,
     {
         let db = self.clone();
+        let _slot = self.read_slots.acquire().await?;
         tokio::task::spawn_blocking(move || {
-            let conn = match db.readers.lock().unwrap().pop() {
+            let conn = match lock(&db.readers).pop() {
                 Some(c) => c,
                 None => {
                     let c = Connection::open_with_flags(&db.path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
@@ -178,7 +192,7 @@ impl Db {
                 }
             };
             let result = f(&conn);
-            let mut pool = db.readers.lock().unwrap();
+            let mut pool = lock(&db.readers);
             if pool.len() < READERS {
                 pool.push(conn);
             }

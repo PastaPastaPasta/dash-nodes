@@ -2,11 +2,14 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use axum::extract::{Path as UrlPath, Query, State};
-use axum::http::{HeaderValue, StatusCode, header};
+use axum::body::{Body, Bytes};
+use axum::extract::{Path as UrlPath, Query, Request, State};
+use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
+use axum::middleware::{self, Next};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
@@ -53,12 +56,68 @@ pub fn router(nets: Nets, web: &Path) -> Router {
             header::CACHE_CONTROL,
             HeaderValue::from_static("public, max-age=300"),
         ));
+    let api = api.layer(middleware::from_fn_with_state(ResponseCache::default(), cache_responses));
     Router::new()
         .merge(api)
         .merge(pages)
         .route("/healthz", get(|| async { "ok" }))
         .fallback(move || async move { (StatusCode::NOT_FOUND, Html(not_found)) })
+        .layer(middleware::map_response(harden))
         .layer(CompressionLayer::new())
+}
+
+const CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; \
+    connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
+
+async fn harden(mut r: Response) -> Response {
+    let ok = r.status().is_success();
+    let h = r.headers_mut();
+    h.insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
+    h.insert(header::REFERRER_POLICY, HeaderValue::from_static("strict-origin-when-cross-origin"));
+    h.insert(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static(CSP));
+    // Errors (including axum's own extractor rejections) must not be cached by Cloudflare.
+    if !ok {
+        h.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    }
+    r
+}
+
+/// Successful API GETs, kept for a few seconds so bursts (or a cold Cloudflare cache) cost one
+/// query each. Keyed by path and query.
+#[derive(Clone, Default)]
+struct ResponseCache(Arc<Mutex<HashMap<String, CachedResponse>>>);
+
+type CachedResponse = (Instant, HeaderMap, Bytes);
+
+const CACHE_TTL: Duration = Duration::from_secs(20);
+const CACHE_ENTRIES: usize = 512;
+
+async fn cache_responses(State(cache): State<ResponseCache>, req: Request, next: Next) -> Response {
+    let key = req.uri().to_string();
+    if let Some((at, headers, body)) = cache.0.lock().unwrap().get(&key).cloned()
+        && at.elapsed() < CACHE_TTL
+    {
+        let mut r = Response::new(Body::from(body));
+        *r.headers_mut() = headers;
+        return r;
+    }
+    let r = next.run(req).await;
+    if r.status() != StatusCode::OK {
+        return r;
+    }
+    let (parts, body) = r.into_parts();
+    let Ok(bytes) = axum::body::to_bytes(body, 32 << 20).await else {
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    };
+    let mut map = cache.0.lock().unwrap();
+    if map.len() >= CACHE_ENTRIES {
+        map.retain(|_, (at, _, _)| at.elapsed() < CACHE_TTL);
+        if map.len() >= CACHE_ENTRIES {
+            map.clear();
+        }
+    }
+    map.insert(key, (Instant::now(), parts.headers.clone(), bytes.clone()));
+    Response::from_parts(parts, Body::from(bytes))
 }
 
 struct ApiError(StatusCode, String);
@@ -219,6 +278,25 @@ async fn history(State(nets): State<Nets>, UrlPath(net): UrlPath<String>, Query(
                     });
                     points.push((i, r.get(1)?, r.get(2)?));
                 }
+                // Today isn't rolled up yet: average its crawls so far, so the chart reaches today.
+                let today = db::now() - db::now() % 86_400;
+                let crawls_today: i64 = c.query_row(
+                    "SELECT count(*) FROM crawls WHERE finished IS NOT NULL AND started >= ?1",
+                    [today],
+                    |r| r.get(0),
+                )?;
+                if crawls_today > 0 && !index.contains_key(&day_of(today)) {
+                    let i = t.len();
+                    t.push(today);
+                    let mut st = c.prepare(
+                        "SELECT key, CAST(sum(count) AS REAL) / ?4 FROM crawl_agg WHERE scope = ?1 AND dim = ?2
+                         AND crawl_id IN (SELECT id FROM crawls WHERE finished IS NOT NULL AND started >= ?3) GROUP BY key",
+                    )?;
+                    let mut rows = st.query(params![scope, dim, today, crawls_today])?;
+                    while let Some(r) = rows.next()? {
+                        points.push((i, r.get(0)?, r.get(1)?));
+                    }
+                }
             }
             Ok(top_series(t, points, top, per_crawl))
         })
@@ -348,7 +426,7 @@ async fn masternodes(State(nets): State<Nets>, UrlPath(net): UrlPath<String>) ->
             let now = db::now();
             let sql = format!(
                 "SELECT {MN_COLUMNS}, u7.ok AS ok7, u7.a AS a7, u30.ok AS ok30, u30.a AS a30
-                 FROM masternodes m LEFT JOIN nodes n ON n.addr = m.service
+                 FROM masternodes m LEFT JOIN nodes n ON n.addr = m.service AND m.removed IS NULL
                  LEFT JOIN (SELECT protx, sum(ok) ok, sum(attempts) a FROM mn_daily WHERE day >= ?1 GROUP BY protx) u7
                     ON u7.protx = m.protx
                  LEFT JOIN (SELECT protx, sum(ok) ok, sum(attempts) a FROM mn_daily WHERE day >= ?2 GROUP BY protx) u30
@@ -391,7 +469,10 @@ async fn masternode(State(nets): State<Nets>, UrlPath((net, protx)): UrlPath<(St
                     m.operator_payout_address, m.owner_address, m.voting_address, m.pubkey_operator,
                     m.consecutive_payments, m.pose_revived_height, m.revocation_reason, m.first_seen, m.removed,
                     n.services
-                 FROM masternodes m LEFT JOIN nodes n ON n.addr = m.service WHERE m.protx = ?1"
+                 FROM masternodes m
+                 -- A removed masternode's old address may belong to someone else now: don't show its live data.
+                 LEFT JOIN nodes n ON n.addr = m.service AND m.removed IS NULL
+                 WHERE m.protx = ?1"
             );
             let Some(mut mn) = c
                 .query_row(&sql, [&protx], |r| {

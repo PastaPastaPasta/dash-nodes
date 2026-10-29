@@ -30,10 +30,11 @@ export class Palette {
   }
 }
 
-function niceMax(v) {
-  if (v <= 0) return 1;
-  const p = 10 ** Math.floor(Math.log10(v));
-  for (const m of [1, 1.2, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10]) if (m * p >= v) return m * p;
+/** Round gridline step for about four gridlines; whole numbers only (these are counts). */
+function niceStep(max) {
+  const raw = Math.max(1, max / 4);
+  const p = 10 ** Math.floor(Math.log10(raw));
+  for (const m of [1, 2, 2.5, 5, 10]) if (m * p >= raw && Number.isInteger(m * p)) return m * p;
   return 10 * p;
 }
 
@@ -87,9 +88,9 @@ export function timeChart(container, data, opts) {
     const root = svg("svg", { viewBox: `0 0 ${W} ${H + X}`, height: H + X, role: "img", "aria-label": opts.title || "chart" });
     host.prepend(root);
     const t = data.t;
-    if (!t.length) {
+    if (t.length < 2) {
       const msg = svg("text", { x: W / 2, y: H / 2, "text-anchor": "middle", class: "tick" });
-      msg.textContent = "No data yet: the first crawl is still running.";
+      msg.textContent = t.length ? "History builds up as crawls run; check back after the next one." : "No data for this range yet.";
       root.append(msg);
       legend.replaceChildren();
       return;
@@ -114,14 +115,15 @@ export function timeChart(container, data, opts) {
         max = Math.max(max, acc);
       });
     }
-    const yMax = opts.share ? 100 : niceMax(max * 1.05);
+    const yStep = opts.share ? 25 : niceStep(max);
+    const yMax = opts.share ? 100 : yStep * Math.max(1, Math.ceil((max * 1.02) / yStep));
     const t0 = t[0], t1 = t.length > 1 ? t.at(-1) : t[0] + 1;
     const x = (v) => M.l + ((v - t0) / (t1 - t0)) * pw;
     const y = (v) => M.t + ph - (v / yMax) * ph;
 
-    for (let k = 0; k <= 4; k++) {
-      const v = (yMax / 4) * k, yy = Math.round(y(v)) + 0.5;
-      root.append(svg("line", { x1: M.l, x2: W - M.r, y1: yy, y2: yy, class: k === 0 ? "baseline" : "gridline" }));
+    for (let v = 0; v <= yMax + 1e-9; v += yStep) {
+      const yy = Math.round(y(v)) + 0.5;
+      root.append(svg("line", { x1: M.l, x2: W - M.r, y1: yy, y2: yy, class: v === 0 ? "baseline" : "gridline" }));
       const tx = svg("text", { x: M.l - 8, y: yy + 4, "text-anchor": "end", class: "tick" });
       tx.textContent = opts.share ? `${v}%` : compact(v);
       root.append(tx);

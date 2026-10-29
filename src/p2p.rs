@@ -17,7 +17,10 @@ use crate::network::Network;
 
 /// Protocol version we announce. Matches Dash Core v24; peers settle on min(ours, theirs).
 pub const PROTOCOL_VERSION: i32 = 70242;
-const MAX_PAYLOAD: usize = 2 * 1024 * 1024;
+/// Largest message we accept. A full 1000-entry `addr` is ~30 KB; anything bigger isn't for us.
+const MAX_PAYLOAD: usize = 64 * 1024;
+/// Messages read while waiting for the getaddr reply before giving up on it.
+const MAX_GETADDR_MESSAGES: usize = 64;
 const MAX_SUBVERSION_LENGTH: usize = 256;
 const MAX_ADDRS: u64 = 1000;
 
@@ -49,8 +52,14 @@ pub struct Probe {
     pub addrs: Vec<SocketAddr>,
 }
 
-/// Connects, exchanges versions and, if `getaddr` is set, collects the peer's address sample.
+/// Connects, exchanges versions and, if `getaddr` is set, collects the peer's address sample
+/// (at most 1000 addresses). The whole exchange, writes included, is bounded by the timeouts.
 pub async fn probe(net: Network, addr: SocketAddr, start_height: i32, getaddr: bool, t: &Timeouts) -> Result<Probe> {
+    let budget = t.connect + t.handshake + if getaddr { t.getaddr } else { Duration::ZERO } + Duration::from_secs(2);
+    timeout(budget, probe_inner(net, addr, start_height, getaddr, t)).await.map_err(|_| anyhow!("timeout"))?
+}
+
+async fn probe_inner(net: Network, addr: SocketAddr, start_height: i32, getaddr: bool, t: &Timeouts) -> Result<Probe> {
     let started = Instant::now();
     let mut stream = timeout(t.connect, TcpStream::connect(addr))
         .await
@@ -84,22 +93,21 @@ pub async fn probe(net: Network, addr: SocketAddr, start_height: i32, getaddr: b
                 }
             }
             stream.write_all(&encode(magic, "getaddr", &[])).await?;
-            loop {
+            // We never answer pings: we're gone long before the peer would time us out.
+            for _ in 0..MAX_GETADDR_MESSAGES {
                 let (cmd, payload) = read_before(&mut stream, magic, deadline).await?;
-                match cmd.as_str() {
-                    "addr" => {
-                        let batch = parse_addr(&payload)?;
-                        // A lone address is ordinary relay; the getaddr reply is the big batch.
-                        let done = batch.len() > 1;
-                        addrs.extend(batch);
-                        if done {
-                            return Ok(());
-                        }
+                if cmd == "addr" {
+                    let batch = parse_addr(&payload)?;
+                    // A lone address is ordinary relay; the getaddr reply is the big batch.
+                    let done = batch.len() > 1;
+                    let room = MAX_ADDRS as usize - addrs.len();
+                    addrs.extend(batch.into_iter().take(room));
+                    if done || addrs.len() >= MAX_ADDRS as usize {
+                        return Ok(());
                     }
-                    "ping" => stream.write_all(&encode(magic, "pong", &payload)).await?,
-                    _ => {}
                 }
             }
+            Ok(())
         }
         .await;
         // The version is what we came for; a missing addr reply isn't a failure.

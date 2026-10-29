@@ -82,16 +82,19 @@ function renderDists() {
   const reach = d.reachable;
   if (reach?.length) {
     const m = Object.fromEntries(reach);
-    const yes = m.yes || 0, no = m.no || 0, tot = yes + no;
+    const yes = m.yes || 0, no = m.no || 0, unchecked = m.unchecked || 0, tot = yes + no + unchecked;
     const body = el("div", {},
       el("div", { class: "share", role: "img", "aria-label": `${yes} reachable, ${no} not reachable` },
         el("div", { style: { width: `${(yes / tot) * 100}%`, background: "var(--good)" }, title: `Reachable: ${fmt(yes)}` }),
-        el("div", { style: { width: `${(no / tot) * 100}%`, background: "var(--critical)" }, title: `Not reachable: ${fmt(no)}` })),
+        el("div", { style: { width: `${(no / tot) * 100}%`, background: "var(--critical)" }, title: `Not reachable: ${fmt(no)}` }),
+        unchecked ? el("div", { style: { width: `${(unchecked / tot) * 100}%`, background: "var(--axis)" }, title: `Not checked: ${fmt(unchecked)}` }) : null),
       el("div", { class: "bars" },
         el("div", { class: "k" }, el("span", { class: "badge good" }, el("i"), "Answered this crawl")), el("div"),
         el("div", { class: "v" }, fmt(yes), el("small", { text: pct(yes / tot) })),
         el("div", { class: "k" }, el("span", { class: "badge critical" }, el("i"), "Didn't answer")), el("div"),
-        el("div", { class: "v" }, fmt(no), el("small", { text: pct(no / tot) }))),
+        el("div", { class: "v" }, fmt(no), el("small", { text: pct(no / tot) })),
+        unchecked ? [el("div", { class: "k" }, el("span", { class: "badge none" }, el("i"), "Not checked (IPv6)")), el("div"),
+          el("div", { class: "v" }, fmt(unchecked), el("small", { text: pct(unchecked / tot) }))] : null),
       el("p", { class: "muted", style: { fontSize: "12px", margin: "10px 0 0" },
         text: scope === "all"
           ? "Out of nodes that answered at least once in the last 7 days, plus every enabled masternode."
@@ -127,13 +130,21 @@ async function loadHistory() {
   else sizeChart = timeChart(document.getElementById("size-chart"), s, sopts);
 }
 
+async function loadHistorySafely() {
+  try {
+    await loadHistory();
+  } catch (e) {
+    document.getElementById("banner").replaceChildren(el("div", { class: "banner", text: `Couldn't load history: ${e.message}` }));
+  }
+}
+
 function renderFilters() {
   document.getElementById("filters").replaceChildren(
-    el("label", {}, "Scope", segmented(SCOPES, scope, (v) => { scope = v; remember(); renderDists(); loadHistory(); }, "Scope")),
-    el("label", {}, "Range", segmented(RANGES, days, (v) => { days = v; remember(); loadHistory(); }, "Time range")),
+    el("label", {}, "Scope", segmented(SCOPES, scope, (v) => { scope = v; remember(); renderDists(); loadHistorySafely(); }, "Scope")),
+    el("label", {}, "Range", segmented(RANGES, days, (v) => { days = v; remember(); loadHistorySafely(); }, "Time range")),
   );
   document.getElementById("versions-mode").replaceChildren(
-    segmented([["share", "Share"], ["count", "Count"]], share ? "share" : "count", (v) => { share = v === "share"; remember(); loadHistory(); }, "Values"));
+    segmented([["share", "Share"], ["count", "Count"]], share ? "share" : "count", (v) => { share = v === "share"; remember(); loadHistorySafely(); }, "Values"));
 }
 
 async function main() {
@@ -152,7 +163,7 @@ async function main() {
   renderTiles();
   renderFilters();
   renderDists();
-  await loadHistory();
+  await loadHistorySafely();
 }
 
 main();

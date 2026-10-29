@@ -22,6 +22,8 @@ pub struct NetCtx {
     pub mn_loaded: AtomicBool,
     pub crawl_cfg: CrawlConfig,
     pub backfill_pause_ms: u64,
+    /// Serializes the forward indexer and the backfill (see collector.rs).
+    pub pay_lock: tokio::sync::Mutex<()>,
 }
 
 #[derive(Clone, Debug)]
