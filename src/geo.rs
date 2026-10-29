@@ -163,14 +163,13 @@ async fn refresh(dir: &Path) -> Result<bool> {
         let mut raw = Vec::new();
         std::io::Read::read_to_end(&mut flate2::read::GzDecoder::new(&gz[..]), &mut raw)
             .with_context(|| format!("gunzip {url}"))?;
+        drop(gz);
+        Reader::from_source(&raw[..]).with_context(|| format!("{url}: not an mmdb"))?;
         let path = dir.join(format!("dbip-{kind}-lite.mmdb"));
         let tmp = path.with_extension("tmp");
         std::fs::write(&tmp, &raw)?;
-        Reader::open_readfile(&tmp).with_context(|| format!("{url}: not an mmdb"))?;
         std::fs::rename(&tmp, &path)?;
     }
-    // Before 2026-11 the country database was used; the city one supersedes it.
-    let _ = std::fs::remove_file(dir.join("dbip-country-lite.mmdb"));
     std::fs::write(&stamp, &month)?;
     Ok(true)
 }

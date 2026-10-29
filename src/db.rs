@@ -150,24 +150,21 @@ pub struct Db {
     read_slots: Arc<tokio::sync::Semaphore>,
 }
 
-/// A panic inside a closure poisons the mutex; the connection itself is still fine to use.
-/// Columns added after the first release, for databases created before them.
-const ADDED_COLUMNS: [(&str, &str, &str); 4] =
-    [("nodes", "continent", "TEXT"), ("nodes", "city", "TEXT"), ("nodes", "lat", "REAL"), ("nodes", "lon", "REAL")];
+/// `nodes` columns added after the first release, for databases created before them.
+const ADDED_COLUMNS: [(&str, &str); 4] = [("continent", "TEXT"), ("city", "TEXT"), ("lat", "REAL"), ("lon", "REAL")];
 
 fn migrate(c: &Connection) -> Result<()> {
-    for (table, column, ty) in ADDED_COLUMNS {
+    for (column, ty) in ADDED_COLUMNS {
         let exists: bool =
-            c.query_row("SELECT count(*) > 0 FROM pragma_table_info(?1) WHERE name = ?2", [table, column], |r| {
-                r.get(0)
-            })?;
+            c.query_row("SELECT count(*) > 0 FROM pragma_table_info('nodes') WHERE name = ?1", [column], |r| r.get(0))?;
         if !exists {
-            c.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {column} {ty}"))?;
+            c.execute_batch(&format!("ALTER TABLE nodes ADD COLUMN {column} {ty}"))?;
         }
     }
     Ok(())
 }
 
+/// A panic inside a closure poisons the mutex; the connection itself is still fine to use.
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
@@ -287,16 +284,9 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("old.sqlite");
         let _ = std::fs::remove_file(&path);
-        let mut old = SCHEMA.to_owned();
-        for (_, column, ty) in ADDED_COLUMNS {
-            let line = old
-                .lines()
-                .find(|l| l.split_whitespace().map(|w| w.trim_end_matches(',')).take(2).eq([column, ty]))
-                .unwrap()
-                .to_owned();
-            old = old.replace(&format!("{line}\n"), "");
-        }
-        let old = old.replace("as_org        TEXT,\n);", "as_org        TEXT\n);");
+        let geo_columns = "as_org        TEXT,\n    continent     TEXT,\n    city          TEXT,\n    lat           REAL,\n    lon           REAL\n";
+        let old = SCHEMA.replace(geo_columns, "as_org        TEXT\n");
+        assert_ne!(old, SCHEMA);
         Connection::open(&path).unwrap().execute_batch(&old).unwrap();
         Db::open(&path).unwrap();
         // Opening again is a no-op.

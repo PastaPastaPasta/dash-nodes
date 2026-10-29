@@ -1,7 +1,7 @@
 // Masternode map: every masternode with a geolocated address, clustered, colored by status,
 // version or type. Same data and filters as the masternode list, so the two link to each other.
-import { api, chrome, currentNet, el, fmt, pct, compact, href, countryName, flag, shortHash, badge, nodeStatus, segmented,
-  MN_FILTERS, mnFilters, mnMatches, rememberParams, filterQuery, filterControls, countBy } from "./common.js";
+import { api, chrome, currentNet, el, fmt, pct, compact, href, countryName, flag, place, shortHash, badge, nodeStatus, evoPill, segmented,
+  mnFilters, mnMatches, rememberParams, filterQuery, filterControls, countBy } from "./common.js";
 import { barList } from "./charts.js";
 
 chrome("map");
@@ -20,12 +20,13 @@ const CONTINENTS = { AF: "Africa", AN: "Antarctica", AS: "Asia", EU: "Europe", N
 // A color mode maps a masternode to a legend category and a category to a tone. Tones are the
 // CSS color roles (`--good`, `--s1`, …), so markers, clusters and the legend agree in both themes.
 const STATUS_TONES = { Reachable: "good", Unreachable: "critical", "PoSe-banned": "serious", "Not checked": "axis" };
+const STATUSES = Object.keys(STATUS_TONES);
 const MODES = {
-  status: { label: "Status", key: (m) => nodeStatus(m)[1], order: Object.keys(STATUS_TONES), tone: (k) => STATUS_TONES[k] },
+  status: { label: "Status", key: (m) => nodeStatus(m)[1], order: STATUSES, tone: (k) => STATUS_TONES[k] },
   version: { label: "Version" }, // filled in from the data by assignVersionTones()
   type: { label: "Type", key: (m) => m.type, order: ["Regular", "Evo"], tone: (k) => (k === "Evo" ? "s2" : "s1") },
 };
-if (!MODES[state.color]) state.color = "status";
+if (!Object.hasOwn(MODES, state.color)) state.color = "status";
 
 /** The five most common versions keep their own colors whatever the filters; the rest share one. */
 function assignVersionTones() {
@@ -47,8 +48,9 @@ L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
   attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
 }).addTo(map);
 
+// No chunkedLoading: a chunked add resumes on a timer that clearLayers() doesn't cancel, so a quick
+// second render could bring back markers from the first. A few thousand circles add fast anyway.
 const clusters = L.markerClusterGroup({
-  chunkedLoading: true,
   showCoverageOnHover: false,
   zoomToBoundsOnClick: false,
   spiderfyOnMaxZoom: false,
@@ -73,31 +75,32 @@ clusters.on("clusterclick", (e) => {
 /** Cluster badge: a donut of its members' tones, in legend order, around the count. */
 function clusterIcon(cluster) {
   const kids = cluster.getAllChildMarkers();
-  const tones = new Map();
-  for (const k of kids) tones.set(k.options.tone, (tones.get(k.options.tone) || 0) + 1);
+  const n = kids.length;
+  const tones = new Map(countBy(kids, (k) => k.options.tone));
   const mode = MODES[state.color];
   const stops = [];
   let at = 0;
   for (const tone of new Set(mode.order.map(mode.tone))) {
-    const n = tones.get(tone);
-    if (!n) continue;
-    const end = at + (n / kids.length) * 100;
+    const count = tones.get(tone);
+    if (!count) continue;
+    const end = at + (count / n) * 100;
     stops.push(`var(--${tone}) ${at.toFixed(2)}% ${end.toFixed(2)}%`);
     at = end;
   }
-  const n = kids.length;
   const size = n < 10 ? 30 : n < 100 ? 36 : n < 1000 ? 44 : 52;
   const ring = el("div", { class: "cluster", style: { width: `${size}px`, height: `${size}px`, background: `conic-gradient(${stops.join(", ")})` } },
     el("span", { text: compact(n) }));
   return L.divIcon({ html: ring, className: "cluster-icon", iconSize: [size, size] });
 }
 
+const POPUP = { minWidth: 250, maxWidth: 320 };
+
 function markerFor(m) {
   const mode = MODES[state.color];
   const tone = mode.tone(mode.key(m));
   const mk = L.circleMarker([m.lat, m.lon], { radius: m.type === "Evo" ? 6.5 : 5, weight: 1.5, fillOpacity: 1, className: `mk t-${tone}`, tone });
   mk.mn = m;
-  mk.bindPopup(() => popup(m), { minWidth: 250, maxWidth: 320 });
+  mk.bindPopup(() => popup(m), POPUP);
   trackPopup(mk, m);
   return mk;
 }
@@ -105,26 +108,30 @@ function markerFor(m) {
 /** The open popup's masternode goes into the URL, so the view can be shared. */
 function trackPopup(layer, m) {
   layer.on("popupopen", () => { state.protx = m.protx; remember(); });
-  layer.on("popupclose", () => { if (state.protx === m.protx) { state.protx = ""; remember(); } });
+  layer.on("popupclose", () => forget(m));
+}
+
+function forget(m) {
+  if (state.protx === m.protx) { state.protx = ""; remember(); }
 }
 
 function popup(m) {
   const [k, l] = nodeStatus(m);
-  const place = m.country ? `${flag(m.country)} ${[m.city, countryName(m.country)].filter(Boolean).join(", ")}` : "–";
+  const detail = href(`/mn/${m.protx}`);
   const paid = !m.last_paid_height ? "never" : tip ? `${fmt(tip - m.last_paid_height)} blocks ago` : `block ${fmt(m.last_paid_height)}`;
   const facts = [
     ["Address", el("span", { class: "mono", text: m.service || "–" })],
     ["Version", m.version || "–"],
-    ["Location", place],
+    ["Location", place(m) || "–"],
     ["Hosting", m.as_org ? `${m.as_org}${m.asn ? ` (AS${m.asn})` : ""}` : "–"],
     ["Uptime, 7 days", m.uptime_7d != null ? pct(m.uptime_7d) : "–"],
     ["Last paid", paid],
   ];
   return el("div", { class: "pop" },
-    el("div", { class: "pop-head" }, badge(k, l), m.type === "Evo" ? el("span", { class: "pill evo", text: "Evo" }) : null),
-    el("a", { class: "mono pop-id", href: href(`/mn/${m.protx}`), text: shortHash(m.protx, 12) }),
+    el("div", { class: "pop-head" }, badge(k, l), evoPill(m)),
+    el("a", { class: "mono pop-id", href: detail, text: shortHash(m.protx, 12) }),
     el("dl", {}, ...facts.flatMap(([a, b]) => [el("dt", { text: a }), el("dd", {}, b)])),
-    el("a", { href: href(`/mn/${m.protx}`), text: "Masternode details →" }));
+    el("a", { href: detail, text: "Masternode details →" }));
 }
 
 function fitAll() {
@@ -137,88 +144,83 @@ function focus(protx) {
   const mk = markers.get(protx);
   if (!mk) return false;
   map.setView(mk.getLatLng(), Math.max(map.getZoom(), 7));
-  const p = L.popup({ minWidth: 250, maxWidth: 320 }).setLatLng(mk.getLatLng()).setContent(popup(mk.mn));
-  trackPopup(p, mk.mn);
-  p.openOn(map);
+  // A standalone popup has no source layer, so Leaflet fires no popupclose on it; "remove" it does.
+  L.popup(POPUP).setLatLng(mk.getLatLng()).setContent(popup(mk.mn)).on("remove", () => forget(mk.mn)).openOn(map);
   return true;
 }
 
 // ---- panel ----
 
 const panel = document.getElementById("panel");
-const sections = {
-  filters: el("div", { class: "map-filters" }),
-  color: el("div", { class: "panel-sec" }),
-  group: el("div", { class: "panel-sec group", hidden: true }),
-  summary: el("p", { class: "sub panel-summary" }),
-  stats: el("div"),
-};
+const legend = el("div", { class: "legend map-legend" });
+const groupBox = el("div", { class: "panel-sec group", hidden: true });
+const summary = el("p", { class: "sub panel-summary" });
+const stats = el("div");
 
 function buildPanel() {
-  sections.filters.replaceChildren(...filterControls(rows, state, () => { group = null; render(); }));
-  sections.color.replaceChildren(
-    el("div", { class: "panel-row" },
-      el("h3", { text: "Color by" }),
-      segmented(Object.entries(MODES).map(([k, m]) => [k, m.label]), state.color, (v) => { state.color = v; render(); }, "Color by")),
-    el("div", { class: "legend map-legend", id: "map-legend" }));
-  panel.replaceChildren(sections.filters, sections.color, sections.group, sections.summary,
+  panel.replaceChildren(
+    el("div", { class: "map-filters" }, ...filterControls(rows, state, () => { group = null; render(); })),
+    el("div", { class: "panel-sec" },
+      el("div", { class: "panel-row" },
+        el("h3", { text: "Color by" }),
+        segmented(Object.entries(MODES).map(([k, m]) => [k, m.label]), state.color, (v) => { state.color = v; render(); }, "Color by")),
+      legend),
+    groupBox, summary,
     el("div", { class: "panel-row" }, el("button", { class: "btn", type: "button", onclick: fitAll, text: "Fit map to results" })),
-    sections.stats);
+    stats);
 }
 
 function renderLegend(placed) {
   const mode = MODES[state.color];
   const counts = new Map(countBy(placed, mode.key));
-  document.getElementById("map-legend").replaceChildren(...mode.order.filter((k) => counts.get(k)).map((k) =>
+  legend.replaceChildren(...mode.order.filter((k) => counts.get(k)).map((k) =>
     el("span", {}, el("i", { class: `t-${mode.tone(k)}` }), k, el("b", { class: "num", text: fmt(counts.get(k)) }))));
 }
 
 function showGroup(list) {
   group = list;
   renderGroup();
-  sections.group.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  groupBox.scrollIntoView({ block: "nearest", behavior: "smooth" });
 }
 
-const STATUS_RANK = Object.fromEntries(Object.keys(STATUS_TONES).map((k, i) => [k, i]));
-
 function renderGroup() {
-  sections.group.hidden = !group;
+  groupBox.hidden = !group;
   if (!group) return;
-  const m0 = group[0];
-  const place = m0.country ? `${flag(m0.country)} ${[m0.city, countryName(m0.country)].filter(Boolean).join(", ")}` : "Same location";
-  const sorted = [...group].sort((a, b) => STATUS_RANK[nodeStatus(a)[1]] - STATUS_RANK[nodeStatus(b)[1]] || (a.service || "").localeCompare(b.service || ""));
-  sections.group.replaceChildren(
-    el("div", { class: "panel-row" }, el("h2", { text: place }),
+  const rank = (m) => STATUSES.indexOf(nodeStatus(m)[1]);
+  const sorted = [...group].sort((a, b) => rank(a) - rank(b) || (a.service || "").localeCompare(b.service || ""));
+  // At the deepest zoom a cluster can still span neighboring (rounded) coordinates.
+  const places = new Set(group.map(place));
+  groupBox.replaceChildren(
+    el("div", { class: "panel-row" }, el("h2", { text: places.size === 1 ? place(group[0]) || "Same location" : `${places.size} places nearby` }),
       el("button", { class: "more", type: "button", onclick: () => { group = null; renderGroup(); }, text: "Close" })),
-    el("p", { class: "sub", text: `${fmt(group.length)} masternodes geolocate to this point.` }),
+    el("p", { class: "sub", text: `${fmt(group.length)} masternodes geolocate here.` }),
     el("ul", { class: "mn-list" }, ...sorted.map((m) => {
       const [k, l] = nodeStatus(m);
       return el("li", {},
         el("span", { class: `badge ${k}`, title: l, "aria-label": l }, el("i")),
         el("a", { class: "mono", href: href(`/mn/${m.protx}`), text: m.service || shortHash(m.protx) }),
-        m.type === "Evo" ? el("span", { class: "pill evo", text: "Evo" }) : null,
+        evoPill(m),
         el("span", { class: "muted", text: m.version || "–" }));
     })));
 }
 
 function renderStats(shown, placed) {
   const missing = shown.length - placed.length;
-  sections.summary.textContent = `${fmt(placed.length)} of ${fmt(shown.length)} masternodes on the map` +
+  summary.textContent = `${fmt(placed.length)} of ${fmt(shown.length)} masternodes on the map` +
     (missing ? `; ${fmt(missing)} have no geolocated address (none registered, or not crawled yet).` : ".");
   const box = (title, list, label) => {
     const body = el("div");
     barList(body, list, { label, limit: 6 });
     return el("div", { class: "panel-sec" }, el("h3", { text: title }), body);
   };
-  sections.stats.replaceChildren(
+  stats.replaceChildren(
     box("Countries", countBy(placed, (m) => m.country || "Unknown"), (c) => (c === "Unknown" ? c : `${flag(c)} ${countryName(c)}`)),
     box("Hosting", countBy(placed, (m) => m.as_org || "Unknown")),
     box("Continents", countBy(placed, (m) => CONTINENTS[m.continent] || "Unknown")));
 }
 
 function remember() {
-  rememberParams({
-    ...Object.fromEntries(MN_FILTERS.map((k) => [k, state[k]])),
+  rememberParams(state, {
     color: state.color === "status" ? "" : state.color,
     protx: state.protx,
   });
@@ -253,9 +255,11 @@ async function main() {
     `${fmt(rows.length)} registered masternodes in ${fmt(countries)} countries, each placed by the city its IP address geolocates to.`;
   assignVersionTones();
   buildPanel();
-  const wanted = state.protx;
   render();
-  if (!(wanted && focus(wanted))) fitAll();
+  if (!focus(state.protx)) {
+    fitAll();
+    if (state.protx) { state.protx = ""; remember(); } // not on the map: don't keep it in the URL
+  }
 }
 
 main();

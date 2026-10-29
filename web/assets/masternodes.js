@@ -1,5 +1,5 @@
-import { api, chrome, currentNet, el, fmt, pct, href, countryName, flag, shortHash, badge, ago, nodeStatus, uptimeKind,
-  MN_FILTERS, mnFilters, mnMatches, rememberParams, filterQuery, filterControls } from "./common.js";
+import { api, chrome, currentNet, el, fmt, pct, href, countryName, flag, shortHash, badge, ago, nodeStatus, uptimeKind, evoPill,
+  mnFilters, mnMatches, rememberParams, filterQuery, filterControls } from "./common.js";
 
 chrome("masternodes");
 const net = currentNet();
@@ -23,7 +23,7 @@ function uptimeBadge(u) {
 const COLUMNS = [
   { key: "protx", label: "ProTx", get: (m) => m.protx,
     cell: (m) => el("td", {}, el("a", { class: "mono", href: href(`/mn/${m.protx}`), text: shortHash(m.protx) }), " ",
-      m.type === "Evo" ? el("span", { class: "pill evo", text: "Evo" }) : null) },
+      evoPill(m)) },
   { key: "service", label: "Address", get: (m) => m.service || "", cell: (m) => el("td", { class: "mono", text: m.service || "–" }) },
   { key: "country", label: "Country", get: (m) => countryName(m.country),
     cell: (m) => el("td", { title: countryName(m.country), text: m.country ? `${flag(m.country)} ${m.country}` : "–" }) },
@@ -54,8 +54,7 @@ function filtered() {
 }
 
 function remember() {
-  rememberParams({
-    ...Object.fromEntries(MN_FILTERS.map((k) => [k, state[k]])),
+  rememberParams(state, {
     sort: state.sort === "registered_height" ? "" : state.sort,
     dir: state.dir < 0 ? "desc" : "",
   });

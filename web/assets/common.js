@@ -89,6 +89,13 @@ export function shortHash(h, n = 8) {
   return h && h.length > 2 * n ? `${h.slice(0, n)}…${h.slice(-4)}` : h || "";
 }
 
+/** "Frankfurt, Germany" behind its flag; empty when the country is unknown. */
+export function place(m) {
+  return m.country ? `${flag(m.country)} ${[m.city, countryName(m.country)].filter(Boolean).join(", ")}` : "";
+}
+
+export const evoPill = (m) => (m.type === "Evo" ? el("span", { class: "pill evo", text: "Evo" }) : null);
+
 /** Status badge: color is never the only signal, the label always rides along. */
 export function badge(kind, label) {
   return el("span", { class: `badge ${kind}` }, el("i"), label);
@@ -103,7 +110,7 @@ export function nodeStatus(m, unchecked = "Not checked") {
 }
 
 /** Masternode filters shared by the list and the map, so either page can link to the other. */
-export const MN_FILTERS = ["q", "type", "status", "version", "country"];
+const MN_FILTERS = ["q", "type", "status", "version", "country"];
 
 export function mnFilters(params) {
   return Object.fromEntries(MN_FILTERS.map((k) => [k, params.get(k) || ""]));
@@ -122,10 +129,10 @@ export function mnMatches(m, f) {
   return true;
 }
 
-/** Writes the given filters into the address bar (empty ones removed) without a reload. */
-export function rememberParams(values) {
+/** Writes the filters in `f` plus any `extra` params into the address bar (empty ones removed) without a reload. */
+export function rememberParams(f, extra = {}) {
   const u = new URL(location.href);
-  for (const [k, v] of Object.entries(values)) {
+  for (const [k, v] of [...MN_FILTERS.map((k) => [k, f[k]]), ...Object.entries(extra)]) {
     if (v) u.searchParams.set(k, v);
     else u.searchParams.delete(k);
   }
@@ -134,16 +141,14 @@ export function rememberParams(values) {
 
 /** The current page's filters as a query string for a link to another page. */
 export function filterQuery(f) {
-  const q = new URLSearchParams();
-  for (const k of MN_FILTERS) if (f[k]) q.set(k, f[k]);
-  const s = q.toString();
+  const s = new URLSearchParams(MN_FILTERS.filter((k) => f[k]).map((k) => [k, f[k]])).toString();
   return s ? `?${s}` : "";
 }
 
 /** One option list per filter, with counts, ordered most common first. */
 export function countBy(rows, key) {
   const m = new Map();
-  for (const r of rows) m.set(key(r), (m.get(key(r)) || 0) + 1);
+  for (const r of rows) { const k = key(r); m.set(k, (m.get(k) || 0) + 1); }
   return [...m.entries()].sort((a, b) => b[1] - a[1]);
 }
 
