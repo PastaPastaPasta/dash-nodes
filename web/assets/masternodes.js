@@ -1,4 +1,5 @@
-import { api, chrome, currentNet, el, fmt, pct, href, countryName, flag, shortHash, badge, ago, nodeStatus, uptimeKind } from "./common.js";
+import { api, chrome, currentNet, el, fmt, pct, href, countryName, flag, shortHash, badge, ago, nodeStatus, uptimeKind,
+  MN_FILTERS, mnFilters, mnMatches, rememberParams, filterQuery, filterControls } from "./common.js";
 
 chrome("masternodes");
 const net = currentNet();
@@ -6,11 +7,7 @@ const PAGE = 100;
 
 const params = new URLSearchParams(location.search);
 const state = {
-  q: params.get("q") || "",
-  type: params.get("type") || "",
-  status: params.get("status") || "",
-  version: params.get("version") || "",
-  country: params.get("country") || "",
+  ...mnFilters(params),
   sort: params.get("sort") || "registered_height",
   dir: params.get("dir") === "desc" ? -1 : 1,
   page: 0,
@@ -47,18 +44,7 @@ const COLUMNS = [
 ];
 
 function filtered() {
-  const q = state.q.trim().toLowerCase();
-  const out = rows.filter((m) => {
-    if (state.type && m.type !== state.type) return false;
-    if (state.status && nodeStatus(m)[1] !== state.status) return false;
-    if (state.version && (m.version || "Unknown") !== state.version) return false;
-    if (state.country && (m.country || "Unknown") !== state.country) return false;
-    if (q) {
-      const hay = [m.protx, m.service, m.payout_address, m.as_org, m.user_agent, m.platform_node_id].join(" ").toLowerCase();
-      if (!hay.includes(q)) return false;
-    }
-    return true;
-  });
+  const out = rows.filter((m) => mnMatches(m, state));
   const col = COLUMNS.find((c) => c.key === state.sort) || COLUMNS[0];
   out.sort((a, b) => {
     const x = col.get(a), y = col.get(b);
@@ -68,13 +54,12 @@ function filtered() {
 }
 
 function remember() {
-  const u = new URL(location.href);
-  for (const k of ["q", "type", "status", "version", "country", "sort"]) {
-    if (state[k] && !(k === "sort" && state.sort === "registered_height")) u.searchParams.set(k, state[k]);
-    else u.searchParams.delete(k);
-  }
-  if (state.dir < 0) u.searchParams.set("dir", "desc"); else u.searchParams.delete("dir");
-  history.replaceState(null, "", u);
+  rememberParams({
+    ...Object.fromEntries(MN_FILTERS.map((k) => [k, state[k]])),
+    sort: state.sort === "registered_height" ? "" : state.sort,
+    dir: state.dir < 0 ? "desc" : "",
+  });
+  document.getElementById("to-map").href = href(`/map${filterQuery(state)}`);
 }
 
 function render() {
@@ -104,30 +89,8 @@ function sortBy(key) {
   render();
 }
 
-function select(name, label, options) {
-  const s = el("select", { "aria-label": label, onchange: () => { state[name] = s.value; state.page = 0; render(); } },
-    el("option", { value: "", text: "All" }), ...options.map(([v, t]) => el("option", { value: v, text: t })));
-  s.value = state[name];
-  return el("label", {}, label, s);
-}
-
-function counts(key) {
-  const m = new Map();
-  for (const r of rows) m.set(key(r), (m.get(key(r)) || 0) + 1);
-  return [...m.entries()].sort((a, b) => b[1] - a[1]);
-}
-
 function renderFilters() {
-  const search = el("input", { type: "search", placeholder: "ProTx, IP, payout address, hosting…", value: state.q, "aria-label": "Search" });
-  let timer;
-  search.addEventListener("input", () => { clearTimeout(timer); timer = setTimeout(() => { state.q = search.value; state.page = 0; render(); }, 150); });
-  document.getElementById("filters").replaceChildren(
-    search,
-    select("type", "Type", [["Regular", "Regular"], ["Evo", "Evo"]]),
-    select("status", "Status", ["Reachable", "Unreachable", "PoSe-banned", "Not checked"].map((s) => [s, s])),
-    select("version", "Version", counts((r) => r.version || "Unknown").map(([v, n]) => [v, `${v} (${fmt(n)})`])),
-    select("country", "Country", counts((r) => r.country || "Unknown").map(([c, n]) => [c, `${flag(c)} ${countryName(c)} (${fmt(n)})`])),
-  );
+  document.getElementById("filters").replaceChildren(...filterControls(rows, state, () => { state.page = 0; render(); }));
 }
 
 function csv() {

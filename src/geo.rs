@@ -1,5 +1,6 @@
-//! Country and ASN lookups from the free DB-IP Lite databases (CC BY 4.0, attribution on every
-//! page). They're refreshed monthly; DB-IP publishes the new month on the 1st.
+//! City (with country, continent and coordinates) and ASN lookups from the free DB-IP Lite
+//! databases (CC BY 4.0, attribution on every page). They're refreshed monthly; DB-IP publishes
+//! the new month on the 1st.
 
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
@@ -17,21 +18,31 @@ pub struct Geo {
 
 #[derive(Default)]
 struct Dbs {
-    country: Option<Reader<Vec<u8>>>,
+    city: Option<Reader<Vec<u8>>>,
     asn: Option<Reader<Vec<u8>>>,
 }
 
 #[derive(Clone, Debug, Default)]
 pub struct GeoInfo {
     pub country: Option<String>,
+    pub continent: Option<String>,
+    pub city: Option<String>,
+    /// City-level coordinates, rounded to about a kilometre.
+    pub lat: Option<f64>,
+    pub lon: Option<f64>,
     pub asn: Option<u32>,
     pub as_org: Option<String>,
 }
 
 #[derive(Deserialize)]
-struct CountryRecord<'a> {
+struct CityRecord<'a> {
     #[serde(borrow)]
     country: Option<IsoCode<'a>>,
+    #[serde(borrow)]
+    continent: Option<ContinentCode<'a>>,
+    #[serde(borrow)]
+    city: Option<Names<'a>>,
+    location: Option<Location>,
 }
 
 #[derive(Deserialize)]
@@ -40,21 +51,53 @@ struct IsoCode<'a> {
 }
 
 #[derive(Deserialize)]
+struct ContinentCode<'a> {
+    code: Option<&'a str>,
+}
+
+#[derive(Deserialize)]
+struct Names<'a> {
+    #[serde(borrow)]
+    names: Option<English<'a>>,
+}
+
+#[derive(Deserialize)]
+struct English<'a> {
+    en: Option<&'a str>,
+}
+
+#[derive(Deserialize)]
+struct Location {
+    latitude: Option<f64>,
+    longitude: Option<f64>,
+}
+
+#[derive(Deserialize)]
 struct AsnRecord<'a> {
     autonomous_system_number: Option<u32>,
     autonomous_system_organization: Option<&'a str>,
 }
 
-const KINDS: [&str; 2] = ["country", "asn"];
+const KINDS: [&str; 2] = ["city", "asn"];
+
+fn round(x: f64) -> f64 {
+    (x * 100.0).round() / 100.0
+}
 
 impl Geo {
     pub fn lookup(&self, ip: IpAddr) -> GeoInfo {
         let dbs = self.inner.read().unwrap();
         let mut info = GeoInfo::default();
-        if let Some(db) = &dbs.country
-            && let Ok(Some(rec)) = db.lookup::<CountryRecord>(ip)
+        if let Some(db) = &dbs.city
+            && let Ok(Some(rec)) = db.lookup::<CityRecord>(ip)
         {
             info.country = rec.country.and_then(|c| c.iso_code).map(str::to_owned);
+            info.continent = rec.continent.and_then(|c| c.code).map(str::to_owned);
+            info.city = rec.city.and_then(|c| c.names).and_then(|n| n.en).map(str::to_owned);
+            if let Some(Location { latitude: Some(lat), longitude: Some(lon) }) = rec.location {
+                info.lat = Some(round(lat));
+                info.lon = Some(round(lon));
+            }
         }
         if let Some(db) = &dbs.asn
             && let Ok(Some(rec)) = db.lookup::<AsnRecord>(ip)
@@ -66,7 +109,7 @@ impl Geo {
     }
 
     pub fn loaded(&self) -> bool {
-        self.inner.read().unwrap().country.is_some()
+        self.inner.read().unwrap().city.is_some()
     }
 
     /// Loads whatever is on disk, then keeps the files fresh. Never returns.
@@ -92,9 +135,9 @@ impl Geo {
             let path = dir.join(format!("dbip-{kind}-lite.mmdb"));
             Reader::open_readfile(&path).with_context(|| format!("open {}", path.display()))
         };
-        let country = open("country")?;
+        let city = open("city")?;
         let asn = open("asn")?;
-        *self.inner.write().unwrap() = Dbs { country: Some(country), asn: Some(asn) };
+        *self.inner.write().unwrap() = Dbs { city: Some(city), asn: Some(asn) };
         Ok(())
     }
 }
@@ -103,7 +146,8 @@ impl Geo {
 async fn refresh(dir: &Path) -> Result<bool> {
     let month = crate::db::day_of(crate::db::now())[..7].to_string();
     let stamp = dir.join("dbip-month");
-    if std::fs::read_to_string(&stamp).ok().as_deref() == Some(month.as_str()) {
+    let have_all = KINDS.iter().all(|k| dir.join(format!("dbip-{k}-lite.mmdb")).exists());
+    if have_all && std::fs::read_to_string(&stamp).ok().as_deref() == Some(month.as_str()) {
         return Ok(false);
     }
     std::fs::create_dir_all(dir)?;
@@ -119,12 +163,14 @@ async fn refresh(dir: &Path) -> Result<bool> {
         let mut raw = Vec::new();
         std::io::Read::read_to_end(&mut flate2::read::GzDecoder::new(&gz[..]), &mut raw)
             .with_context(|| format!("gunzip {url}"))?;
-        Reader::from_source(raw.clone()).with_context(|| format!("{url}: not an mmdb"))?;
         let path = dir.join(format!("dbip-{kind}-lite.mmdb"));
         let tmp = path.with_extension("tmp");
         std::fs::write(&tmp, &raw)?;
+        Reader::open_readfile(&tmp).with_context(|| format!("{url}: not an mmdb"))?;
         std::fs::rename(&tmp, &path)?;
     }
+    // Before 2026-11 the country database was used; the city one supersedes it.
+    let _ = std::fs::remove_file(dir.join("dbip-country-lite.mmdb"));
     std::fs::write(&stamp, &month)?;
     Ok(true)
 }

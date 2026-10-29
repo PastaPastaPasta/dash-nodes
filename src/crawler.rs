@@ -138,7 +138,9 @@ async fn crawl_once(ctx: &NetCtx) -> Result<i64> {
     let mut getaddr_candidates = Vec::new();
     let mut unproven = Vec::new();
     for (addr, last_success, last_getaddr) in &due {
-        let Ok(a) = addr.parse::<SocketAddr>() else { continue };
+        let Ok(a) = addr.parse::<SocketAddr>() else {
+            continue;
+        };
         if !usable(&a) {
             continue;
         }
@@ -216,7 +218,9 @@ async fn learn_from_dashd(ctx: &NetCtx) -> Result<()> {
     match ctx.rpc.call::<Vec<Value>>("getnodeaddresses", json!([0])).await {
         Ok(list) => {
             for e in list {
-                let (Some(ip), Some(port)) = (e["address"].as_str(), e["port"].as_u64()) else { continue };
+                let (Some(ip), Some(port)) = (e["address"].as_str(), e["port"].as_u64()) else {
+                    continue;
+                };
                 let ip = ip.trim_matches(|c| c == '[' || c == ']');
                 if let Ok(ip) = ip.parse() {
                     addrs.push(SocketAddr::new(ip, port as u16));
@@ -269,12 +273,12 @@ struct ProbeRow {
     asked_addrs: bool,
     ok: Option<p2p::Version>,
     error: Option<String>,
-    geo: crate::geo::GeoInfo,
+    geo: Option<crate::geo::GeoInfo>,
 }
 
 impl ProbeRow {
     fn from(o: Outcome, geo: &crate::geo::Geo) -> ProbeRow {
-        let info = geo.lookup(o.addr.ip());
+        let info = geo.loaded().then(|| geo.lookup(o.addr.ip()));
         let (ok, error) = match o.result {
             Ok(p) => (Some(p.version), None),
             Err(e) => (None, Some(format!("{e:#}"))),
@@ -300,25 +304,29 @@ fn record(
         let mut ok_st = tx.prepare_cached(
             "UPDATE nodes SET last_tried = ?2, last_success = ?2, fail_streak = 0, next_try = ?2,
                 last_crawl = ?3, last_ok = 1, last_error = NULL, user_agent = ?4, protocol = ?5, services = ?6,
-                start_height = ?7, latency_ms = ?8, country = ?9, asn = ?10, as_org = ?11,
-                last_getaddr = CASE WHEN ?12 THEN ?2 ELSE last_getaddr END
+                start_height = ?7, latency_ms = ?8, last_getaddr = CASE WHEN ?9 THEN ?2 ELSE last_getaddr END
              WHERE addr = ?1",
         )?;
         // Failures: nodes seen recently are retried every crawl (they count toward uptime);
         // never-reached addresses back off 15 min, 30 min, ... up to a day, then weekly.
         let mut fail_st = tx.prepare_cached(
             "UPDATE nodes SET last_tried = ?2, fail_streak = fail_streak + 1, last_crawl = ?3, last_ok = 0,
-                last_error = ?4, country = ?5, asn = ?6, as_org = ?7,
+                last_error = ?4,
                 next_try = CASE
-                    WHEN last_success > ?2 - ?8 THEN ?2
-                    WHEN last_success IS NULL AND fail_streak + 1 >= ?9 THEN ?2 + 7 * 86400
+                    WHEN last_success > ?2 - ?5 THEN ?2
+                    WHEN last_success IS NULL AND fail_streak + 1 >= ?6 THEN ?2 + 7 * 86400
                     ELSE ?2 + min(900 * (1 << min(fail_streak, 7)), 86400)
                 END
              WHERE addr = ?1",
         )?;
+        // Geo columns keep their old values when the databases aren't loaded (first start, or a
+        // failed download), so a crawl never blanks them.
+        let mut geo_st = tx.prepare_cached(
+            "UPDATE nodes SET country = ?2, continent = ?3, city = ?4, lat = ?5, lon = ?6, asn = ?7, as_org = ?8
+             WHERE addr = ?1",
+        )?;
         for r in &rows {
             ensure.execute(params![r.addr, now])?;
-            let (country, asn, org) = (&r.geo.country, r.geo.asn, &r.geo.as_org);
             match &r.ok {
                 Some(v) => ok_st.execute(params![
                     r.addr,
@@ -329,23 +337,13 @@ fn record(
                     v.services as i64,
                     v.start_height,
                     v.latency_ms,
-                    country,
-                    asn,
-                    org,
                     r.asked_addrs,
                 ])?,
-                None => fail_st.execute(params![
-                    r.addr,
-                    now,
-                    id,
-                    r.error,
-                    country,
-                    asn,
-                    org,
-                    ACTIVE_WINDOW,
-                    NEW_ADDR_TRIES,
-                ])?,
+                None => fail_st.execute(params![r.addr, now, id, r.error, ACTIVE_WINDOW, NEW_ADDR_TRIES])?,
             };
+            if let Some(g) = &r.geo {
+                geo_st.execute(params![r.addr, g.country, g.continent, g.city, g.lat, g.lon, g.asn, g.as_org])?;
+            }
         }
     }
     tx.execute(

@@ -413,7 +413,9 @@ pub async fn backfill(ctx: Arc<NetCtx>, floor: u32) {
         }
         let step: Result<bool> = async {
             let _guard = ctx.pay_lock.lock().await;
-            let Some((lo, _)) = payments_range(&ctx).await? else { return Ok(false) };
+            let Some((lo, _)) = payments_range(&ctx).await? else {
+                return Ok(false);
+            };
             if lo <= floor {
                 return Ok(true);
             }

@@ -46,6 +46,7 @@ pub fn router(nets: Nets, web: &Path) -> Router {
     let pages = Router::new()
         .route_service("/", page("index.html"))
         .route_service("/masternodes", page("masternodes.html"))
+        .route_service("/map", page("map.html"))
         .route_service("/mn/{protx}", page("mn.html"))
         .route_service("/api", page("api.html"))
         .nest_service("/assets", ServeDir::new(web.join("assets")))
@@ -63,7 +64,9 @@ pub fn router(nets: Nets, web: &Path) -> Router {
         .layer(CompressionLayer::new())
 }
 
-const CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; \
+// The map page's basemap tiles come from OpenStreetMap; nothing else is loaded from elsewhere.
+const CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self'; \
+    img-src 'self' data: https://tile.openstreetmap.org; \
     connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
 
 async fn harden(mut r: Response) -> Response {
@@ -188,7 +191,9 @@ async fn summary(State(nets): State<Nets>, UrlPath(net): UrlPath<String>) -> Api
     let body = ctx
         .db
         .read(|c| {
-            let Some(id) = latest_crawl(c)? else { return Ok(json!({"crawl": null, "dists": {}})) };
+            let Some(id) = latest_crawl(c)? else {
+                return Ok(json!({"crawl": null, "dists": {}}));
+            };
             let crawl = c.query_row("SELECT * FROM crawls WHERE id = ?1", [id], crawl_json)?;
             // The crawl closest to 24h earlier, for deltas.
             let started: i64 = crawl["started"].as_i64().unwrap_or(0);
@@ -376,7 +381,7 @@ fn totals_history(c: &Connection, since: i64, per_crawl: bool) -> Result<Value> 
 const MN_COLUMNS: &str = "m.protx, m.type, m.service, m.payout_address, m.registered_height, m.last_paid_height,
     m.pose_penalty, m.pose_ban_height, m.operator_reward, m.platform_node_id,
     n.user_agent, n.protocol, n.last_crawl, n.last_ok, n.last_success, n.latency_ms, n.country, n.asn, n.as_org,
-    n.last_error, n.start_height";
+    n.last_error, n.start_height, n.continent, n.city, n.lat, n.lon";
 
 fn mn_json(r: &Row, latest: Option<i64>) -> rusqlite::Result<Value> {
     let ban: Option<i64> = r.get("pose_ban_height")?;
@@ -409,6 +414,10 @@ fn mn_json(r: &Row, latest: Option<i64>) -> rusqlite::Result<Value> {
         "country": r.get::<_, Option<String>>("country")?,
         "asn": r.get::<_, Option<i64>>("asn")?,
         "as_org": r.get::<_, Option<String>>("as_org")?,
+        "continent": r.get::<_, Option<String>>("continent")?,
+        "city": r.get::<_, Option<String>>("city")?,
+        "lat": r.get::<_, Option<f64>>("lat")?,
+        "lon": r.get::<_, Option<f64>>("lon")?,
     }))
 }
 

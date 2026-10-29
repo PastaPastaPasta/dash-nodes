@@ -41,7 +41,9 @@
     <div class="api-ep">
       <h3>GET /api/v1/{net}/masternodes</h3>
       <p class="sub">Every registered masternode with its latest port check (<code>reachable</code> is <code>null</code> when the latest
-        crawl didn't check it), announced user agent, geolocation and 7- and 30-day port-check uptime.</p>
+        crawl didn't check it), announced user agent, geolocation and 7- and 30-day port-check uptime. Geolocation is
+        <code>country</code> (ISO 3166), <code>continent</code> (two-letter code), <code>city</code>, city-level
+        <code>lat</code>/<code>lon</code>, <code>asn</code> and <code>as_org</code>; the map page is drawn from this endpoint.</p>
     </div>
     <div class="api-ep">
       <h3>GET /api/v1/{net}/masternodes/{protx}</h3>

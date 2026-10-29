@@ -102,6 +102,74 @@ export function nodeStatus(m, unchecked = "Not checked") {
   return ["none", unchecked];
 }
 
+/** Masternode filters shared by the list and the map, so either page can link to the other. */
+export const MN_FILTERS = ["q", "type", "status", "version", "country"];
+
+export function mnFilters(params) {
+  return Object.fromEntries(MN_FILTERS.map((k) => [k, params.get(k) || ""]));
+}
+
+export function mnMatches(m, f) {
+  if (f.type && m.type !== f.type) return false;
+  if (f.status && nodeStatus(m)[1] !== f.status) return false;
+  if (f.version && (m.version || "Unknown") !== f.version) return false;
+  if (f.country && (m.country || "Unknown") !== f.country) return false;
+  const q = f.q.trim().toLowerCase();
+  if (q) {
+    const hay = [m.protx, m.service, m.payout_address, m.as_org, m.user_agent, m.platform_node_id, m.city].join(" ").toLowerCase();
+    if (!hay.includes(q)) return false;
+  }
+  return true;
+}
+
+/** Writes the given filters into the address bar (empty ones removed) without a reload. */
+export function rememberParams(values) {
+  const u = new URL(location.href);
+  for (const [k, v] of Object.entries(values)) {
+    if (v) u.searchParams.set(k, v);
+    else u.searchParams.delete(k);
+  }
+  history.replaceState(null, "", u);
+}
+
+/** The current page's filters as a query string for a link to another page. */
+export function filterQuery(f) {
+  const q = new URLSearchParams();
+  for (const k of MN_FILTERS) if (f[k]) q.set(k, f[k]);
+  const s = q.toString();
+  return s ? `?${s}` : "";
+}
+
+/** One option list per filter, with counts, ordered most common first. */
+export function countBy(rows, key) {
+  const m = new Map();
+  for (const r of rows) m.set(key(r), (m.get(key(r)) || 0) + 1);
+  return [...m.entries()].sort((a, b) => b[1] - a[1]);
+}
+
+/**
+ * Search box and selects for the shared masternode filters. They edit `f` in place and call
+ * onChange; option lists and counts come from `rows`.
+ */
+export function filterControls(rows, f, onChange) {
+  const select = (name, label, options) => {
+    const s = el("select", { "aria-label": label, onchange: () => { f[name] = s.value; onChange(); } },
+      el("option", { value: "", text: "All" }), ...options.map(([v, t]) => el("option", { value: v, text: t })));
+    s.value = f[name];
+    return el("label", {}, label, s);
+  };
+  const search = el("input", { type: "search", placeholder: "ProTx, IP, payout address, hosting…", value: f.q, "aria-label": "Search" });
+  let timer;
+  search.addEventListener("input", () => { clearTimeout(timer); timer = setTimeout(() => { f.q = search.value; onChange(); }, 150); });
+  return [
+    search,
+    select("type", "Type", [["Regular", "Regular"], ["Evo", "Evo"]]),
+    select("status", "Status", ["Reachable", "Unreachable", "PoSe-banned", "Not checked"].map((s) => [s, s])),
+    select("version", "Version", countBy(rows, (r) => r.version || "Unknown").map(([v, n]) => [v, `${v} (${fmt(n)})`])),
+    select("country", "Country", countBy(rows, (r) => r.country || "Unknown").map(([c, n]) => [c, `${flag(c)} ${countryName(c)} (${fmt(n)})`])),
+  ];
+}
+
 /** Badge kind for a share of port checks answered (0..1). */
 export function uptimeKind(share) {
   if (share >= 0.99) return "good";
@@ -137,7 +205,7 @@ export function chrome(page) {
   const net = currentNet();
   document.title = `${document.title}${net === "testnet" ? " · testnet" : ""}`;
   const nav = el("nav", { class: "main" },
-    ...[["overview", "/", "Overview"], ["masternodes", "/masternodes", "Masternodes"], ["api", "/api", "API"]].map(([id, path, label]) =>
+    ...[["overview", "/", "Overview"], ["masternodes", "/masternodes", "Masternodes"], ["map", "/map", "Map"], ["api", "/api", "API"]].map(([id, path, label]) =>
       el("a", { href: href(path), "aria-current": id === page ? "page" : null, text: label })));
   const seg = el("div", { class: "seg net", role: "group", "aria-label": "Network" },
     ...NETWORKS.map((n) => el("button", {

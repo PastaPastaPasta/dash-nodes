@@ -1,4 +1,4 @@
-import { api, chrome, currentNet, el, fmt, pct, countryName, flag, badge, ago, dateTime, dash, nodeStatus, uptimeKind, tile, card } from "./common.js";
+import { api, chrome, currentNet, el, fmt, pct, href, countryName, flag, badge, ago, dateTime, dash, nodeStatus, uptimeKind, tile, card } from "./common.js";
 
 chrome("masternodes");
 const net = currentNet();
@@ -112,7 +112,8 @@ async function main() {
         ["Services", services],
         ["Height it reported", m.start_height != null ? fmt(m.start_height) : null],
         ["Handshake time", m.latency_ms != null ? `${fmt(m.latency_ms)} ms` : null],
-        ["Country", m.country ? `${flag(m.country)} ${countryName(m.country)}` : null],
+        ["Location", m.country ? el("span", {}, `${flag(m.country)} ${[m.city, countryName(m.country)].filter(Boolean).join(", ")}`,
+          m.lat != null && !m.removed ? [" · ", el("a", { href: href(`/map?protx=${m.protx}`), text: "show on map" })] : null) : null],
         ["Hosting network", m.asn ? `AS${m.asn} ${m.as_org || ""}` : null],
       ])),
   ));

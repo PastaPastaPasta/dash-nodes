@@ -6,10 +6,14 @@ mnowatch.org/user-agents and the old dashninja.pl:
 - **Network crawl:** every 15 minutes it handshakes with every registered masternode, every node that
   answered in the past week, and new addresses from our dashd and other nodes' `getaddr` replies. From
   each it records the user agent, protocol, services, reported height and handshake time, plus
-  country and hosting ASN (DB-IP Lite).
+  city, country and hosting ASN (DB-IP Lite).
 - **Masternode list:** the deterministic list from dashd, a live port check per masternode, version
   history, daily port-check uptime, and every payment back to DIP3 enforcement (`masternode payments`,
   backfilled newest first).
+- **Map:** every masternode placed by the city its IP geolocates to (DB-IP City Lite), clustered,
+  colored by port-check status, version or type, with the list's filters. It replaces the old
+  map.dashhq.org / map.thepasta.org (`PastaPastaPasta/dash-mn-map`), whose hostnames now redirect to `/map`.
+  Basemap tiles come from OpenStreetMap; Leaflet and Leaflet.markercluster are vendored in `web/assets/vendor`.
 - **History:** per-crawl distributions are kept for 14 days and daily averages forever, so
   version adoption and network size can be charted over time.
 

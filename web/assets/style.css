@@ -210,6 +210,76 @@ pre.code { background: var(--surface-2); padding: 10px 12px; border-radius: 8px;
 .api-ep { margin-bottom: 18px; }
 .api-ep h3 { color: var(--ink); font-family: var(--mono); font-size: 13px; font-weight: 600; }
 
+/* ---- map ---- */
+main.wide { max-width: 1600px; }
+.actions { display: flex; gap: 8px; flex-wrap: wrap; }
+a.btn { display: inline-block; }
+a.btn:hover { text-decoration: none; }
+.map-layout { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 14px; height: calc(100vh - 200px); min-height: 520px; }
+/* z-index makes the map its own stacking context, so Leaflet's panes stay under the sticky header. */
+.map { border-radius: 10px; box-shadow: 0 0 0 1px var(--ring); z-index: 0; }
+.map-panel { background: var(--surface); border-radius: 10px; box-shadow: 0 0 0 1px var(--ring); padding: 14px 16px; overflow-y: auto; }
+.map-filters { display: grid; gap: 8px; }
+.map-filters input[type="search"] { min-width: 0; width: 100%; }
+.map-filters label { display: grid; grid-template-columns: 64px minmax(0, 1fr); align-items: center; color: var(--ink-2); font-size: 12.5px; }
+.panel-sec { margin-top: 16px; }
+.panel-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 14px; }
+.panel-row h2, .panel-row h3 { margin: 0; }
+.panel-summary { font-size: 12.5px; margin: 14px 0 0; }
+.map-legend { margin-top: 8px; }
+.map-legend i { border-radius: 50%; background: var(--tone); }
+.map-legend b { font-weight: 600; color: var(--ink); font-variant-numeric: tabular-nums; }
+.group { background: var(--surface-2); border-radius: 8px; padding: 2px 12px 10px; }
+.group .sub { font-size: 12.5px; margin: 4px 0 0; }
+.mn-list { list-style: none; margin: 8px 0 0; padding: 0; max-height: 300px; overflow-y: auto; font-size: 12.5px; }
+.mn-list li { display: flex; align-items: center; gap: 8px; padding: 3px 0; }
+.mn-list .muted { margin-left: auto; white-space: nowrap; }
+
+/* Marker tones: one class per color role, shared by markers, cluster donuts and the legend. */
+.t-good { --tone: var(--good); }
+.t-critical { --tone: var(--critical); }
+.t-serious { --tone: var(--serious); }
+.t-axis { --tone: var(--axis); }
+.t-other { --tone: var(--other); }
+.t-s1 { --tone: var(--s1); } .t-s2 { --tone: var(--s2); } .t-s3 { --tone: var(--s3); }
+.t-s4 { --tone: var(--s4); } .t-s5 { --tone: var(--s5); }
+path.mk { fill: var(--tone); stroke: var(--surface); }
+path.mk:hover { stroke: var(--ink); }
+.cluster-icon { background: none; border: 0; }
+.cluster { border-radius: 50%; display: grid; place-items: center; box-shadow: 0 1px 4px rgba(0, 0, 0, .35); }
+.cluster span {
+  width: calc(100% - 10px); height: calc(100% - 10px); border-radius: 50%; display: grid; place-items: center;
+  background: var(--surface); color: var(--ink); font-size: 11.5px; font-weight: 650; font-variant-numeric: tabular-nums;
+}
+
+/* Leaflet, restyled to the page. Tiles are desaturated so the data carries the color; in dark
+   mode they're inverted. */
+.map.leaflet-container { font: inherit; background: var(--surface-2); }
+.map .leaflet-tile-pane { filter: saturate(0.35) contrast(0.95); }
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) .map .leaflet-tile-pane { filter: invert(1) hue-rotate(180deg) brightness(0.85) contrast(0.9) saturate(0.3); }
+}
+:root[data-theme="dark"] .map .leaflet-tile-pane { filter: invert(1) hue-rotate(180deg) brightness(0.85) contrast(0.9) saturate(0.3); }
+.map.leaflet-container .leaflet-bar { border: 0; box-shadow: 0 0 0 1px var(--ring), 0 1px 3px rgba(0, 0, 0, .12); }
+.map.leaflet-container .leaflet-bar a { background: var(--surface); color: var(--ink); border-bottom-color: var(--grid); }
+.map.leaflet-container .leaflet-bar a:hover { background: var(--surface-2); }
+.map.leaflet-container .leaflet-control-attribution { background: color-mix(in srgb, var(--surface) 85%, transparent); color: var(--muted); }
+.map.leaflet-container .leaflet-control-attribution a { color: var(--ink-2); }
+.map .leaflet-popup-content-wrapper, .map .leaflet-popup-tip { background: var(--surface); color: var(--ink); box-shadow: 0 0 0 1px var(--ring), 0 6px 20px rgba(0, 0, 0, .18); }
+.map .leaflet-popup-content { margin: 12px 14px; font-size: 13px; line-height: 1.45; }
+.map.leaflet-container a.leaflet-popup-close-button { color: var(--muted); }
+.pop-head { display: flex; gap: 8px; align-items: center; }
+.pop-id { display: block; margin: 6px 0 8px; font-size: 12px; }
+.pop dl { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 3px 12px; margin: 0 0 10px; }
+.pop dt { color: var(--ink-2); }
+.pop dd { margin: 0; overflow-wrap: anywhere; }
+
+@media (max-width: 900px) {
+  .map-layout { grid-template-columns: 1fr; height: auto; min-height: 0; }
+  .map { height: 62vh; min-height: 360px; }
+  .map-panel { overflow: visible; }
+}
+
 @media (max-width: 640px) {
   .top-right { margin-left: 0; width: 100%; justify-content: space-between; }
   .grid-2, .grid-3, .cols-2 { grid-template-columns: 1fr; }

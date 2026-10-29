@@ -36,7 +36,11 @@ CREATE TABLE IF NOT EXISTS nodes (
     latency_ms    INTEGER,
     country       TEXT,
     asn           INTEGER,
-    as_org        TEXT
+    as_org        TEXT,
+    continent     TEXT,
+    city          TEXT,
+    lat           REAL,
+    lon           REAL
 );
 CREATE INDEX IF NOT EXISTS nodes_next_try ON nodes(next_try);
 CREATE INDEX IF NOT EXISTS nodes_last_crawl ON nodes(last_crawl);
@@ -147,6 +151,23 @@ pub struct Db {
 }
 
 /// A panic inside a closure poisons the mutex; the connection itself is still fine to use.
+/// Columns added after the first release, for databases created before them.
+const ADDED_COLUMNS: [(&str, &str, &str); 4] =
+    [("nodes", "continent", "TEXT"), ("nodes", "city", "TEXT"), ("nodes", "lat", "REAL"), ("nodes", "lon", "REAL")];
+
+fn migrate(c: &Connection) -> Result<()> {
+    for (table, column, ty) in ADDED_COLUMNS {
+        let exists: bool =
+            c.query_row("SELECT count(*) > 0 FROM pragma_table_info(?1) WHERE name = ?2", [table, column], |r| {
+                r.get(0)
+            })?;
+        if !exists {
+            c.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {column} {ty}"))?;
+        }
+    }
+    Ok(())
+}
+
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
@@ -158,6 +179,7 @@ impl Db {
         conn.pragma_update(None, "synchronous", "NORMAL")?;
         conn.busy_timeout(std::time::Duration::from_secs(30))?;
         conn.execute_batch(SCHEMA).context("schema")?;
+        migrate(&conn).context("migrate")?;
         Ok(Db {
             path: path.to_owned(),
             writer: Arc::new(Mutex::new(conn)),
@@ -257,5 +279,32 @@ mod tests {
         assert_eq!(day_of(951_782_400), "2000-02-29");
         assert_eq!(day_of(1_793_318_399), "2026-10-29");
         assert_eq!(day_of(1_793_318_400), "2026-10-30");
+    }
+
+    #[test]
+    fn migrates_pre_geo_nodes_table() {
+        let dir = std::env::temp_dir().join(format!("dash-nodes-migrate-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("old.sqlite");
+        let _ = std::fs::remove_file(&path);
+        let mut old = SCHEMA.to_owned();
+        for (_, column, ty) in ADDED_COLUMNS {
+            let line = old
+                .lines()
+                .find(|l| l.split_whitespace().map(|w| w.trim_end_matches(',')).take(2).eq([column, ty]))
+                .unwrap()
+                .to_owned();
+            old = old.replace(&format!("{line}\n"), "");
+        }
+        let old = old.replace("as_org        TEXT,\n);", "as_org        TEXT\n);");
+        Connection::open(&path).unwrap().execute_batch(&old).unwrap();
+        Db::open(&path).unwrap();
+        // Opening again is a no-op.
+        let db = Db::open(&path).unwrap();
+        lock(&db.writer)
+            .execute("INSERT INTO nodes (addr, source, first_seen, city, lat, lon, continent) VALUES ('a', 's', 0, 'c', 1.5, 2.5, 'EU')", [])
+            .unwrap();
+        drop(db);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }
