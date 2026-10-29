@@ -14,7 +14,8 @@ use rand::seq::SliceRandom;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::{Value, json};
 
-use crate::db::{self, day_of, get_meta, set_meta};
+use crate::collector::pose_status;
+use crate::db::{self, day_of, get_meta, query_all, set_meta};
 use crate::p2p::{self, Probe};
 use crate::state::NetCtx;
 use crate::ua;
@@ -34,7 +35,25 @@ const MN_DAILY_RETENTION: i64 = 180 * DAY;
 const NODE_RETENTION: i64 = 30 * DAY;
 
 pub async fn run(ctx: Arc<NetCtx>) {
-    ctx.crawl_status.write().unwrap().running = false;
+    // Pick up where the last process left off, so status doesn't read "never crawled" after a restart.
+    let last = ctx
+        .db
+        .read(|c| {
+            Ok(c.query_row("SELECT id, finished FROM crawls WHERE finished IS NOT NULL ORDER BY id DESC LIMIT 1", [], |r| {
+                Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))
+            })
+            .optional()?)
+        })
+        .await
+        .unwrap_or(None);
+    {
+        let mut s = ctx.crawl_status.write().unwrap();
+        s.running = false;
+        if let Some((id, finished)) = last {
+            s.last_id = Some(id);
+            s.last_finished = Some(finished);
+        }
+    }
     while !ctx.mn_loaded.load(Ordering::Acquire) {
         tokio::time::sleep(Duration::from_secs(10)).await;
     }
@@ -87,14 +106,18 @@ async fn crawl_once(ctx: &NetCtx) -> Result<i64> {
     let (mn_addrs, due) = ctx
         .db
         .read(move |c| {
-            let mn: Vec<String> = c
-                .prepare("SELECT DISTINCT service FROM masternodes WHERE removed IS NULL AND service IS NOT NULL")?
-                .query_map([], |r| r.get(0))?
-                .collect::<rusqlite::Result<_>>()?;
-            let due: Vec<(String, Option<i64>, Option<i64>)> = c
-                .prepare("SELECT addr, last_success, last_getaddr FROM nodes WHERE next_try <= ?1")?
-                .query_map([now], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
-                .collect::<rusqlite::Result<_>>()?;
+            let mn: Vec<String> = query_all(
+                c,
+                "SELECT DISTINCT service FROM masternodes WHERE removed IS NULL AND service IS NOT NULL",
+                [],
+                |r| r.get(0),
+            )?;
+            let due: Vec<(String, Option<i64>, Option<i64>)> = query_all(
+                c,
+                "SELECT addr, last_success, last_getaddr FROM nodes WHERE next_try <= ?1",
+                [now],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )?;
             Ok((mn, due))
         })
         .await?;
@@ -104,7 +127,7 @@ async fn crawl_once(ctx: &NetCtx) -> Result<i64> {
         .read(|c| Ok(c.query_row("SELECT count(*) FROM crawls WHERE finished IS NOT NULL", [], |r| r.get::<_, i64>(0))? == 0))
         .await?;
     let mut rng = rand::rngs::StdRng::from_rng(&mut rand::rng());
-    let usable = |a: &SocketAddr| p2p::is_routable(a) && (ctx.crawl_cfg.ipv6 || a.is_ipv4());
+    let usable = |a: &SocketAddr| ctx.crawl_cfg.usable(a);
     let mut targets: HashMap<SocketAddr, bool> = HashMap::new();
     for a in mn_addrs.iter().filter_map(|s| s.parse().ok()).filter(usable) {
         targets.insert(a, false);
@@ -201,7 +224,7 @@ async fn learn_from_dashd(ctx: &NetCtx) -> Result<()> {
         }
         Err(e) => tracing::warn!(net = ctx.net.name(), "getnodeaddresses: {e:#}"),
     }
-    addrs.retain(|a| p2p::is_routable(a) && (ctx.crawl_cfg.ipv6 || a.is_ipv4()) && a.port() == ctx.net.default_port());
+    addrs.retain(|a| ctx.crawl_cfg.usable(a) && a.port() == ctx.net.default_port());
     let empty = ctx.db.read(|c| Ok(c.query_row("SELECT count(*) FROM nodes", [], |r| r.get::<_, i64>(0))? == 0)).await?;
     if addrs.is_empty() && empty {
         for seed in ctx.net.dns_seeds() {
@@ -325,7 +348,7 @@ fn record(
     let agg = aggregate(&tx, id, now)?;
     {
         let mut ins = tx.prepare_cached("INSERT INTO crawl_agg (crawl_id, scope, dim, key, count) VALUES (?1, ?2, ?3, ?4, ?5)")?;
-        for ((scope, dim, key), count) in &agg.counts {
+        for ((scope, dim, key), count) in &agg.counts.0 {
             ins.execute(params![id, scope, dim, key, count])?;
         }
     }
@@ -338,8 +361,25 @@ fn record(
     Ok(())
 }
 
+/// Node counts keyed by (scope, dim, key).
+#[derive(Default)]
+struct Counts(HashMap<(&'static str, &'static str, String), i64>);
+
+impl Counts {
+    fn add(&mut self, scope: &'static str, dim: &'static str, key: String) {
+        self.add_n(scope, dim, key, 1);
+    }
+
+    /// Zero counts are left out, so an empty bucket produces no row.
+    fn add_n(&mut self, scope: &'static str, dim: &'static str, key: String, n: i64) {
+        if n > 0 {
+            *self.0.entry((scope, dim, key)).or_default() += n;
+        }
+    }
+}
+
 struct Aggregate {
-    counts: HashMap<(&'static str, &'static str, String), i64>,
+    counts: Counts,
     reachable: i64,
     mn_total: i64,
     mn_reachable: i64,
@@ -357,13 +397,14 @@ fn asn_key(asn: Option<i64>, org: Option<String>) -> String {
 /// - `mn` / `evo`: every enabled (not PoSe-banned) masternode / evonode, reachable or not, with the
 ///   user agent it last announced within the active window.
 fn aggregate(c: &Connection, id: i64, now: i64) -> Result<Aggregate> {
-    let mut counts: HashMap<(&'static str, &'static str, String), i64> = HashMap::new();
-    let mut add = |scope: &'static str, dim: &'static str, key: String| *counts.entry((scope, dim, key)).or_default() += 1;
+    let mut counts = Counts::default();
 
-    let mn_services: HashSet<String> = c
-        .prepare("SELECT service FROM masternodes WHERE removed IS NULL AND service IS NOT NULL")?
-        .query_map([], |r| r.get(0))?
-        .collect::<rusqlite::Result<_>>()?;
+    let mn_services: HashSet<String> = query_all(
+        c,
+        "SELECT service FROM masternodes WHERE removed IS NULL AND service IS NOT NULL",
+        [],
+        |r| r.get(0),
+    )?;
 
     let mut reachable = 0;
     let mut st = c.prepare(
@@ -379,12 +420,12 @@ fn aggregate(c: &Connection, id: i64, now: i64) -> Result<Aggregate> {
         let asn = asn_key(r.get(4)?, r.get(5)?);
         let scopes: &[&'static str] = if mn_services.contains(&addr) { &["all"] } else { &["all", "nonmn"] };
         for &s in scopes {
-            add(s, "ua", ua.clone());
-            add(s, "version", ua::version_label(&ua));
-            add(s, "client", if ua::is_dash_core(&ua) { "Dash Core".into() } else { "Other".into() });
-            add(s, "protocol", protocol.to_string());
-            add(s, "country", country.clone());
-            add(s, "asn", asn.clone());
+            counts.add(s, "ua", ua.clone());
+            counts.add(s, "version", ua::version_label(&ua));
+            counts.add(s, "client", if ua::is_dash_core(&ua) { "Dash Core".into() } else { "Other".into() });
+            counts.add(s, "protocol", protocol.to_string());
+            counts.add(s, "country", country.clone());
+            counts.add(s, "asn", asn.clone());
         }
     }
     // Network-wide reachability over the active set: recently seen nodes plus enabled masternodes.
@@ -395,10 +436,9 @@ fn aggregate(c: &Connection, id: i64, now: i64) -> Result<Aggregate> {
         params![id, now - ACTIVE_WINDOW],
         |r| r.get(0),
     )?;
-    add_n(&mut counts, "all", "reachable", "yes", reachable);
-    add_n(&mut counts, "all", "reachable", "no", unreachable);
+    counts.add_n("all", "reachable", "yes".into(), reachable);
+    counts.add_n("all", "reachable", "no".into(), unreachable);
 
-    let mut add = |scope: &'static str, dim: &'static str, key: String| *counts.entry((scope, dim, key)).or_default() += 1;
     let (mut mn_total, mut mn_reachable) = (0, 0);
     let mut st = c.prepare(
         "SELECT m.type, coalesce(m.pose_ban_height, -1), n.last_crawl, n.last_ok, n.last_success, n.user_agent,
@@ -408,13 +448,13 @@ fn aggregate(c: &Connection, id: i64, now: i64) -> Result<Aggregate> {
     let mut rows = st.query([])?;
     while let Some(r) = rows.next()? {
         let mn_type: String = r.get(0)?;
-        let banned = r.get::<_, i64>(1)? != -1;
+        let status = pose_status(r.get(1)?);
         let evo = mn_type == "Evo";
-        add("mn", "status", if banned { "pose_banned".into() } else { "enabled".into() });
+        counts.add("mn", "status", status.into());
         if evo {
-            add("evo", "status", if banned { "pose_banned".into() } else { "enabled".into() });
+            counts.add("evo", "status", status.into());
         }
-        if banned {
+        if status != "enabled" {
             continue;
         }
         mn_total += 1;
@@ -431,22 +471,16 @@ fn aggregate(c: &Connection, id: i64, now: i64) -> Result<Aggregate> {
         let asn = asn_key(r.get(8)?, r.get(9)?);
         let scopes: &[&'static str] = if evo { &["mn", "evo"] } else { &["mn"] };
         for &s in scopes {
-            add(s, "type", mn_type.clone());
-            add(s, "reachable", reach.into());
-            add(s, "ua", ua.clone());
-            add(s, "version", version.clone());
-            add(s, "protocol", protocol.clone().unwrap_or_else(|| "Unknown".into()));
-            add(s, "country", country.clone());
-            add(s, "asn", asn.clone());
+            counts.add(s, "type", mn_type.clone());
+            counts.add(s, "reachable", reach.into());
+            counts.add(s, "ua", ua.clone());
+            counts.add(s, "version", version.clone());
+            counts.add(s, "protocol", protocol.clone().unwrap_or_else(|| "Unknown".into()));
+            counts.add(s, "country", country.clone());
+            counts.add(s, "asn", asn.clone());
         }
     }
     Ok(Aggregate { counts, reachable, mn_total, mn_reachable })
-}
-
-fn add_n(counts: &mut HashMap<(&'static str, &'static str, String), i64>, s: &'static str, d: &'static str, k: &str, n: i64) {
-    if n > 0 {
-        *counts.entry((s, d, k.to_string())).or_default() += n;
-    }
 }
 
 /// Daily rollups for finished days, then retention.

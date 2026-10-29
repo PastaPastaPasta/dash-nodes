@@ -1,4 +1,4 @@
-import { api, chrome, currentNet, el, fmt, pct, href, countryName, flag, badge, ago, dateTime, dash } from "./common.js";
+import { api, chrome, currentNet, el, fmt, pct, countryName, flag, badge, ago, dateTime, dash, nodeStatus, uptimeKind, tile, card } from "./common.js";
 
 chrome("masternodes");
 const net = currentNet();
@@ -14,29 +14,22 @@ function kv(rows) {
     el("tr", {}, el("td", { text: k }), el("td", {}, v ?? "–")))));
 }
 
-function tile(label, value, foot) {
-  return el("div", { class: "tile" }, el("div", { class: "label", text: label }), el("div", { class: "value" }, value), el("div", { class: "foot" }, foot ?? ""));
-}
-
 function statusOf(m) {
-  if (m.removed) return ["none", "Unregistered"];
-  if (m.status === "pose_banned") return ["serious", "PoSe-banned"];
-  if (m.reachable === true) return ["good", "Reachable"];
-  if (m.reachable === false) return ["critical", "Unreachable"];
-  return ["none", "Not checked yet"];
+  return m.removed ? ["none", "Unregistered"] : nodeStatus(m, "Not checked yet");
 }
 
 function uptimeStrip(days) {
   const byDay = new Map(days.map((d) => [d.day, d]));
   const cells = [];
-  const today = Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), new Date().getUTCDate());
+  const now = new Date();
+  const today = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
   for (let i = 89; i >= 0; i--) {
     const day = new Date(today - i * 86400000).toISOString().slice(0, 10);
     const d = byDay.get(day);
     let cls = "", title = `${day}: not checked`;
     if (d) {
       const r = d.ok / d.attempts;
-      cls = r >= 0.99 ? "good" : r >= 0.9 ? "warning" : "critical";
+      cls = uptimeKind(r);
       title = `${day}: ${pct(r)} (${d.ok} of ${d.attempts} checks answered)`;
     }
     cells.push(el("div", { class: cls, title, "aria-label": title }));
@@ -86,7 +79,7 @@ async function main() {
 
   const services = m.services != null ? `0x${m.services.toString(16)}` : null;
   root.append(el("div", { class: "cols-2" },
-    el("section", { class: "card" }, el("div", { class: "card-head" }, el("h2", { text: "Registration" }), el("span", { class: "sub", text: "from the deterministic masternode list" })),
+    card("Registration", "from the deterministic masternode list",
       kv([
         ["Type", m.type],
         ["Collateral", m.collateral ? link("transaction", m.collateral.split("-")[0], m.collateral) : null],
@@ -109,7 +102,7 @@ async function main() {
         m.revocation_reason ? ["Revocation reason", String(m.revocation_reason)] : null,
         m.removed && ["Left the list", dateTime(m.removed)],
       ])),
-    el("section", { class: "card" }, el("div", { class: "card-head" }, el("h2", { text: "Network" }), el("span", { class: "sub", text: "what our crawler sees" })),
+    card("Network", "what our crawler sees",
       kv([
         ["Latest port check", m.reachable == null ? "not checked in the latest crawl" : badge(m.reachable ? "good" : "critical", m.reachable ? "Answered" : "No answer")],
         m.last_error && ["Error", el("span", { class: "mono", text: m.last_error })],

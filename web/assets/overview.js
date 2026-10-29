@@ -1,4 +1,4 @@
-import { api, chrome, currentNet, el, fmt, pct, segmented, countryName, flag, ago, dateTime } from "./common.js";
+import { api, chrome, currentNet, el, fmt, pct, segmented, countryName, flag, ago, dateTime, badge, tile, card } from "./common.js";
 import { Palette, timeChart, barList } from "./charts.js";
 
 chrome("overview");
@@ -27,10 +27,6 @@ const scopeNoun = () => ({ all: "nodes", mn: "masternodes", evo: "evonodes", non
 
 function versionLabel(k) {
   return k === "Unknown" ? "Unknown (not reached in 7 days)" : k;
-}
-
-function tile(label, value, foot) {
-  return el("div", { class: "tile" }, el("div", { class: "label", text: label }), el("div", { class: "value" }, value), el("div", { class: "foot" }, foot));
 }
 
 function delta(now, then) {
@@ -64,10 +60,6 @@ function renderTiles() {
     `Crawl #${c.id} at ${dateTime(c.started)} (${ago(c.finished)}), chain tip ${fmt(c.tip_height)}.`;
 }
 
-function card(title, sub, body) {
-  return el("section", { class: "card" }, el("div", { class: "card-head" }, el("h2", { text: title }), el("span", { class: "sub", text: sub })), body);
-}
-
 function renderDists() {
   const d = summary.dists[scope] || {};
   const box = document.getElementById("dists");
@@ -83,18 +75,17 @@ function renderDists() {
   if (reach?.length) {
     const m = Object.fromEntries(reach);
     const yes = m.yes || 0, no = m.no || 0, unchecked = m.unchecked || 0, tot = yes + no + unchecked;
+    const parts = [
+      { kind: "good", color: "var(--good)", title: "Reachable", label: "Answered this crawl", n: yes },
+      { kind: "critical", color: "var(--critical)", title: "Not reachable", label: "Didn't answer", n: no },
+    ];
+    if (unchecked) parts.push({ kind: "none", color: "var(--axis)", title: "Not checked", label: "Not checked (IPv6)", n: unchecked });
     const body = el("div", {},
       el("div", { class: "share", role: "img", "aria-label": `${yes} reachable, ${no} not reachable` },
-        el("div", { style: { width: `${(yes / tot) * 100}%`, background: "var(--good)" }, title: `Reachable: ${fmt(yes)}` }),
-        el("div", { style: { width: `${(no / tot) * 100}%`, background: "var(--critical)" }, title: `Not reachable: ${fmt(no)}` }),
-        unchecked ? el("div", { style: { width: `${(unchecked / tot) * 100}%`, background: "var(--axis)" }, title: `Not checked: ${fmt(unchecked)}` }) : null),
+        ...parts.map((p) => el("div", { style: { width: `${(p.n / tot) * 100}%`, background: p.color }, title: `${p.title}: ${fmt(p.n)}` }))),
       el("div", { class: "bars" },
-        el("div", { class: "k" }, el("span", { class: "badge good" }, el("i"), "Answered this crawl")), el("div"),
-        el("div", { class: "v" }, fmt(yes), el("small", { text: pct(yes / tot) })),
-        el("div", { class: "k" }, el("span", { class: "badge critical" }, el("i"), "Didn't answer")), el("div"),
-        el("div", { class: "v" }, fmt(no), el("small", { text: pct(no / tot) })),
-        unchecked ? [el("div", { class: "k" }, el("span", { class: "badge none" }, el("i"), "Not checked (IPv6)")), el("div"),
-          el("div", { class: "v" }, fmt(unchecked), el("small", { text: pct(unchecked / tot) }))] : null),
+        ...parts.map((p) => [el("div", { class: "k" }, badge(p.kind, p.label)), el("div"),
+          el("div", { class: "v" }, fmt(p.n), el("small", { text: pct(p.n / tot) }))])),
       el("p", { class: "muted", style: { fontSize: "12px", margin: "10px 0 0" },
         text: scope === "all"
           ? "Out of nodes that answered at least once in the last 7 days, plus every enabled masternode."

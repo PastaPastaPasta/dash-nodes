@@ -20,8 +20,8 @@ use tower_http::compression::CompressionLayer;
 use tower_http::services::{ServeDir, ServeFile};
 use tower_http::set_header::SetResponseHeaderLayer;
 
-use crate::collector::payments_range;
-use crate::db::{self, day_of};
+use crate::collector::{payments_range, pose_status};
+use crate::db::{self, day_of, query_all};
 use crate::network::Network;
 use crate::state::NetCtx;
 
@@ -145,6 +145,10 @@ fn net_ctx(nets: &Nets, net: &str) -> Result<Arc<NetCtx>, ApiError> {
         .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, format!("unknown network {net}")))
 }
 
+fn indexed_json(range: Option<(u32, u32)>) -> Value {
+    range.map_or(Value::Null, |(lo, hi)| json!({"from": lo, "to": hi}))
+}
+
 async fn status(State(nets): State<Nets>) -> ApiResult {
     let mut out = serde_json::Map::new();
     for net in Network::ALL {
@@ -155,7 +159,7 @@ async fn status(State(nets): State<Nets>) -> ApiResult {
             json!({
                 "chain": *ctx.status.read().unwrap(),
                 "crawl": *ctx.crawl_status.read().unwrap(),
-                "payments_indexed": range.map(|(lo, hi)| json!({"from": lo, "to": hi})),
+                "payments_indexed": indexed_json(range),
                 "geo_loaded": ctx.geo.loaded(),
             }),
         );
@@ -387,7 +391,7 @@ fn mn_json(r: &Row, latest: Option<i64>) -> rusqlite::Result<Value> {
     Ok(json!({
         "protx": r.get::<_, String>("protx")?,
         "type": r.get::<_, String>("type")?,
-        "status": if ban.unwrap_or(-1) == -1 { "enabled" } else { "pose_banned" },
+        "status": pose_status(ban),
         "service": r.get::<_, Option<String>>("service")?,
         "payout_address": r.get::<_, Option<String>>("payout_address")?,
         "registered_height": r.get::<_, Option<i64>>("registered_height")?,
@@ -433,15 +437,13 @@ async fn masternodes(State(nets): State<Nets>, UrlPath(net): UrlPath<String>) ->
                     ON u30.protx = m.protx
                  WHERE m.removed IS NULL ORDER BY m.registered_height, m.protx"
             );
-            let mut st = c.prepare(&sql)?;
-            let list: Vec<Value> = st
-                .query_map([day_of(now - 6 * 86_400), day_of(now - 29 * 86_400)], |r| {
+            let list: Vec<Value> =
+                query_all(c, &sql, [day_of(now - 6 * 86_400), day_of(now - 29 * 86_400)], |r| {
                     let mut v = mn_json(r, latest)?;
                     v["uptime_7d"] = uptime(r.get("ok7")?, r.get("a7")?);
                     v["uptime_30d"] = uptime(r.get("ok30")?, r.get("a30")?);
                     Ok(v)
-                })?
-                .collect::<rusqlite::Result<_>>()?;
+                })?;
             let tip: Option<i64> = c.query_row("SELECT max(height) FROM blocks", [], |r| r.get(0))?;
             Ok(json!({"crawl_id": latest, "tip": tip, "masternodes": list}))
         })
@@ -449,16 +451,18 @@ async fn masternodes(State(nets): State<Nets>, UrlPath(net): UrlPath<String>) ->
     Ok(Json(body))
 }
 
-fn valid_hash(s: &str) -> bool {
-    s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit())
+/// Validates a ProTx hash from the URL and lowercases it, the form it's stored in.
+fn parse_protx(s: &str) -> Result<String, ApiError> {
+    if s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit()) {
+        Ok(s.to_ascii_lowercase())
+    } else {
+        Err(ApiError(StatusCode::BAD_REQUEST, "protx must be 64 hex characters".into()))
+    }
 }
 
 async fn masternode(State(nets): State<Nets>, UrlPath((net, protx)): UrlPath<(String, String)>) -> ApiResult {
     let ctx = net_ctx(&nets, &net)?;
-    if !valid_hash(&protx) {
-        return Err(ApiError(StatusCode::BAD_REQUEST, "protx must be 64 hex characters".into()));
-    }
-    let protx = protx.to_ascii_lowercase();
+    let protx = parse_protx(&protx)?;
     let range = payments_range(&ctx).await?;
     let body = ctx
         .db
@@ -492,18 +496,18 @@ async fn masternode(State(nets): State<Nets>, UrlPath((net, protx)): UrlPath<(St
             else {
                 return Ok(None);
             };
-            let versions: Vec<Value> = c
-                .prepare("SELECT ts, user_agent, protocol FROM mn_versions WHERE protx = ?1 ORDER BY ts DESC LIMIT 100")?
-                .query_map([&protx], |r| {
-                    Ok(json!({"ts": r.get::<_, i64>(0)?, "user_agent": r.get::<_, String>(1)?, "protocol": r.get::<_, i64>(2)?}))
-                })?
-                .collect::<rusqlite::Result<_>>()?;
-            let uptime_daily: Vec<Value> = c
-                .prepare("SELECT day, attempts, ok FROM mn_daily WHERE protx = ?1 AND day >= ?2 ORDER BY day")?
-                .query_map(params![&protx, day_of(db::now() - 89 * 86_400)], |r| {
-                    Ok(json!({"day": r.get::<_, String>(0)?, "attempts": r.get::<_, i64>(1)?, "ok": r.get::<_, i64>(2)?}))
-                })?
-                .collect::<rusqlite::Result<_>>()?;
+            let versions: Vec<Value> = query_all(
+                c,
+                "SELECT ts, user_agent, protocol FROM mn_versions WHERE protx = ?1 ORDER BY ts DESC LIMIT 100",
+                [&protx],
+                |r| Ok(json!({"ts": r.get::<_, i64>(0)?, "user_agent": r.get::<_, String>(1)?, "protocol": r.get::<_, i64>(2)?})),
+            )?;
+            let uptime_daily: Vec<Value> = query_all(
+                c,
+                "SELECT day, attempts, ok FROM mn_daily WHERE protx = ?1 AND day >= ?2 ORDER BY day",
+                params![&protx, day_of(db::now() - 89 * 86_400)],
+                |r| Ok(json!({"day": r.get::<_, String>(0)?, "attempts": r.get::<_, i64>(1)?, "ok": r.get::<_, i64>(2)?})),
+            )?;
             let (count, total, first): (i64, Option<i64>, Option<i64>) = c.query_row(
                 "SELECT count(*), sum(amount), min(height) FROM payments WHERE protx = ?1",
                 [&protx],
@@ -511,7 +515,7 @@ async fn masternode(State(nets): State<Nets>, UrlPath((net, protx)): UrlPath<(St
             )?;
             mn["payments_summary"] = json!({
                 "count": count, "total_duffs": total.unwrap_or(0), "first_height": first,
-                "indexed": range.map(|(lo, hi)| json!({"from": lo, "to": hi})),
+                "indexed": indexed_json(range),
             });
             mn["payments"] = json!(recent_payments(c, &protx, None, 25)?);
             mn["versions"] = json!(versions);
@@ -519,26 +523,22 @@ async fn masternode(State(nets): State<Nets>, UrlPath((net, protx)): UrlPath<(St
             Ok(Some(mn))
         })
         .await?;
-    match body {
-        Some(b) => Ok(Json(b)),
-        None => Err(ApiError(StatusCode::NOT_FOUND, "unknown protx".into())),
-    }
+    body.map(Json).ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "unknown protx".into()))
 }
 
 fn recent_payments(c: &Connection, protx: &str, before: Option<i64>, limit: i64) -> Result<Vec<Value>> {
-    let mut st = c.prepare(
+    Ok(query_all(
+        c,
         "SELECT p.height, p.amount, b.time, b.hash FROM payments p JOIN blocks b ON b.height = p.height
          WHERE p.protx = ?1 AND p.height < ?2 ORDER BY p.height DESC LIMIT ?3",
-    )?;
-    let rows = st
-        .query_map(params![protx, before.unwrap_or(i64::MAX), limit], |r| {
+        params![protx, before.unwrap_or(i64::MAX), limit],
+        |r| {
             Ok(json!({
                 "height": r.get::<_, i64>(0)?, "amount_duffs": r.get::<_, i64>(1)?,
                 "time": r.get::<_, i64>(2)?, "block_hash": r.get::<_, String>(3)?,
             }))
-        })?
-        .collect::<rusqlite::Result<_>>()?;
-    Ok(rows)
+        },
+    )?)
 }
 
 #[derive(Deserialize)]
@@ -553,10 +553,7 @@ async fn payments(
     Query(q): Query<PaymentsQuery>,
 ) -> ApiResult {
     let ctx = net_ctx(&nets, &net)?;
-    if !valid_hash(&protx) {
-        return Err(ApiError(StatusCode::BAD_REQUEST, "protx must be 64 hex characters".into()));
-    }
-    let protx = protx.to_ascii_lowercase();
+    let protx = parse_protx(&protx)?;
     let limit = q.limit.unwrap_or(100).clamp(1, 1000);
     let rows = ctx.db.read(move |c| recent_payments(c, &protx, q.before, limit)).await?;
     Ok(Json(json!({"payments": rows})))

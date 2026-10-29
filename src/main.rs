@@ -83,15 +83,16 @@ struct ServeArgs {
     backfill_pause_ms: u64,
 }
 
-/// Runs a background task, restarting it if it panics. A task that returns is done.
-fn supervise<F, Fut>(name: &'static str, net: Network, task: F)
+/// Runs a background task for a network, restarting it if it panics. A task that returns is done.
+fn supervise<F, Fut>(name: &'static str, ctx: &Arc<NetCtx>, task: F)
 where
-    F: Fn() -> Fut + Send + 'static,
+    F: Fn(Arc<NetCtx>) -> Fut + Send + 'static,
     Fut: std::future::Future<Output = ()> + Send + 'static,
 {
+    let ctx = ctx.clone();
     tokio::spawn(async move {
-        while let Err(e) = tokio::spawn(task()).await {
-            tracing::error!(net = net.name(), "{name} panicked ({e}); restarting in 30s");
+        while let Err(e) = tokio::spawn(task(ctx.clone())).await {
+            tracing::error!(net = ctx.net.name(), "{name} panicked ({e}); restarting in 30s");
             tokio::time::sleep(Duration::from_secs(30)).await;
         }
     });
@@ -160,9 +161,9 @@ async fn serve(args: ServeArgs) -> Result<()> {
             pay_lock: tokio::sync::Mutex::new(()),
         });
         let floor = floor.unwrap_or(net.dip3_enforcement_height());
-        supervise("collector", net, { let c = ctx.clone(); move || collector::run(c.clone()) });
-        supervise("backfill", net, { let c = ctx.clone(); move || collector::backfill(c.clone(), floor) });
-        supervise("crawler", net, { let c = ctx.clone(); move || crawler::run(c.clone()) });
+        supervise("collector", &ctx, collector::run);
+        supervise("backfill", &ctx, move |c| collector::backfill(c, floor));
+        supervise("crawler", &ctx, crawler::run);
         tracing::info!("{}: dashd at {url}", net.name());
         nets.insert(net, ctx);
     }

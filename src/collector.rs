@@ -151,6 +151,11 @@ pub fn parse_mn(v: &Value) -> Result<MnRow> {
     })
 }
 
+/// Registration status from `PoSeBanHeight` (-1 or absent while the masternode isn't banned).
+pub fn pose_status(ban_height: Option<i64>) -> &'static str {
+    if ban_height.unwrap_or(-1) == -1 { "enabled" } else { "pose_banned" }
+}
+
 fn is_null_service(a: &str) -> bool {
     a.ends_with(":0") || a.starts_with("[::]") || a.starts_with("0.0.0.0")
 }

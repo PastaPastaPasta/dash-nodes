@@ -202,6 +202,20 @@ impl Db {
     }
 }
 
+/// Runs `sql` and collects every row through `f`.
+pub fn query_all<C, T>(
+    conn: &Connection,
+    sql: &str,
+    params: impl rusqlite::Params,
+    f: impl FnMut(&rusqlite::Row) -> rusqlite::Result<T>,
+) -> rusqlite::Result<C>
+where
+    C: FromIterator<T>,
+{
+    let mut st = conn.prepare(sql)?;
+    st.query_map(params, f)?.collect()
+}
+
 pub fn get_meta(conn: &Connection, key: &str) -> Result<Option<String>> {
     Ok(conn.query_row("SELECT value FROM meta WHERE key = ?1", [key], |r| r.get(0)).optional()?)
 }

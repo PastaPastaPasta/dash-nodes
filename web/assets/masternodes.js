@@ -1,4 +1,4 @@
-import { api, chrome, currentNet, el, fmt, pct, href, countryName, flag, shortHash, badge, ago } from "./common.js";
+import { api, chrome, currentNet, el, fmt, pct, href, countryName, flag, shortHash, badge, ago, nodeStatus, uptimeKind } from "./common.js";
 
 chrome("masternodes");
 const net = currentNet();
@@ -18,18 +18,9 @@ const state = {
 let rows = [];
 let tip = null;
 
-/** One status per node; PoSe ban outranks the port check. */
-function status(m) {
-  if (m.status === "pose_banned") return ["serious", "PoSe-banned"];
-  if (m.reachable === true) return ["good", "Reachable"];
-  if (m.reachable === false) return ["critical", "Unreachable"];
-  return ["none", "Not checked"];
-}
-
 function uptimeBadge(u) {
   if (u == null) return el("span", { class: "muted", text: "–" });
-  const kind = u >= 0.99 ? "good" : u >= 0.9 ? "warning" : "critical";
-  return badge(kind, pct(u, u >= 0.999 ? 0 : 1));
+  return badge(uptimeKind(u), pct(u, u >= 0.999 ? 0 : 1));
 }
 
 const COLUMNS = [
@@ -44,8 +35,8 @@ const COLUMNS = [
   { key: "version", label: "Version", get: (m) => m.version || "",
     cell: (m) => el("td", { title: m.user_agent || "", text: m.version || "–" }) },
   { key: "protocol", label: "Protocol", r: true, get: (m) => m.protocol ?? -1, cell: (m) => el("td", { class: "r", text: m.protocol ?? "–" }) },
-  { key: "state", label: "Status", get: (m) => status(m)[1],
-    cell: (m) => { const [k, l] = status(m); return el("td", { title: m.last_error || (m.last_seen ? `last answered ${ago(m.last_seen)}` : "") }, badge(k, l)); } },
+  { key: "state", label: "Status", get: (m) => nodeStatus(m)[1],
+    cell: (m) => { const [k, l] = nodeStatus(m); return el("td", { title: m.last_error || (m.last_seen ? `last answered ${ago(m.last_seen)}` : "") }, badge(k, l)); } },
   { key: "uptime_7d", label: "Uptime 7d", r: true, get: (m) => m.uptime_7d ?? -1, cell: (m) => el("td", { class: "r" }, uptimeBadge(m.uptime_7d)) },
   { key: "uptime_30d", label: "30d", r: true, get: (m) => m.uptime_30d ?? -1, cell: (m) => el("td", { class: "r" }, uptimeBadge(m.uptime_30d)) },
   { key: "last_paid_height", label: "Last paid", r: true, get: (m) => m.last_paid_height || 0,
@@ -59,7 +50,7 @@ function filtered() {
   const q = state.q.trim().toLowerCase();
   const out = rows.filter((m) => {
     if (state.type && m.type !== state.type) return false;
-    if (state.status && status(m)[1] !== state.status) return false;
+    if (state.status && nodeStatus(m)[1] !== state.status) return false;
     if (state.version && (m.version || "Unknown") !== state.version) return false;
     if (state.country && (m.country || "Unknown") !== state.country) return false;
     if (q) {
@@ -115,7 +106,7 @@ function sortBy(key) {
 
 function select(name, label, options) {
   const s = el("select", { "aria-label": label, onchange: () => { state[name] = s.value; state.page = 0; render(); } },
-    el("option", { value: "", text: `All` }), ...options.map(([v, t]) => el("option", { value: v, text: t })));
+    el("option", { value: "", text: "All" }), ...options.map(([v, t]) => el("option", { value: v, text: t })));
   s.value = state[name];
   return el("label", {}, label, s);
 }

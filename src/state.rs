@@ -1,3 +1,4 @@
+use std::net::SocketAddr;
 use std::sync::RwLock;
 use std::sync::atomic::AtomicBool;
 
@@ -7,7 +8,7 @@ use crate::collector::ChainStatus;
 use crate::db::Db;
 use crate::geo::Geo;
 use crate::network::Network;
-use crate::p2p::Timeouts;
+use crate::p2p::{self, Timeouts};
 use crate::rpc::Rpc;
 
 /// Everything the background tasks and API handlers share for one network.
@@ -34,6 +35,13 @@ pub struct CrawlConfig {
     pub ipv6: bool,
     /// Max peers asked for addresses per crawl; each one is asked at most every 6 hours.
     pub getaddr_per_crawl: usize,
+}
+
+impl CrawlConfig {
+    /// Whether an address is worth probing: publicly routable, and IPv4 unless IPv6 crawling is on.
+    pub fn usable(&self, addr: &SocketAddr) -> bool {
+        p2p::is_routable(addr) && (self.ipv6 || addr.is_ipv4())
+    }
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
