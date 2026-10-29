@@ -1,0 +1,185 @@
+// Shared page chrome, network selection, fetching and formatting.
+
+export const NETWORKS = ["mainnet", "testnet"];
+
+export function currentNet() {
+  const q = new URLSearchParams(location.search).get("net");
+  if (NETWORKS.includes(q)) return q;
+  const saved = localStorage.getItem("net");
+  return NETWORKS.includes(saved) ? saved : "mainnet";
+}
+
+export function setNet(net) {
+  localStorage.setItem("net", net);
+  const u = new URL(location.href);
+  if (net === "mainnet") u.searchParams.delete("net");
+  else u.searchParams.set("net", net);
+  location.href = u.toString();
+}
+
+/** Link to a page on this site, carrying the network along. */
+export function href(path) {
+  const net = currentNet();
+  return net === "mainnet" ? path : `${path}${path.includes("?") ? "&" : "?"}net=${net}`;
+}
+
+export async function api(path) {
+  const r = await fetch(`/api/v1/${path}`);
+  if (!r.ok) {
+    let msg = `HTTP ${r.status}`;
+    try { msg = (await r.json()).error || msg; } catch { /* not json */ }
+    throw new Error(msg);
+  }
+  return r.json();
+}
+
+/** Tiny element builder. Text is always set via textContent (data is untrusted). */
+export function el(tag, attrs = {}, ...children) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (v == null || v === false) continue;
+    if (k === "class") e.className = v;
+    else if (k === "text") e.textContent = v;
+    else if (k.startsWith("on")) e.addEventListener(k.slice(2), v);
+    else if (k === "style" && typeof v === "object") Object.assign(e.style, v);
+    else e.setAttribute(k, v === true ? "" : v);
+  }
+  for (const c of children.flat()) {
+    if (c == null || c === false) continue;
+    e.append(c instanceof Node ? c : document.createTextNode(String(c)));
+  }
+  return e;
+}
+
+const nf = new Intl.NumberFormat("en-US");
+export const fmt = (n) => (n == null ? "–" : nf.format(Math.round(n)));
+export const pct = (x, digits = 1) => (x == null ? "–" : `${(x * 100).toFixed(digits)}%`);
+export const dash = (duffs) => (duffs == null ? "–" : `${(duffs / 1e8).toLocaleString("en-US", { maximumFractionDigits: 4 })} DASH`);
+
+export function compact(n) {
+  if (Math.abs(n) >= 1e6) return `${+(n / 1e6).toFixed(1)}M`;
+  if (Math.abs(n) >= 1e3) return `${+(n / 1e3).toFixed(1)}K`;
+  return String(Math.round(n * 10) / 10);
+}
+
+export function ago(ts) {
+  if (!ts) return "never";
+  const s = Math.max(0, Date.now() / 1000 - ts);
+  if (s < 90) return "just now";
+  if (s < 5400) return `${Math.round(s / 60)} min ago`;
+  if (s < 129600) return `${Math.round(s / 3600)} h ago`;
+  return `${Math.round(s / 86400)} d ago`;
+}
+
+export function dateTime(ts) {
+  return new Date(ts * 1000).toLocaleString("en-GB", { dateStyle: "medium", timeStyle: "short", timeZone: "UTC" }) + " UTC";
+}
+
+const regions = (() => { try { return new Intl.DisplayNames(["en"], { type: "region" }); } catch { return null; } })();
+export function countryName(code) {
+  if (!code || code === "Unknown") return "Unknown";
+  try { return regions?.of(code) || code; } catch { return code; }
+}
+export function flag(code) {
+  if (!code || code.length !== 2) return "";
+  return String.fromCodePoint(...[...code.toUpperCase()].map((c) => 0x1f1a5 + c.charCodeAt(0)));
+}
+
+export function shortHash(h, n = 8) {
+  return h && h.length > 2 * n ? `${h.slice(0, n)}…${h.slice(-4)}` : h || "";
+}
+
+/** Status badge: color is never the only signal, the label always rides along. */
+export function badge(kind, label) {
+  return el("span", { class: `badge ${kind}` }, el("i"), label);
+}
+
+const LOGO = `<svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="8" fill="var(--brand)"/><circle cx="10" cy="11" r="2.6" fill="var(--brand-ink)"/><circle cx="22" cy="9" r="2.6" fill="var(--brand-ink)"/><circle cx="16" cy="22" r="2.6" fill="var(--brand-ink)"/><path d="M10 11 22 9 16 22Z" fill="none" stroke="var(--brand-ink)" stroke-width="1.6" stroke-linejoin="round" opacity=".75"/></svg>`;
+const SUN = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>`;
+const MOON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>`;
+
+function applyTheme() {
+  const t = localStorage.getItem("theme");
+  if (t) document.documentElement.dataset.theme = t;
+}
+applyTheme();
+
+function isDark() {
+  const t = document.documentElement.dataset.theme;
+  return t ? t === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+}
+
+/** Renders header and footer. `page` marks the current nav item. */
+export function chrome(page) {
+  const net = currentNet();
+  document.title = `${document.title}${net === "testnet" ? " · testnet" : ""}`;
+  const nav = el("nav", { class: "main" },
+    ...[["overview", "/", "Overview"], ["masternodes", "/masternodes", "Masternodes"], ["api", "/api", "API"]].map(([id, path, label]) =>
+      el("a", { href: href(path), "aria-current": id === page ? "page" : null, text: label })));
+  const seg = el("div", { class: "seg net", role: "group", "aria-label": "Network" },
+    ...NETWORKS.map((n) => el("button", {
+      type: "button", "data-net": n, "aria-pressed": String(n === net),
+      onclick: () => n !== net && setNet(n), text: n === "mainnet" ? "Mainnet" : "Testnet",
+    })));
+  const status = el("span", { class: "chain-status", id: "chain-status" }, el("span", { class: "dot" }), "connecting…");
+  const theme = el("button", { class: "theme-toggle", type: "button", "aria-label": "Toggle dark mode", title: "Toggle dark mode" });
+  const paintTheme = () => { theme.innerHTML = isDark() ? SUN : MOON; };
+  theme.addEventListener("click", () => {
+    const next = isDark() ? "light" : "dark";
+    localStorage.setItem("theme", next);
+    document.documentElement.dataset.theme = next;
+    paintTheme();
+    window.dispatchEvent(new Event("themechange"));
+  });
+  paintTheme();
+  const brand = el("a", { class: "brand", href: href("/") });
+  brand.innerHTML = LOGO;
+  brand.append(el("span", { text: "Dash Nodes" }), el("small", { text: "nodes.dashhq.org" }));
+  const header = el("header", { class: "top" },
+    el("div", { class: "top-inner" }, brand, nav, el("div", { class: "top-right" }, status, seg, theme)));
+  document.body.prepend(header);
+
+  const footer = el("footer", { class: "bottom" }, el("div", { class: "inner" },
+    el("span", {}, "An independent Dash network monitor. Crawls the P2P network every 15 minutes from one vantage point; reachability is as seen from there."),
+    el("span", {},
+      el("a", { href: href("/api"), text: "API" }), " · ",
+      "IP geolocation by ", el("a", { href: "https://db-ip.com", text: "DB-IP" }), " (CC BY 4.0)")));
+  document.body.append(footer);
+  refreshStatus();
+  setInterval(refreshStatus, 60_000);
+}
+
+async function refreshStatus() {
+  const box = document.getElementById("chain-status");
+  try {
+    const s = await api("status");
+    const n = s.networks[currentNet()];
+    if (!n) { box.replaceChildren(el("span", { class: "dot warn" }), "network not monitored"); return; }
+    const c = n.chain;
+    let dot = "ok", text;
+    if (!c.synced) {
+      dot = "warn";
+      text = `dashd syncing · ${(c.verification_progress * 100).toFixed(1)}%`;
+    } else {
+      text = `block ${fmt(c.blocks)}`;
+      if (n.crawl.last_finished) text += ` · crawled ${ago(n.crawl.last_finished)}`;
+      if (n.crawl.running) text += " · crawling now";
+    }
+    if (c.error) dot = "warn";
+    box.replaceChildren(el("span", { class: `dot ${dot}` }), text);
+    box.title = c.dashd_version ? `Our dashd: ${c.dashd_version}` : "";
+  } catch {
+    box.replaceChildren(el("span", { class: "dot warn" }), "status unavailable");
+  }
+}
+
+/** Segmented control. Returns the element; calls onChange(value). */
+export function segmented(options, value, onChange, label) {
+  const root = el("div", { class: "seg", role: "group", "aria-label": label });
+  const paint = (v) => root.querySelectorAll("button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.v === v)));
+  for (const [v, text] of options) {
+    root.append(el("button", { type: "button", "data-v": v, onclick: () => { paint(v); onChange(v); }, text }));
+  }
+  paint(value);
+  return root;
+}

@@ -1,0 +1,121 @@
+# dash-nodes: dashd (mainnet + testnet) + the crawler/monitor/web app (+ optional cloudflared).
+#
+#   scripts/init.sh                  once: generates secrets/rpc_password and .env
+#   docker compose up -d --build     everything
+#   COMPOSE_PROFILES=tunnel          also run cloudflared (needs secrets/cloudflare_tunnel_token)
+#
+# dashd RPC is reachable on the compose network only; the app's HTTP port is the only thing published.
+
+name: dash-nodes
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "20m"
+    max-file: "5"
+
+x-dashd: &dashd
+  # Volumes mount at /home/dash, the image's declared VOLUME; the datadir is /home/dash/.dashcore.
+  image: dashpay/dashd:${DASHD_TAG:-24.0.0-rc.4}
+  restart: unless-stopped
+  logging: *default-logging
+  # Give dashd time to flush; an unclean stop can mean a long replay on mainnet.
+  stop_grace_period: 3m
+  entrypoint: ["/bin/sh", "/opt/dash-nodes/dashd-entrypoint.sh"]
+  secrets:
+    - rpc_password
+  networks:
+    - core
+  healthcheck:
+    # Passes once RPC is out of warm-up, not when synced.
+    test: ["CMD", "dash-cli", "-conf=/tmp/dash.conf", "getblockcount"]
+    interval: 30s
+    timeout: 20s
+    retries: 5
+    start_period: 20m
+
+services:
+  dashd-mainnet:
+    <<: *dashd
+    environment:
+      DASH_NETWORK: mainnet
+      DASHD_DBCACHE_MB: ${MAINNET_DBCACHE_MB:-1536}
+      DASHD_EXTRA_ARGS: ${MAINNET_DASHD_ARGS:-}
+    volumes:
+      - dashd-mainnet:/home/dash
+      - ./dashd/dash.conf:/etc/dash-nodes/dash.conf:ro
+      - ./dashd/entrypoint.sh:/opt/dash-nodes/dashd-entrypoint.sh:ro
+
+  dashd-testnet:
+    <<: *dashd
+    environment:
+      DASH_NETWORK: testnet
+      DASHD_DBCACHE_MB: ${TESTNET_DBCACHE_MB:-512}
+      DASHD_EXTRA_ARGS: ${TESTNET_DASHD_ARGS:-}
+    volumes:
+      - dashd-testnet:/home/dash
+      - ./dashd/dash.conf:/etc/dash-nodes/dash.conf:ro
+      - ./dashd/entrypoint.sh:/opt/dash-nodes/dashd-entrypoint.sh:ro
+
+  app:
+    build:
+      context: ..
+    image: dash-nodes:${APP_TAG:-local}
+    restart: unless-stopped
+    logging: *default-logging
+    depends_on:
+      - dashd-mainnet
+      - dashd-testnet
+    environment:
+      MAINNET_RPC: http://dashd-mainnet:9998
+      TESTNET_RPC: http://dashd-testnet:19998
+      RPC_USER: dashnodes
+      RPC_PASSWORD_FILE: /run/secrets/rpc_password
+      DATA_DIR: /data
+      CRAWL_INTERVAL: ${CRAWL_INTERVAL:-900}
+      CRAWL_CONCURRENCY: ${CRAWL_CONCURRENCY:-128}
+      RUST_LOG: ${RUST_LOG:-info}
+    secrets:
+      - rpc_password
+    volumes:
+      - app-data:/data
+    ports:
+      - "${HTTP_BIND:-0.0.0.0}:${HTTP_PORT:-8080}:8080"
+    networks:
+      - core
+      - edge
+
+  cloudflared:
+    image: cloudflare/cloudflared:${CLOUDFLARED_TAG:-2026.10.3}
+    profiles: ["tunnel"]
+    restart: unless-stopped
+    logging: *default-logging
+    user: "1000:1000"
+    depends_on:
+      - app
+    # Route nodes.<zone> -> http://app:8080 in the tunnel's public hostnames.
+    command: ["tunnel", "--no-autoupdate", "--loglevel", "warn", "--metrics", "127.0.0.1:20241", "run"]
+    environment:
+      TUNNEL_TOKEN_FILE: /run/secrets/cloudflare_tunnel_token
+    secrets:
+      - cloudflare_tunnel_token
+    networks:
+      - edge
+
+networks:
+  core:
+    ipam:
+      config:
+        - subnet: 172.30.86.0/24
+  edge: {}
+
+volumes:
+  dashd-mainnet:
+  dashd-testnet:
+  app-data:
+
+secrets:
+  rpc_password:
+    file: ./secrets/rpc_password
+  cloudflare_tunnel_token:
+    file: ./secrets/cloudflare_tunnel_token

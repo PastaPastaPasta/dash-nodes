@@ -1,0 +1,405 @@
+//! Follows dashd: chain status, the deterministic masternode list and per-block masternode payments.
+
+use std::sync::Arc;
+use std::time::Duration;
+
+use anyhow::{Context, Result, anyhow};
+use rusqlite::{Connection, params};
+use serde::Serialize;
+use serde_json::{Value, json};
+
+use crate::db::{self, get_meta, set_meta};
+use crate::state::NetCtx;
+
+/// Blocks per `masternode payments` call. Each block costs dashd a txindex lookup per input
+/// (it recomputes fees), so keep calls short enough not to hog its RPC threads.
+const PAYMENT_CHUNK: u32 = 100;
+/// Forward indexing work per tick, so a long gap doesn't delay the masternode list refresh.
+const FORWARD_PER_TICK: u32 = 2_000;
+const REORG_SEARCH: u32 = 200;
+
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct ChainStatus {
+    pub blocks: i64,
+    pub headers: i64,
+    pub best_block_time: i64,
+    pub verification_progress: f64,
+    pub synced: bool,
+    pub dashd_version: Option<String>,
+    pub updated: i64,
+    pub error: Option<String>,
+}
+
+pub async fn run(ctx: Arc<NetCtx>) {
+    let mut mn_tip = -1;
+    loop {
+        match tick(&ctx, &mut mn_tip).await {
+            Ok(()) => ctx.status.write().unwrap().error = None,
+            Err(e) => {
+                tracing::warn!(net = ctx.net.name(), "collector: {e:#}");
+                ctx.status.write().unwrap().error = Some(format!("{e:#}"));
+            }
+        }
+        tokio::time::sleep(Duration::from_secs(20)).await;
+    }
+}
+
+async fn tick(ctx: &NetCtx, mn_tip: &mut i64) -> Result<()> {
+    let info: Value = ctx.rpc.call("getblockchaininfo", json!([])).await?;
+    let mnsync: Value = ctx.rpc.call("mnsync", json!(["status"])).await?;
+    let netinfo: Value = ctx.rpc.call("getnetworkinfo", json!([])).await?;
+    let blocks = info["blocks"].as_i64().unwrap_or(0);
+    let synced = mnsync["IsBlockchainSynced"].as_bool().unwrap_or(false);
+    {
+        let mut s = ctx.status.write().unwrap();
+        s.blocks = blocks;
+        s.headers = info["headers"].as_i64().unwrap_or(0);
+        s.best_block_time = info["mediantime"].as_i64().unwrap_or(0);
+        s.verification_progress = info["verificationprogress"].as_f64().unwrap_or(0.0);
+        s.synced = synced;
+        s.dashd_version = netinfo["subversion"].as_str().map(str::to_owned);
+        s.updated = db::now();
+    }
+    if !synced {
+        return Ok(());
+    }
+    if blocks != *mn_tip {
+        sync_masternodes(ctx).await.context("masternode list")?;
+        *mn_tip = blocks;
+        ctx.mn_loaded.store(true, std::sync::atomic::Ordering::Release);
+    }
+    index_forward(ctx, blocks as u32).await.context("payments")?;
+    Ok(())
+}
+
+#[derive(Debug, Default, PartialEq)]
+pub struct MnRow {
+    pub protx: String,
+    pub mn_type: String,
+    pub collateral: Option<String>,
+    pub collateral_address: Option<String>,
+    pub operator_reward: Option<f64>,
+    pub service: Option<String>,
+    pub platform_p2p: Option<String>,
+    pub platform_https: Option<String>,
+    pub platform_node_id: Option<String>,
+    pub payout_address: Option<String>,
+    pub operator_payout_address: Option<String>,
+    pub owner_address: Option<String>,
+    pub voting_address: Option<String>,
+    pub pubkey_operator: Option<String>,
+    pub registered_height: Option<i64>,
+    pub last_paid_height: Option<i64>,
+    pub consecutive_payments: Option<i64>,
+    pub pose_penalty: Option<i64>,
+    pub pose_revived_height: Option<i64>,
+    pub pose_ban_height: Option<i64>,
+    pub revocation_reason: Option<i64>,
+}
+
+/// Parses one `protx list registered true` entry. Tolerates both the v23 shape (`service`,
+/// `payoutAddress`) and v24+ (`addresses` by purpose, `payouts`), since the deprecated fields
+/// disappear unless dashd runs with -deprecatedrpc.
+pub fn parse_mn(v: &Value) -> Result<MnRow> {
+    let st = &v["state"];
+    let s = |x: &Value| x.as_str().filter(|s| !s.is_empty()).map(str::to_owned);
+    let first_addr = |purpose: &str| st["addresses"][purpose].as_array().and_then(|a| a.first()).and_then(&s);
+    // Normalized through SocketAddr so it matches the crawler's `nodes.addr` keys.
+    let service = first_addr("core_p2p")
+        .or_else(|| s(&st["service"]))
+        .filter(|a| !is_null_service(a))
+        .map(|a| a.parse::<std::net::SocketAddr>().map(|sa| sa.to_string()).unwrap_or(a));
+    let platform_port = |field: &str| {
+        let port = st[field].as_i64().filter(|&p| p > 0)?;
+        let host = service.as_deref()?.rsplit_once(':')?.0;
+        Some(format!("{host}:{port}"))
+    };
+    let payout_address = s(&st["payoutAddress"]).or_else(|| {
+        let addrs: Vec<String> = st["payouts"].as_array()?.iter().filter_map(|p| s(&p["address"])).collect();
+        (!addrs.is_empty()).then(|| addrs.join(","))
+    });
+    let collateral = match (s(&v["collateralHash"]), v["collateralIndex"].as_i64()) {
+        (Some(h), Some(i)) => Some(format!("{h}-{i}")),
+        _ => None,
+    };
+    Ok(MnRow {
+        protx: s(&v["proTxHash"]).ok_or_else(|| anyhow!("entry without proTxHash"))?,
+        mn_type: s(&v["type"]).unwrap_or_else(|| "Regular".into()),
+        collateral,
+        collateral_address: s(&v["collateralAddress"]),
+        operator_reward: v["operatorReward"].as_f64(),
+        platform_p2p: first_addr("platform_p2p").or_else(|| platform_port("platformP2PPort")),
+        platform_https: first_addr("platform_https").or_else(|| platform_port("platformHTTPPort")),
+        service,
+        platform_node_id: s(&st["platformNodeID"]),
+        payout_address,
+        operator_payout_address: s(&st["operatorPayoutAddress"]),
+        owner_address: s(&st["ownerAddress"]),
+        voting_address: s(&st["votingAddress"]),
+        pubkey_operator: s(&st["pubKeyOperator"]),
+        registered_height: st["registeredHeight"].as_i64(),
+        last_paid_height: st["lastPaidHeight"].as_i64(),
+        consecutive_payments: st["consecutivePayments"].as_i64(),
+        pose_penalty: st["PoSePenalty"].as_i64(),
+        pose_revived_height: st["PoSeRevivedHeight"].as_i64(),
+        pose_ban_height: st["PoSeBanHeight"].as_i64(),
+        revocation_reason: st["revocationReason"].as_i64(),
+    })
+}
+
+fn is_null_service(a: &str) -> bool {
+    a.ends_with(":0") || a.starts_with("[::]") || a.starts_with("0.0.0.0")
+}
+
+async fn sync_masternodes(ctx: &NetCtx) -> Result<()> {
+    let list: Vec<Value> = ctx.rpc.call("protx", json!(["list", "registered", true])).await?;
+    let rows: Vec<MnRow> = list.iter().map(parse_mn).collect::<Result<_>>()?;
+    let n = rows.len();
+    ctx.db
+        .write(move |conn| {
+            let now = db::now();
+            let tx = conn.transaction()?;
+            {
+                let mut up = tx.prepare_cached(
+                    "INSERT INTO masternodes (protx, type, collateral, collateral_address, operator_reward, service,
+                        platform_p2p, platform_https, platform_node_id, payout_address, operator_payout_address,
+                        owner_address, voting_address, pubkey_operator, registered_height, last_paid_height,
+                        consecutive_payments, pose_penalty, pose_revived_height, pose_ban_height, revocation_reason,
+                        first_seen, updated, removed)
+                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?22,NULL)
+                     ON CONFLICT(protx) DO UPDATE SET type=excluded.type, collateral=excluded.collateral,
+                        collateral_address=excluded.collateral_address, operator_reward=excluded.operator_reward,
+                        service=excluded.service, platform_p2p=excluded.platform_p2p,
+                        platform_https=excluded.platform_https, platform_node_id=excluded.platform_node_id,
+                        payout_address=excluded.payout_address, operator_payout_address=excluded.operator_payout_address,
+                        owner_address=excluded.owner_address, voting_address=excluded.voting_address,
+                        pubkey_operator=excluded.pubkey_operator, registered_height=excluded.registered_height,
+                        last_paid_height=excluded.last_paid_height, consecutive_payments=excluded.consecutive_payments,
+                        pose_penalty=excluded.pose_penalty, pose_revived_height=excluded.pose_revived_height,
+                        pose_ban_height=excluded.pose_ban_height, revocation_reason=excluded.revocation_reason,
+                        updated=excluded.updated, removed=NULL",
+                )?;
+                for r in &rows {
+                    up.execute(params![
+                        r.protx, r.mn_type, r.collateral, r.collateral_address, r.operator_reward, r.service,
+                        r.platform_p2p, r.platform_https, r.platform_node_id, r.payout_address,
+                        r.operator_payout_address, r.owner_address, r.voting_address, r.pubkey_operator,
+                        r.registered_height, r.last_paid_height, r.consecutive_payments, r.pose_penalty,
+                        r.pose_revived_height, r.pose_ban_height, r.revocation_reason, now,
+                    ])?;
+                }
+            }
+            tx.execute("UPDATE masternodes SET removed = ?1 WHERE removed IS NULL AND updated < ?1", [now])?;
+            tx.commit()?;
+            Ok(())
+        })
+        .await?;
+    tracing::debug!(net = ctx.net.name(), "masternode list: {n} registered");
+    Ok(())
+}
+
+// ---- payments ------------------------------------------------------------------------------
+//
+// Indexed range is [pay_lo, pay_hi]. The collector extends it upward as blocks arrive; the
+// backfill task extends it downward to the DIP3 enforcement height (or --payments-floor).
+
+fn range(conn: &Connection) -> Result<Option<(u32, u32)>> {
+    let lo = get_meta(conn, "pay_lo")?.and_then(|v| v.parse().ok());
+    let hi = get_meta(conn, "pay_hi")?.and_then(|v| v.parse().ok());
+    Ok(lo.zip(hi))
+}
+
+pub async fn payments_range(ctx: &NetCtx) -> Result<Option<(u32, u32)>> {
+    ctx.db.read(range).await
+}
+
+async fn index_forward(ctx: &NetCtx, tip: u32) -> Result<()> {
+    let Some((lo, mut hi)) = payments_range(ctx).await? else {
+        // First run: start with just the tip; backfill takes it from there.
+        index_blocks(ctx, tip, tip).await?;
+        ctx.db
+            .write(move |c| {
+                set_meta(c, "pay_lo", &tip.to_string())?;
+                set_meta(c, "pay_hi", &tip.to_string())
+            })
+            .await?;
+        return Ok(());
+    };
+    hi = unwind_reorg(ctx, lo, hi).await?;
+    let end = tip.min(hi + FORWARD_PER_TICK);
+    let mut from = hi + 1;
+    while from <= end {
+        let to = end.min(from + PAYMENT_CHUNK - 1);
+        index_blocks(ctx, from, to).await?;
+        ctx.db.write(move |c| set_meta(c, "pay_hi", &to.to_string())).await?;
+        from = to + 1;
+    }
+    Ok(())
+}
+
+/// If the top of the indexed range is no longer on the active chain, drop it back to the fork point.
+async fn unwind_reorg(ctx: &NetCtx, lo: u32, hi: u32) -> Result<u32> {
+    let mut h = hi;
+    while h >= lo && hi - h < REORG_SEARCH {
+        let stored: Option<String> = ctx
+            .db
+            .read(move |c| Ok(c.query_row("SELECT hash FROM blocks WHERE height = ?1", [h], |r| r.get(0)).ok()))
+            .await?;
+        let actual: String = ctx.rpc.call("getblockhash", json!([h])).await?;
+        if stored.as_deref() == Some(actual.as_str()) {
+            break;
+        }
+        h -= 1;
+    }
+    if h < hi {
+        tracing::info!(net = ctx.net.name(), "reorg: unwinding payments above {h}");
+        ctx.db
+            .write(move |c| {
+                let tx = c.transaction()?;
+                tx.execute("DELETE FROM payments WHERE height > ?1", [h])?;
+                tx.execute("DELETE FROM blocks WHERE height > ?1", [h])?;
+                set_meta(&tx, "pay_hi", &h.to_string())?;
+                tx.commit()?;
+                Ok(())
+            })
+            .await?;
+    }
+    Ok(h)
+}
+
+/// Fetches and stores payments for heights [from, to] (inclusive).
+pub async fn index_blocks(ctx: &NetCtx, from: u32, to: u32) -> Result<()> {
+    let top: String = ctx.rpc.call("getblockhash", json!([to])).await?;
+    let count = i64::from(to - from + 1);
+    let blocks: Vec<Value> = ctx.rpc.call("masternode", json!(["payments", top, -count])).await?;
+    let calls: Vec<(&str, Value)> =
+        blocks.iter().map(|b| ("getblockheader", json!([b["blockhash"].clone(), true]))).collect();
+    let headers = ctx.rpc.batch(&calls).await?;
+
+    struct Block {
+        height: i64,
+        hash: String,
+        time: i64,
+        amount: i64,
+        payees: Vec<(String, i64)>,
+    }
+    let mut rows = Vec::with_capacity(blocks.len());
+    for (b, h) in blocks.iter().zip(&headers) {
+        let payees = b["masternodes"]
+            .as_array()
+            .map(|mns| {
+                mns.iter()
+                    .filter_map(|m| Some((m["proTxHash"].as_str()?.to_owned(), m["amount"].as_i64()?)))
+                    .collect()
+            })
+            .unwrap_or_default();
+        rows.push(Block {
+            height: b["height"].as_i64().ok_or_else(|| anyhow!("payments: no height"))?,
+            hash: b["blockhash"].as_str().unwrap_or_default().to_owned(),
+            time: h["time"].as_i64().unwrap_or(0),
+            amount: b["amount"].as_i64().unwrap_or(0),
+            payees,
+        });
+    }
+    ctx.db
+        .write(move |c| {
+            let tx = c.transaction()?;
+            {
+                let mut ins_block = tx.prepare_cached(
+                    "INSERT OR REPLACE INTO blocks (height, hash, time, mn_amount) VALUES (?1, ?2, ?3, ?4)",
+                )?;
+                let mut del = tx.prepare_cached("DELETE FROM payments WHERE height = ?1")?;
+                let mut ins_pay =
+                    tx.prepare_cached("INSERT OR REPLACE INTO payments (height, protx, amount) VALUES (?1, ?2, ?3)")?;
+                for b in &rows {
+                    ins_block.execute(params![b.height, b.hash, b.time, b.amount])?;
+                    del.execute([b.height])?;
+                    for (protx, amount) in &b.payees {
+                        ins_pay.execute(params![b.height, protx, amount])?;
+                    }
+                }
+            }
+            tx.commit()?;
+            Ok(())
+        })
+        .await
+}
+
+/// Walks the payments index down to `floor`, newest first, so recent history is there early.
+pub async fn backfill(ctx: Arc<NetCtx>, floor: u32) {
+    loop {
+        let step: Result<bool> = async {
+            let Some((lo, _)) = payments_range(&ctx).await? else { return Ok(false) };
+            if lo <= floor {
+                return Ok(true);
+            }
+            let from = floor.max(lo.saturating_sub(PAYMENT_CHUNK));
+            index_blocks(&ctx, from, lo - 1).await?;
+            ctx.db.write(move |c| set_meta(c, "pay_lo", &from.to_string())).await?;
+            Ok(false)
+        }
+        .await;
+        match step {
+            Ok(true) => {
+                tracing::info!(net = ctx.net.name(), "payments backfill complete down to {floor}");
+                return;
+            }
+            Ok(false) => {}
+            Err(e) => {
+                tracing::warn!(net = ctx.net.name(), "backfill: {e:#}");
+                tokio::time::sleep(Duration::from_secs(60)).await;
+            }
+        }
+        // Yield dashd to the collector and anything else using it.
+        tokio::time::sleep(Duration::from_millis(ctx.backfill_pause_ms)).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_v23_entry() {
+        let v = json!({
+            "type": "Evo", "proTxHash": "aa", "collateralHash": "cc", "collateralIndex": 1,
+            "collateralAddress": "Xc", "operatorReward": 0.0,
+            "state": {
+                "version": 2, "service": "1.2.3.4:9999", "registeredHeight": 10, "lastPaidHeight": 20,
+                "consecutivePayments": 0, "PoSePenalty": 0, "PoSeRevivedHeight": -1, "PoSeBanHeight": -1,
+                "revocationReason": 0, "ownerAddress": "Xo", "votingAddress": "Xv",
+                "platformNodeID": "ff", "platformP2PPort": 26656, "platformHTTPPort": 443,
+                "payoutAddress": "Xp", "pubKeyOperator": "8f"
+            }
+        });
+        let r = parse_mn(&v).unwrap();
+        assert_eq!(r.service.as_deref(), Some("1.2.3.4:9999"));
+        assert_eq!(r.platform_p2p.as_deref(), Some("1.2.3.4:26656"));
+        assert_eq!(r.platform_https.as_deref(), Some("1.2.3.4:443"));
+        assert_eq!(r.payout_address.as_deref(), Some("Xp"));
+        assert_eq!(r.collateral.as_deref(), Some("cc-1"));
+        assert_eq!(r.pose_ban_height, Some(-1));
+    }
+
+    #[test]
+    fn parses_v24_entry() {
+        let v = json!({
+            "type": "Regular", "proTxHash": "bb",
+            "state": {
+                "addresses": {"core_p2p": ["5.6.7.8:9999"]},
+                "payouts": [{"address": "Xa", "reward": 50}, {"address": "Xb", "reward": 50}],
+                "PoSeBanHeight": 1234
+            }
+        });
+        let r = parse_mn(&v).unwrap();
+        assert_eq!(r.service.as_deref(), Some("5.6.7.8:9999"));
+        assert_eq!(r.payout_address.as_deref(), Some("Xa,Xb"));
+        assert_eq!(r.pose_ban_height, Some(1234));
+    }
+
+    #[test]
+    fn null_service_is_none() {
+        let v = json!({"proTxHash": "cc", "state": {"service": "[::]:0"}});
+        assert_eq!(parse_mn(&v).unwrap().service, None);
+    }
+}

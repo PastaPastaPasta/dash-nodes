@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Dash Nodes: network overview</title>
+  <meta name="description" content="Dash P2P network crawler: node and masternode user agents, protocol versions, countries, hosting and reachability over time.">
+  <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/assets/style.css">
+  <script type="module" src="/assets/overview.js"></script>
+</head>
+<body>
+<main>
+  <div class="page-head">
+    <div>
+      <h1>Network overview</h1>
+      <p class="sub" id="lede">Nodes reachable on the Dash P2P network as of our latest crawl.</p>
+    </div>
+  </div>
+  <div id="banner"></div>
+  <div class="tiles" id="tiles"></div>
+  <div class="filters" id="filters"></div>
+  <div class="grid-2">
+    <section class="card">
+      <div class="card-head"><h2 id="versions-title">Versions over time</h2><span id="versions-mode"></span></div>
+      <div id="versions-chart"></div>
+    </section>
+    <section class="card">
+      <div class="card-head"><h2>Network size</h2><span class="sub">all scopes</span></div>
+      <div id="size-chart"></div>
+    </section>
+  </div>
+  <div class="grid-3" id="dists"></div>
+</main>
+</body>
+</html>

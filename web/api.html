@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Dash Nodes: API</title>
+  <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/assets/style.css">
+  <script type="module">import { chrome } from "/assets/common.js"; chrome("api");</script>
+</head>
+<body>
+<main>
+  <div class="page-head"><div>
+    <h1>API</h1>
+    <p class="sub">Everything on this site comes from these JSON endpoints. No key needed, CORS is open, and responses are cached for 60 seconds.
+      <code>{net}</code> is <code>mainnet</code> or <code>testnet</code>. Amounts are in duffs (1 DASH = 100,000,000 duffs); times are unix seconds.</p>
+  </div></div>
+
+  <section class="card">
+    <div class="api-ep">
+      <h3>GET /api/v1/status</h3>
+      <p class="sub">Our dashd's sync state, the crawler's state and the payment index range, per network.</p>
+    </div>
+    <div class="api-ep">
+      <h3>GET /api/v1/{net}/summary</h3>
+      <p class="sub">The latest finished crawl, the crawl about 24 hours before it, and every distribution from the latest crawl:
+        <code>dists[scope][dim] = [[key, count], …]</code>, largest first.</p>
+      <p class="sub">Scopes: <code>all</code> (every node that answered), <code>nonmn</code> (those that aren't masternodes),
+        <code>mn</code> and <code>evo</code> (every enabled masternode or evonode, reachable or not, keyed by the user agent it last
+        announced in the past 7 days, else <code>Unknown</code>).</p>
+      <p class="sub">Dimensions: <code>ua</code>, <code>version</code>, <code>client</code>, <code>protocol</code>, <code>country</code> (ISO 3166),
+        <code>asn</code>, <code>reachable</code>, <code>status</code> and <code>type</code> (masternode scopes).</p>
+      <pre class="code">curl https://nodes.dashhq.org/api/v1/mainnet/summary | jq '.dists.mn.version'</pre>
+    </div>
+    <div class="api-ep">
+      <h3>GET /api/v1/{net}/history?scope=mn&amp;dim=version&amp;days=30&amp;top=8</h3>
+      <p class="sub">A time series of one distribution: <code>{resolution, t: [...], series: [{key, values}]}</code>. Up to 14 days back
+        it has one point per crawl; past that, daily averages. Keys outside the top <code>top</code> (by total over the window) fold into
+        <code>Other</code>. <code>dim=totals</code> returns reachable nodes, enabled masternodes and reachable masternodes instead.</p>
+    </div>
+    <div class="api-ep">
+      <h3>GET /api/v1/{net}/masternodes</h3>
+      <p class="sub">Every registered masternode with its latest port check (<code>reachable</code> is <code>null</code> when the latest
+        crawl didn't check it), announced user agent, geolocation and 7- and 30-day port-check uptime.</p>
+    </div>
+    <div class="api-ep">
+      <h3>GET /api/v1/{net}/masternodes/{protx}</h3>
+      <p class="sub">One masternode: everything from the list plus collateral and keys, version history, 90 days of daily uptime and
+        its 25 latest payments.</p>
+    </div>
+    <div class="api-ep">
+      <h3>GET /api/v1/{net}/masternodes/{protx}/payments?before={height}&amp;limit=100</h3>
+      <p class="sub">Older payments, newest first. Page with <code>before</code> set to the last height you got.</p>
+    </div>
+  </section>
+
+  <section class="section card">
+    <h2>How the data is collected</h2>
+    <p class="sub">Every 15 minutes the crawler opens a P2P connection to every registered masternode's Core address, to every
+      node that answered in the past week, and to new addresses learned from our dashd and from other nodes' <code>getaddr</code>
+      replies. It completes the <code>version</code> handshake and disconnects. It announces itself as
+      <code>/dash-nodes:…(nodes.dashhq.org)/</code>, doesn't relay transactions and keeps nothing but what the node announces.
+      Masternode registration data and payments come from our own dashd. Reachability is measured from one vantage point, so a
+      node that blocks or rate-limits us shows as unreachable even when others can reach it.</p>
+    <p class="sub">Non-masternode IP addresses are never published, only counted.</p>
+  </section>
+</main>
+</body>
+</html>
