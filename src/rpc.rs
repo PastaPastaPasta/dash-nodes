@@ -16,10 +16,7 @@ pub struct Rpc {
 
 impl Rpc {
     pub fn new(url: String, user: String, password: String) -> Rpc {
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(300))
-            .build()
-            .expect("http client");
+        let client = reqwest::Client::builder().timeout(Duration::from_secs(300)).build().expect("http client");
         Rpc { client, url, user, password }
     }
 
@@ -52,17 +49,12 @@ impl Rpc {
     }
 
     async fn post(&self, body: &Value) -> Result<Value> {
-        let resp = self
-            .client
-            .post(&self.url)
-            .basic_auth(&self.user, Some(&self.password))
-            .json(body)
-            .send()
-            .await?;
+        let resp = self.client.post(&self.url).basic_auth(&self.user, Some(&self.password)).json(body).send().await?;
         // dashd answers RPC errors with HTTP 500 and a JSON body, so don't bail on the status alone.
         let status = resp.status();
         let text = resp.text().await?;
-        serde_json::from_str(&text).map_err(|_| anyhow!("HTTP {status}: {}", text.chars().take(200).collect::<String>()))
+        serde_json::from_str(&text)
+            .map_err(|_| anyhow!("HTTP {status}: {}", text.chars().take(200).collect::<String>()))
     }
 }
 

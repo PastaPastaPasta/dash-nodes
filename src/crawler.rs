@@ -39,9 +39,11 @@ pub async fn run(ctx: Arc<NetCtx>) {
     let last = ctx
         .db
         .read(|c| {
-            Ok(c.query_row("SELECT id, finished FROM crawls WHERE finished IS NOT NULL ORDER BY id DESC LIMIT 1", [], |r| {
-                Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))
-            })
+            Ok(c.query_row(
+                "SELECT id, finished FROM crawls WHERE finished IS NOT NULL ORDER BY id DESC LIMIT 1",
+                [],
+                |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)),
+            )
             .optional()?)
         })
         .await
@@ -112,19 +114,19 @@ async fn crawl_once(ctx: &NetCtx) -> Result<i64> {
                 [],
                 |r| r.get(0),
             )?;
-            let due: Vec<(String, Option<i64>, Option<i64>)> = query_all(
-                c,
-                "SELECT addr, last_success, last_getaddr FROM nodes WHERE next_try <= ?1",
-                [now],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
-            )?;
+            let due: Vec<(String, Option<i64>, Option<i64>)> =
+                query_all(c, "SELECT addr, last_success, last_getaddr FROM nodes WHERE next_try <= ?1", [now], |r| {
+                    Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+                })?;
             Ok((mn, due))
         })
         .await?;
 
     let first_crawl = ctx
         .db
-        .read(|c| Ok(c.query_row("SELECT count(*) FROM crawls WHERE finished IS NOT NULL", [], |r| r.get::<_, i64>(0))? == 0))
+        .read(|c| {
+            Ok(c.query_row("SELECT count(*) FROM crawls WHERE finished IS NOT NULL", [], |r| r.get::<_, i64>(0))? == 0)
+        })
         .await?;
     let mut rng = rand::rngs::StdRng::from_rng(&mut rand::rng());
     let usable = |a: &SocketAddr| ctx.crawl_cfg.usable(a);
@@ -176,7 +178,9 @@ async fn crawl_once(ctx: &NetCtx) -> Result<i64> {
     let mut gossip = Vec::new();
     for o in &mut outcomes {
         if let Ok(p) = &mut o.result {
-            gossip.extend(std::mem::take(&mut p.addrs).into_iter().filter(|a| usable(a) && a.port() == ctx.net.default_port()));
+            gossip.extend(
+                std::mem::take(&mut p.addrs).into_iter().filter(|a| usable(a) && a.port() == ctx.net.default_port()),
+            );
         }
     }
     let mut fresh: Vec<SocketAddr> = gossip.iter().copied().filter(|a| seen.insert(*a)).collect();
@@ -189,10 +193,7 @@ async fn crawl_once(ctx: &NetCtx) -> Result<i64> {
     let tried = outcomes.len();
     let rows: Vec<ProbeRow> = outcomes.into_iter().map(|o| ProbeRow::from(o, &ctx.geo)).collect();
     let tip = tip as i64;
-    ctx.db
-        .write(move |c| record(c, id, now, tip, tried, discovered, rows))
-        .await
-        .context("record crawl")?;
+    ctx.db.write(move |c| record(c, id, now, tip, tried, discovered, rows)).await.context("record crawl")?;
     Ok(id)
 }
 
@@ -225,7 +226,8 @@ async fn learn_from_dashd(ctx: &NetCtx) -> Result<()> {
         Err(e) => tracing::warn!(net = ctx.net.name(), "getnodeaddresses: {e:#}"),
     }
     addrs.retain(|a| ctx.crawl_cfg.usable(a) && a.port() == ctx.net.default_port());
-    let empty = ctx.db.read(|c| Ok(c.query_row("SELECT count(*) FROM nodes", [], |r| r.get::<_, i64>(0))? == 0)).await?;
+    let empty =
+        ctx.db.read(|c| Ok(c.query_row("SELECT count(*) FROM nodes", [], |r| r.get::<_, i64>(0))? == 0)).await?;
     if addrs.is_empty() && empty {
         for seed in ctx.net.dns_seeds() {
             match tokio::net::lookup_host((*seed, ctx.net.default_port())).await {
@@ -319,11 +321,29 @@ fn record(
             let (country, asn, org) = (&r.geo.country, r.geo.asn, &r.geo.as_org);
             match &r.ok {
                 Some(v) => ok_st.execute(params![
-                    r.addr, now, id, v.user_agent, v.protocol, v.services as i64, v.start_height,
-                    v.latency_ms, country, asn, org, r.asked_addrs,
+                    r.addr,
+                    now,
+                    id,
+                    v.user_agent,
+                    v.protocol,
+                    v.services as i64,
+                    v.start_height,
+                    v.latency_ms,
+                    country,
+                    asn,
+                    org,
+                    r.asked_addrs,
                 ])?,
                 None => fail_st.execute(params![
-                    r.addr, now, id, r.error, country, asn, org, ACTIVE_WINDOW, NEW_ADDR_TRIES,
+                    r.addr,
+                    now,
+                    id,
+                    r.error,
+                    country,
+                    asn,
+                    org,
+                    ACTIVE_WINDOW,
+                    NEW_ADDR_TRIES,
                 ])?,
             };
         }
@@ -347,7 +367,8 @@ fn record(
 
     let agg = aggregate(&tx, id, now)?;
     {
-        let mut ins = tx.prepare_cached("INSERT INTO crawl_agg (crawl_id, scope, dim, key, count) VALUES (?1, ?2, ?3, ?4, ?5)")?;
+        let mut ins =
+            tx.prepare_cached("INSERT INTO crawl_agg (crawl_id, scope, dim, key, count) VALUES (?1, ?2, ?3, ?4, ?5)")?;
         for ((scope, dim, key), count) in &agg.counts.0 {
             ins.execute(params![id, scope, dim, key, count])?;
         }
@@ -399,12 +420,10 @@ fn asn_key(asn: Option<i64>, org: Option<String>) -> String {
 fn aggregate(c: &Connection, id: i64, now: i64) -> Result<Aggregate> {
     let mut counts = Counts::default();
 
-    let mn_services: HashSet<String> = query_all(
-        c,
-        "SELECT service FROM masternodes WHERE removed IS NULL AND service IS NOT NULL",
-        [],
-        |r| r.get(0),
-    )?;
+    let mn_services: HashSet<String> =
+        query_all(c, "SELECT service FROM masternodes WHERE removed IS NULL AND service IS NOT NULL", [], |r| {
+            r.get(0)
+        })?;
 
     let mut reachable = 0;
     let mut st = c.prepare(
@@ -462,7 +481,13 @@ fn aggregate(c: &Connection, id: i64, now: i64) -> Result<Aggregate> {
         let ok = checked && r.get::<_, Option<i64>>(3)? == Some(1);
         mn_reachable += i64::from(ok);
         // Not checked: no usable service address (e.g. IPv6 while IPv6 crawling is off).
-        let reach = if ok { "yes" } else if checked { "no" } else { "unchecked" };
+        let reach = if ok {
+            "yes"
+        } else if checked {
+            "no"
+        } else {
+            "unchecked"
+        };
         let recent = r.get::<_, Option<i64>>(4)?.is_some_and(|t| now - t < ACTIVE_WINDOW);
         let ua = if recent { r.get::<_, Option<String>>(5)?.unwrap_or_default() } else { "Unknown".into() };
         let version = if recent { ua::version_label(&ua) } else { "Unknown".into() };

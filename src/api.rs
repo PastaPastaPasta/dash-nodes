@@ -41,10 +41,7 @@ pub fn router(nets: Nets, web: &Path) -> Router {
             header::CACHE_CONTROL,
             HeaderValue::from_static("public, max-age=60"),
         ))
-        .layer(SetResponseHeaderLayer::overriding(
-            header::ACCESS_CONTROL_ALLOW_ORIGIN,
-            HeaderValue::from_static("*"),
-        ));
+        .layer(SetResponseHeaderLayer::overriding(header::ACCESS_CONTROL_ALLOW_ORIGIN, HeaderValue::from_static("*")));
     let page = |name: &str| ServeFile::new(web.join(name));
     let pages = Router::new()
         .route_service("/", page("index.html"))
@@ -235,7 +232,8 @@ async fn history(State(nets): State<Nets>, UrlPath(net): UrlPath<String>, Query(
     let top = q.top.unwrap_or(8).clamp(1, 50);
     let scope = q.scope.unwrap_or_else(|| "all".into());
     let dim = q.dim;
-    const DIMS: &[&str] = &["totals", "ua", "version", "client", "protocol", "country", "asn", "reachable", "status", "type"];
+    const DIMS: &[&str] =
+        &["totals", "ua", "version", "client", "protocol", "country", "asn", "reachable", "status", "type"];
     if !DIMS.contains(&dim.as_str()) {
         return Err(ApiError(StatusCode::BAD_REQUEST, format!("unknown dim {dim}")));
     }
@@ -437,13 +435,12 @@ async fn masternodes(State(nets): State<Nets>, UrlPath(net): UrlPath<String>) ->
                     ON u30.protx = m.protx
                  WHERE m.removed IS NULL ORDER BY m.registered_height, m.protx"
             );
-            let list: Vec<Value> =
-                query_all(c, &sql, [day_of(now - 6 * 86_400), day_of(now - 29 * 86_400)], |r| {
-                    let mut v = mn_json(r, latest)?;
-                    v["uptime_7d"] = uptime(r.get("ok7")?, r.get("a7")?);
-                    v["uptime_30d"] = uptime(r.get("ok30")?, r.get("a30")?);
-                    Ok(v)
-                })?;
+            let list: Vec<Value> = query_all(c, &sql, [day_of(now - 6 * 86_400), day_of(now - 29 * 86_400)], |r| {
+                let mut v = mn_json(r, latest)?;
+                v["uptime_7d"] = uptime(r.get("ok7")?, r.get("a7")?);
+                v["uptime_30d"] = uptime(r.get("ok30")?, r.get("a30")?);
+                Ok(v)
+            })?;
             let tip: Option<i64> = c.query_row("SELECT max(height) FROM blocks", [], |r| r.get(0))?;
             Ok(json!({"crawl_id": latest, "tip": tip, "masternodes": list}))
         })

@@ -120,7 +120,8 @@ pub fn parse_mn(v: &Value) -> Result<MnRow> {
         let addrs: Vec<String> = st[field].as_array()?.iter().filter_map(|p| s(&p[key])).collect();
         (!addrs.is_empty()).then(|| addrs.join(","))
     };
-    let payout_address = s(&st["payoutAddress"]).or_else(|| join("payouts", "address")).or_else(|| join("shares", "rewardAddress"));
+    let payout_address =
+        s(&st["payoutAddress"]).or_else(|| join("payouts", "address")).or_else(|| join("shares", "rewardAddress"));
     let owner_address = s(&st["ownerAddress"]).or_else(|| join("shares", "ownerAddress"));
     let collateral = match (s(&v["collateralHash"]), v["collateralIndex"].as_i64()) {
         (Some(h), Some(i)) => Some(format!("{h}-{i}")),
@@ -277,7 +278,9 @@ async fn unwind_reorg(ctx: &NetCtx, lo: u32, hi: u32, tip: u32) -> Result<u32> {
     while h >= lo && hi - h < REORG_SEARCH {
         let stored: Option<String> = ctx
             .db
-            .read(move |c| Ok(c.query_row("SELECT hash FROM blocks WHERE height = ?1", [h], |r| r.get(0)).optional()?))
+            .read(move |c| {
+                Ok(c.query_row("SELECT hash FROM blocks WHERE height = ?1", [h], |r| r.get(0)).optional()?)
+            })
             .await?;
         let actual: String = ctx.rpc.call("getblockhash", json!([h])).await?;
         if stored.as_deref() == Some(actual.as_str()) || h == 0 {
@@ -332,7 +335,8 @@ async fn index_blocks(ctx: &NetCtx, from: u32, to: u32, extend: Extend) -> Resul
             .map(|mns| {
                 mns.iter()
                     .filter_map(|m| {
-                        let protx = m["proTxHash"].as_str().filter(|p| !p.is_empty() && !p.bytes().all(|c| c == b'0'))?;
+                        let protx =
+                            m["proTxHash"].as_str().filter(|p| !p.is_empty() && !p.bytes().all(|c| c == b'0'))?;
                         Some((protx.to_owned(), m["amount"].as_i64()?))
                     })
                     .collect()
@@ -357,7 +361,8 @@ async fn index_blocks(ctx: &NetCtx, from: u32, to: u32, extend: Extend) -> Resul
         .write(move |c| {
             let tx = c.transaction()?;
             let stored = |h: i64| -> rusqlite::Result<Option<(String, String)>> {
-                tx.query_row("SELECT hash, prev FROM blocks WHERE height = ?1", [h], |r| Ok((r.get(0)?, r.get(1)?))).optional()
+                tx.query_row("SELECT hash, prev FROM blocks WHERE height = ?1", [h], |r| Ok((r.get(0)?, r.get(1)?)))
+                    .optional()
             };
             let (first, last) = (&rows[0], &rows[rows.len() - 1]);
             if let Some((hash, _)) = stored(first.height - 1)?
