@@ -72,22 +72,28 @@ MAINNET_RPC=http://127.0.0.1:9998 RPC_PASSWORD=… cargo run -- serve
 | `BACKFILL_PAUSE_MS` | `200` | pause between 100-block backfill batches |
 
 Timeouts are per network: connect / handshake / getaddr are 5/10/10 s for IPv4, 10/10/10 s for
-IPv6, 60/30/30 s for Tor, 90/60/60 s for I2P and 20/15/15 s for CJDNS. Networks behind a proxy stop
-starting new probes after 60% of `CRAWL_INTERVAL`; the rest wait for the next crawl.
+IPv6, 60/30/30 s for Tor, 90/60/60 s for I2P and 20/15/15 s for CJDNS. Direct and proxied networks
+are crawled side by side, so Tor and I2P never hold up IPv4. Networks behind a proxy stop starting
+new probes after 60% of `CRAWL_INTERVAL` (running ones finish); the rest wait for the next crawl and
+don't count as unreachable. A masternode's port check uses its primary (first) core P2P address.
 
-The compose stack adds (only the app's port is published):
+The compose stack (Docker Engine 28+, Compose 2.33+) adds these; only the app's port is published:
 
-| Service | Address on `core` | |
+| Service | Address | |
 |---|---|---|
-| `tor` | 172.30.86.250:9050 | Tor client (Debian package), SOCKS only, no relay or exit |
-| `i2pd` | 172.30.86.251:4447 (SOCKS), :7656 (SAM) | `purplei2p/i2pd`, firewalled, bandwidth class L, ≤200 transit tunnels, no console |
-| `cjdns` (profile `cjdns`) | fd86:d4a5:1c3e:186::fe on `cjdns` | cjdns built from the upstream tag (`deploy/cjdns`), peers from `deploy/cjdns/peers.json` (hyperboria/peers, IPv4) plus cjdns' DNS seeds; NATs fc00::/8 out of its TUN |
-| `cjdns-route` (profile `cjdns`) | host network | keeps the host route `fc00::/8 via` the cjdns container |
+| `tor` | 172.30.88.10:9050 on `overlay` | Tor client (Debian package), SOCKS only, no relay or exit |
+| `i2pd` | 172.30.88.11:4447 (SOCKS), :7656 (SAM) on `overlay` | `purplei2p/i2pd`, firewalled, bandwidth class L, ≤200 transit tunnels, no console |
+| `cjdns` (profile `cjdns`) | fd86:d4a5:1c3e:186::fe on `cjdns` | cjdns built from the upstream tag (`deploy/cjdns`, commit-checked), peers from `deploy/cjdns/peers.json` (hyperboria/peers, IPv4) plus cjdns' DNS seeds; NATs fc00::/8 out of its TUN |
+| `cjdns-route` (profile `cjdns`) | host network | keeps the host route `fc00::/8 via` the cjdns container (removed when it stops) |
+
+Tor and i2pd run with no capabilities, read-only, on their own `overlay` network, so they can't
+reach dashd's RPC on `core`.
 
 Both dashds use Tor (`-onion`, `-listenonion=0`) and i2pd (`-i2psam`, `-i2pacceptincoming=0`), so
 their address managers, which the crawler reads, keep onion and I2P peers. With `CJDNS=true` they
 also get `-cjdnsreachable=1`. dashd, the app and cjdns share the IPv6-only `cjdns` network (ULA,
-no IPv4), whose gateway is the host; internet IPv6 from there fails within about a second.
+no IPv4), whose gateway is the host. On a host without IPv6 (the host), internet IPv6 from there
+fails within about a second; on a host with IPv6, Docker's NAT66 makes it work.
 
 ## Deploy notes
 

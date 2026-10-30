@@ -55,7 +55,7 @@ cp /etc/dash-nodes/dash.conf "$CONF"
     echo 'i2pacceptincoming=0'
   fi
   case "${DASHD_CJDNSREACHABLE:-false}" in
-    true | 1) echo 'cjdnsreachable=1' ;;
+    true | TRUE | True | 1 | yes | on) echo 'cjdnsreachable=1' ;;
   esac
 } >> "$CONF"
 

@@ -4,8 +4,11 @@
 # iproute2 (also used by the cjdns-route helper).
 FROM rust:1-bookworm AS build
 ARG CJDNS_REF=cjdns-v22.3
+# The commit that tag points at; the build fails if the tag ever moves.
+ARG CJDNS_COMMIT=f5902acab6dd2f1a68bf6e4c89e352ed71f93698
 RUN apt-get update && apt-get install -y --no-install-recommends nodejs python3 git && rm -rf /var/lib/apt/lists/*
-RUN git clone --depth 1 --branch "$CJDNS_REF" https://github.com/cjdelisle/cjdns /src
+RUN git clone --depth 1 --branch "$CJDNS_REF" https://github.com/cjdelisle/cjdns /src \
+    && test "$(git -C /src rev-parse HEAD)" = "$CJDNS_COMMIT"
 WORKDIR /src
 # CARGO_BUILD_JOBS keeps the build from using every core (and its memory) on small hosts.
 ARG CARGO_BUILD_JOBS=4
