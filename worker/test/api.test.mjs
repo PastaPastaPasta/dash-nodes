@@ -50,3 +50,24 @@ test("history picks the range and narrows; payments page by height", async () =>
   assert.deepEqual((await route(["mainnet", "masternodes", "c".repeat(64), "payments"], new URLSearchParams(""), get)), { payments: [] });
   await assert.rejects(route(["mainnet", "summary"], new URLSearchParams(""), get), (e) => e.status === 503);
 });
+
+test("bench combines vantages and ranks within each", async () => {
+  const protx = "1" + "a".repeat(63);
+  const result = (score, ok = true) => ({ ok, ts: 1, grade: ok ? { score } : null });
+  const store = {
+    "v1/mainnet/bench/home/06.json": { [protx]: [result(0, false), result(80)] },
+    "v1/mainnet/bench/home/summary.json": { location: "Home", scores: [10, 50, 80, 95] },
+    "v1/mainnet/bench/nyc/06.json": { [protx]: [result(90)] },
+    "v1/mainnet/bench/nyc/summary.json": { location: "NYC", scores: [90] },
+  };
+  const get = async (k) => store[k] ?? null;
+  const b = await route(["mainnet", "masternodes", protx, "bench"], new URLSearchParams(""), get, ["home", "nyc", "sgp"]);
+  assert.deepEqual(b.vantages.map((v) => [v.vantage, v.percentile]), [["home", 0.5], ["nyc", 0]]);
+  assert.deepEqual(b.combined, { score: 85, letter: "B", vantages: 2 });
+  const none = await route(["mainnet", "masternodes", "f".repeat(64), "bench"], new URLSearchParams(""), get, ["home"]);
+  assert.equal(none.combined, null);
+  const sum = await route(["mainnet", "bench"], new URLSearchParams(""), get, ["home", "nyc", "sgp"]);
+  assert.equal(sum.vantages.length, 2);
+  assert.ok(KEY.test("v1/mainnet/bench/home/3f.json") && KEY.test("v1/testnet/bench/sgp-1/summary.json") && KEY.test("v1/mainnet/reference.json"));
+  assert.ok(!KEY.test("v1/mainnet/bench/HOME/3f.json") && !KEY.test("v1/mainnet/bench/home/x.json"));
+});

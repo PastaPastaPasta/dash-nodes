@@ -246,6 +246,32 @@ async function loadHistorySafely() {
   }
 }
 
+const GRADE_TONES = { A: "var(--good)", B: "color-mix(in srgb, var(--good) 60%, var(--surface))", C: "var(--warning)", D: "var(--serious)", F: "var(--critical)" };
+const median = (sorted) => (sorted?.length ? sorted[sorted.length >> 1] : null);
+
+/** Speed tests: one grade bar per test location, from /bench (served by the Worker; absent elsewhere). */
+async function renderSpeed() {
+  const b = await api(`${net}/bench`).catch(() => null);
+  const vs = (b?.vantages || []).filter((v) => v.tested);
+  $("speed-section").hidden = !vs.length;
+  if (!vs.length) return;
+  const all = vs.flatMap((v) => v.scores || []);
+  const good = all.filter((x) => x >= 75).length;
+  $("speed-lede").textContent = `Every enabled masternode downloads 50,000 headers and the masternode list to us once every two weeks. ` +
+    `${pct(all.length ? good / all.length : null, 0)} of tests earned an A or B.`;
+  $("speed-vantages").replaceChildren(...vs.map((v) => {
+    const bar = el("div", { class: "sharebar" });
+    const legend = el("div", { class: "share-legend" });
+    shareBar(bar, legend, ["A", "B", "C", "D", "F"].map((g) => [g, v.grades?.[g] || 0]).filter(([, n]) => n),
+      { color: (k) => GRADE_TONES[k], label: (k) => `Grade ${k}`, limit: 5 });
+    return el("div", { class: "speed-vantage" },
+      el("h3", { text: v.location || v.vantage }),
+      bar, legend,
+      el("p", { class: "muted small", text: `${fmt(v.tested)} tested this cycle${v.failed ? `, ${fmt(v.failed)} failed` : ""}. ` +
+        `Median ${fmt(median(v.headers_per_sec))} headers/s, ping ${fmt(median(v.ping_ms))} ms. Updated ${ago(v.updated)}.` }));
+  }));
+}
+
 function renderSections() {
   renderSoftware();
   renderWhere();
@@ -276,6 +302,7 @@ async function main() {
   heroPoints().then((points) => worldMap($("hero-map"), points)).catch(() => {});
   renderControls();
   renderSections();
+  renderSpeed();
   await loadHistorySafely();
 }
 

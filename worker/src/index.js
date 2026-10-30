@@ -1,6 +1,6 @@
 // nodes.dashhq.org: the static site (Workers static assets), the public API answered from R2, and an
 // authenticated ingest the crawler pushes documents to. The crawler's host takes no inbound traffic.
-import { route, ApiError, KEY, NETWORKS, DOCS, PARAMS } from "./api.js";
+import { route, ApiError, KEY, NETWORKS, DOCS, PARAMS, VANTAGE } from "./api.js";
 
 const API_HEADERS = {
   "content-type": "application/json; charset=utf-8",
@@ -43,7 +43,8 @@ async function answer(env, path, query) {
       : fail(503, "not published yet");
   }
   try {
-    return json(200, await route(path.split("/"), query, (key) => getJson(env, key)), "public, max-age=60");
+    const vantages = (env.BENCH_VANTAGES || "home").split(",").map((v) => v.trim()).filter((v) => new RegExp(`^${VANTAGE}$`).test(v));
+    return json(200, await route(path.split("/"), query, (key) => getJson(env, key), vantages), "public, max-age=60");
   } catch (e) {
     if (e instanceof ApiError) return fail(e.status, e.message);
     console.error(e);
@@ -79,20 +80,33 @@ async function readLimited(stream, limit) {
   return out;
 }
 
-/** Constant-time bearer check against the INGEST_TOKEN secret. */
-async function authorized(request, env) {
+const digest = async (text) => new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text)));
+const hex = (bytes) => [...bytes].map((b) => b.toString(16).padStart(2, "0")).join("");
+
+/**
+ * Who may write `key`: the crawler's INGEST_TOKEN anything, a speed-test vantage only its own results.
+ * BENCH_TOKENS (a secret) maps vantage ids to the SHA-256 hex of their tokens, e.g. {"nyc": "9f…"}.
+ * Comparisons are on digests, in constant time.
+ */
+async function authorized(request, env, key) {
   const got = (request.headers.get("authorization") || "").replace(/^Bearer /, "");
-  if (!env.INGEST_TOKEN || !got) return false;
-  const digest = (text) => crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
-  const [a, b] = await Promise.all([digest(got), digest(env.INGEST_TOKEN)]);
+  if (!got) return false;
+  const mine = await digest(got);
+  if (env.INGEST_TOKEN && crypto.subtle.timingSafeEqual(mine, await digest(env.INGEST_TOKEN))) return true;
+  const vantage = /^v1\/[a-z]+\/bench\/([^/]+)\//.exec(key)?.[1];
+  let tokens = {};
+  try { tokens = JSON.parse(env.BENCH_TOKENS || "{}"); } catch { return false; }
+  const want = vantage && tokens[vantage];
+  if (!/^[0-9a-f]{64}$/.test(want || "")) return false;
+  const a = new TextEncoder().encode(hex(mine)), b = new TextEncoder().encode(want);
   return crypto.subtle.timingSafeEqual(a, b);
 }
 
 /** PUT /_ingest/<key>: the crawler publishing one document, gzip-compressed (X-Body-Encoding: gzip). */
 async function ingest(request, env, url) {
   if (request.method !== "PUT") return fail(405, "method not allowed");
-  if (!(await authorized(request, env))) return fail(401, "unauthorized");
   const key = url.pathname.slice("/_ingest/".length);
+  if (!(await authorized(request, env, key))) return fail(401, "unauthorized");
   if (!KEY.test(key)) return fail(400, "key not allowed");
   if (!request.body || Number(request.headers.get("content-length") || 0) > MAX_INGEST) return fail(413, "too large");
   let body = request.body;

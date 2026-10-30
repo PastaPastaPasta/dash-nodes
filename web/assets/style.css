@@ -210,6 +210,26 @@ pre.code { background: var(--surface-2); padding: 10px 12px; border-radius: 8px;
 .api-ep { margin-bottom: 18px; }
 .api-ep h3 { color: var(--ink); font-family: var(--mono); font-size: 13px; font-weight: 600; }
 
+/* ---- speed test (masternode page) ---- */
+.card.speed { margin-bottom: 14px; }
+.speed-grid { display: grid; grid-template-columns: minmax(240px, 1fr) minmax(0, 2.2fr); gap: 24px; align-items: start; }
+.speed-summary { display: flex; gap: 16px; align-items: center; }
+.grade { width: 64px; height: 64px; border-radius: 14px; display: grid; place-items: center; flex: none;
+  font-size: 34px; font-weight: 700; font-stretch: 112%; color: #fff; background: var(--axis); }
+.grade-A, .grade-B { background: var(--good); }
+.grade-C { background: var(--warning); color: #1d1300; }
+.grade-D { background: var(--serious); }
+.grade-F { background: var(--critical); }
+.speed-score { margin: 0; color: var(--ink-2); }
+.speed-score b { font-size: 24px; color: var(--ink); font-weight: 650; }
+.speed-summary .sub { margin: 4px 0 0; font-size: 13px; }
+.speed-dims { display: grid; grid-template-columns: auto minmax(60px, 1fr) 28px; gap: 6px 10px; align-items: center; margin-top: 18px; font-size: 13px; color: var(--ink-2); }
+.speed-dims > div { display: contents; }
+.speed-dims .track { height: 6px; background: var(--surface-2); border-radius: 3px; overflow: hidden; }
+.speed-dims .track span { display: block; height: 100%; background: var(--brand); border-radius: 3px; }
+.speed-dims .num { text-align: right; color: var(--ink); }
+@media (max-width: 900px) { .speed-grid { grid-template-columns: 1fr; } }
+
 /* ---- overview ---- */
 .small { font-size: 13px; }
 .btn.primary { background: var(--brand); color: var(--brand-ink); box-shadow: none; font-weight: 600; }
@@ -275,6 +295,9 @@ main.overview { padding-top: 26px; }
   .hero-inner > * { max-width: none; }
   .ov-grid, .ov-grid.even { grid-template-columns: 1fr; gap: 26px; }
 }
+
+.speed-vantages { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 28px; }
+.speed-vantage h3 { color: var(--ink); font-size: 15px; margin-bottom: 10px; }
 
 /* ---- map (full screen under the header) ---- */
 .actions { display: flex; gap: 8px; flex-wrap: wrap; }
@@ -399,3 +422,4 @@ button.link { font: inherit; font-size: 13px; background: none; border: 0; paddi
   .sharebar div, .ranked i, .share-legend i, .chip i, .donut, .wm-dots circle { forced-color-adjust: none; }
   .strip div, .legend i { forced-color-adjust: none; }
 }
+.ov-section:has(+ .ov-section[hidden]) { border-bottom: 0; }

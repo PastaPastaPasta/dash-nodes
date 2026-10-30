@@ -78,6 +78,12 @@ async function main() {
   ));
 
   const services = m.services != null ? `0x${m.services.toString(16)}` : null;
+  // Speed tests come from the Worker's API; the crawler's own server doesn't have them, so the card
+  // only appears when there's something to show.
+  const speed = el("section", { class: "card speed", hidden: true, id: "speed" });
+  root.append(speed);
+  api(`${net}/masternodes/${protx}/bench`).then((b) => speedSection(speed, b), () => {});
+
   root.append(el("div", { class: "cols-2" },
     card("Registration", "from the deterministic masternode list",
       kv([
@@ -122,6 +128,7 @@ async function main() {
     el("div", { class: "card-head" }, el("h2", { text: "Port-check uptime" }), el("span", { class: "sub", text: "daily, last 90 days (UTC)" })),
     uptimeStrip(m.uptime_daily)));
 
+
   root.append(el("div", { class: "cols-2 section" },
     el("section", {}, el("h2", { text: "Version history", style: { marginBottom: "10px" } }),
       el("div", { class: "table-wrap" }, el("table", { class: "data" },
@@ -130,6 +137,62 @@ async function main() {
           el("td", { text: dateTime(v.ts) }), el("td", {}, el("code", { text: v.user_agent })), el("td", { class: "r", text: v.protocol })))
           : [el("tr", {}, el("td", { colspan: 3, class: "empty", text: "No handshake recorded yet." }))]))))),
     paymentsSection(m)));
+}
+
+const GRADE_KIND = { A: "good", B: "good", C: "warning", D: "serious", F: "critical" };
+const ms = (v) => (v == null ? "–" : `${fmt(v)} ms`);
+const secs = (v) => (v == null ? "–" : `${v < 10 ? v.toFixed(1) : fmt(v)} s`);
+
+/** Speed tests from each vantage point: grade, rank and the measurements behind them. */
+function speedSection(box, b) {
+  const tested = b.vantages.filter((v) => v.results.length);
+  const head = el("div", { class: "card-head" }, el("h2", { text: "Speed test" }),
+    el("span", { class: "sub", text: "every two weeks, from each test location" }));
+  if (!tested.length) {
+    box.replaceChildren(head, el("p", { class: "sub", text: "Not tested yet. Every enabled masternode is tested once every two weeks." }));
+    box.hidden = false;
+    return;
+  }
+  const c = b.combined;
+  const ranks = tested.map((v) => v.percentile).filter((x) => x != null);
+  const rank = ranks.length ? ranks.reduce((a, x) => a + x, 0) / ranks.length : null;
+  const summary = el("div", { class: "speed-summary" },
+    el("div", { class: `grade grade-${c?.letter || "none"}`, "aria-label": c ? `Grade ${c.letter}` : "No grade" }, c?.letter || "–"),
+    el("div", {},
+      el("p", { class: "speed-score" }, c ? el("b", { class: "num", text: `${Math.round(c.score)}` }) : "–", " out of 100",
+        c && c.vantages > 1 ? ` (average of ${c.vantages} locations)` : ""),
+      rank != null ? el("p", { class: "sub", text: `Better than ${pct(rank, 0)} of masternodes tested from the same location${ranks.length > 1 ? "s" : ""}.` }) : null));
+  const latest = (v) => v.results.find((r) => r.ok) || v.results[0];
+  const rows = tested.map((v) => {
+    const r = latest(v);
+    const g = r.grade;
+    return el("tr", {},
+      el("td", { title: v.location || "" }, v.location || v.vantage),
+      el("td", { title: dateTime(r.ts), text: ago(r.ts) }),
+      r.ok
+        ? [el("td", { class: "r", text: ms(r.ping_ms?.median) }),
+          el("td", { class: "r", text: ms(r.connect_ms != null && r.handshake_ms != null ? r.connect_ms + r.handshake_ms : r.connect_ms) }),
+          el("td", { class: "r", title: r.headers ? `${fmt(r.headers.served)} of ${fmt(r.headers.requested)} headers${r.headers.valid ? "" : ", failed validation"}` : "",
+            text: r.headers ? `${secs(r.headers.seconds)}${r.headers.served < r.headers.requested ? " (incomplete)" : ""}` : "–" }),
+          el("td", { class: "r", text: r.headers?.per_sec != null ? fmt(r.headers.per_sec) : "–" }),
+          el("td", { class: "r", text: r.mnlistdiff?.ok ? secs(r.mnlistdiff.seconds) : "–" })]
+        : el("td", { colspan: 5, class: "muted", text: `Test failed: ${r.error || "no answer"}` }),
+      el("td", { class: "r" }, g ? badge(GRADE_KIND[g.letter], `${g.letter} · ${Math.round(g.score)}`) : "–"));
+  });
+  const first = latest(tested[0]).grade;
+  const DIMS = [["completeness", "Served everything asked"], ["throughput", "Header throughput"], ["reliability", "No stalls or bad data"],
+    ["latency", "Ping"], ["connectivity", "Connect and handshake"]];
+  const dims = first ? el("div", { class: "speed-dims" }, ...DIMS.filter(([k]) => first[k] != null).map(([k, label]) =>
+    el("div", {}, el("span", { text: label }), el("span", { class: "track" }, el("span", { style: { width: `${first[k]}%` } })),
+      el("span", { class: "num", text: Math.round(first[k]) })))) : null;
+  box.replaceChildren(head, el("div", { class: "speed-grid" }, el("div", {}, summary, dims),
+    el("div", { class: "table-wrap" }, el("table", { class: "data" },
+      el("thead", {}, el("tr", {}, ...["Location", "Tested", "Ping", "Connect", "50k headers", "Headers/s", "MN list", "Grade"].map((h, i) =>
+        el("th", { class: i > 1 ? "r" : null, text: h })))),
+      el("tbody", {}, ...rows)))),
+    el("p", { class: "muted small" }, "Each test downloads the latest 50,000 block headers and the masternode list from this node and checks them against our own node. Grades use the scoring of ",
+      el("a", { href: "https://github.com/dashpay/spv-network-health", text: "spv-network-health" }), "."));
+  box.hidden = false;
 }
 
 function paymentsSection(m) {
