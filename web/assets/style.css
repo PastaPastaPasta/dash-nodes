@@ -89,8 +89,11 @@ nav.main a[aria-current="page"] { color: var(--ink); background: var(--surface-2
 .net-badge { font-size: 11.5px; font-weight: 650; padding: 2px 7px; border-radius: 999px; background: color-mix(in srgb, var(--warning) 25%, transparent); color: var(--ink); }
 .more-toggle { display: none; font: inherit; background: none; border: 0; color: var(--ink-2); padding: 6px; border-radius: 8px; cursor: pointer; margin-left: auto; }
 .more-toggle svg { width: 20px; height: 20px; display: block; }
-/* Phones: one header row (logo, nav, menu button); the rest drops down from the button. */
-@media (max-width: 760px) {
+/* Phones and small tablets: one header row (logo, nav, menu button); the rest drops down from the
+   button. Same breakpoint as the map's bottom sheet, so the map never gets a two-row header. */
+@media (max-width: 900px) {
+  /* 16px keeps iOS from zooming the page when a field gets focus. */
+  input[type="search"], select { font-size: 16px; }
   .top-inner { flex-wrap: nowrap; gap: 6px; padding: 6px 10px; position: relative; }
   .brand span, .brand small { display: none; }
   .brand svg { width: 26px; height: 26px; }
@@ -236,7 +239,6 @@ pre.code { background: var(--surface-2); padding: 10px 12px; border-radius: 8px;
 /* ---- masternode list on phones: cards instead of the table ---- */
 .filters-toggle, .mn-cards, .filters .sort-select { display: none; }
 @media (max-width: 760px) {
-  .page-head h1 { font-size: 26px; }
   .page-head .actions .btn { padding: 8px 12px; }
   .filters-toggle { display: block; width: 100%; margin: 0 0 10px; padding: 10px 12px; text-align: left; }
   .filters { display: none; flex-direction: column; align-items: stretch; gap: 10px; margin: 0 0 14px; }
@@ -257,7 +259,7 @@ pre.code { background: var(--surface-2); padding: 10px 12px; border-radius: 8px;
 }
 
 /* ---- masternode page on phones ---- */
-#lede, .kv td, .pop dd { overflow-wrap: anywhere; }
+#lede, .kv td { overflow-wrap: anywhere; }
 @media (max-width: 760px) {
   main { padding: 16px 14px 40px; }
   h1 { font-size: 26px; }
@@ -271,8 +273,8 @@ pre.code { background: var(--surface-2); padding: 10px 12px; border-radius: 8px;
   table.kv, table.kv tbody, table.kv tr, table.kv td { display: block; }
   table.kv tr { padding: 8px 0; border-bottom: 1px solid var(--grid); }
   table.kv tr:last-child { border-bottom: 0; }
-  table.kv td { padding: 0 2px; border: 0; width: auto !important; }
-  table.kv td:first-child { font-size: 12.5px; color: var(--muted); margin-bottom: 2px; }
+  table.kv td { padding: 0 2px; border: 0; }
+  table.kv td:first-child { width: auto; font-size: 12.5px; color: var(--muted); margin-bottom: 2px; }
   table.stack thead { display: none; }
   table.stack, table.stack tbody, table.stack tr { display: block; }
   table.stack tr { padding: 8px 12px; border-bottom: 1px solid var(--grid); }
@@ -334,7 +336,7 @@ main.overview { padding-top: 26px; }
 .ov-grid { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 6fr); gap: 36px; align-items: start; }
 .ov-grid.even { grid-template-columns: 1fr 1fr; }
 .ov-grid > *, .speed-grid > * { min-width: 0; }
-.ov-grid h3 { color: var(--ink); font-size: 15px; margin-bottom: 10px; }
+.ov-grid h3, .speed-vantage h3 { color: var(--ink); font-size: 15px; margin-bottom: 10px; }
 .chart-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
 .chart-head h3 { margin: 0; }
 .ov-chart { background: var(--surface); border-radius: 12px; box-shadow: 0 0 0 1px var(--ring); padding: 14px 16px 12px; }
@@ -369,7 +371,6 @@ main.overview { padding-top: 26px; }
 }
 
 .speed-vantages { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 28px; }
-.speed-vantage h3 { color: var(--ink); font-size: 15px; margin-bottom: 10px; }
 
 /* ---- map (full screen under the header) ---- */
 .actions { display: flex; gap: 8px; flex-wrap: wrap; }
@@ -386,7 +387,7 @@ main.map-app { position: relative; flex: 1; max-width: none; padding: 0; min-hei
   display: flex; flex-direction: column; background: color-mix(in srgb, var(--surface) 94%, transparent);
   backdrop-filter: blur(10px); border-radius: 14px; box-shadow: 0 0 0 1px var(--ring), var(--shadow);
 }
-.mp-handle { display: none; }
+.mp-handle, .mp-node, .mp-filters-button { display: none; } /* phones only; see the sheet rules below */
 .mp-head { padding: 14px 16px 10px; }
 .mp-head input[type="search"] { width: 100%; min-width: 0; font-size: 14px; padding: 9px 12px; border-radius: 9px; background: var(--page); }
 .mp-headline { margin: 12px 0 0; color: var(--ink-2); font-size: 14px; }
@@ -493,14 +494,8 @@ button.link { font: inherit; font-size: 13px; background: none; border: 0; paddi
   .mp-filters select, .mp .seg button { min-height: 36px; }
   .maplibregl-ctrl-bottom-right { bottom: calc(var(--sheet-h, 120px) + 4px); }
 }
-/* Wide screens: details are a popup, and there's no sheet to fold. */
-.mp-node, .mp-filters-button { display: none; }
 
-
-@media (max-width: 640px) {
-  .cols-2 { grid-template-columns: 1fr; }
-  input[type="search"] { min-width: 0; width: 100%; }
-}
+@media (max-width: 640px) { input[type="search"] { min-width: 0; width: 100%; } }
 @media (forced-colors: active) {
   .sharebar div, .ranked i, .share-legend i, .chip i, .donut, .wm-dots circle { forced-color-adjust: none; }
   .strip div, .legend i { forced-color-adjust: none; }

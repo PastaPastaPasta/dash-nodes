@@ -94,10 +94,11 @@ async function authorized(request, env, key) {
   const mine = await digest(got);
   if (env.INGEST_TOKEN && crypto.subtle.timingSafeEqual(mine, await digest(env.INGEST_TOKEN))) return true;
   const vantage = /^v1\/[a-z]+\/bench\/([^/]+)\//.exec(key)?.[1];
-  let tokens = {};
+  let tokens;
   try { tokens = JSON.parse(env.BENCH_TOKENS || "{}"); } catch { return false; }
-  const want = vantage && tokens[vantage];
-  if (!/^[0-9a-f]{64}$/.test(want || "")) return false;
+  if (!tokens || typeof tokens !== "object" || !vantage || !Object.hasOwn(tokens, vantage)) return false;
+  const want = String(tokens[vantage]).toLowerCase();
+  if (!/^[0-9a-f]{64}$/.test(want)) return false;
   const a = new TextEncoder().encode(hex(mine)), b = new TextEncoder().encode(want);
   return crypto.subtle.timingSafeEqual(a, b);
 }

@@ -55,19 +55,22 @@ test("bench combines vantages and ranks within each", async () => {
   const protx = "1" + "a".repeat(63);
   const result = (score, ok = true) => ({ ok, ts: 1, grade: ok ? { score } : null });
   const store = {
-    "v1/mainnet/bench/home/06.json": { [protx]: [result(0, false), result(80)] },
+    "v1/mainnet/bench/home/06.json": { [protx]: [result(80), result(0, false)] },
+    "v1/mainnet/bench/sgp/06.json": { [protx]: [result(0, false), result(99)] },
+    "v1/mainnet/bench/sgp/summary.json": { location: "SGP", scores: [99] },
     "v1/mainnet/bench/home/summary.json": { location: "Home", scores: [10, 50, 80, 95] },
     "v1/mainnet/bench/nyc/06.json": { [protx]: [result(90)] },
     "v1/mainnet/bench/nyc/summary.json": { location: "NYC", scores: [90] },
   };
   const get = async (k) => store[k] ?? null;
   const b = await route(["mainnet", "masternodes", protx, "bench"], new URLSearchParams(""), get, ["home", "nyc", "sgp"]);
-  assert.deepEqual(b.vantages.map((v) => [v.vantage, v.percentile]), [["home", 0.5], ["nyc", 0]]);
+  // sgp's newest run failed: it's listed, but its older 99 counts for neither the rank nor the average.
+  assert.deepEqual(b.vantages.map((v) => [v.vantage, v.percentile]), [["home", 0.5], ["nyc", 0], ["sgp", null]]);
   assert.deepEqual(b.combined, { score: 85, letter: "B", vantages: 2 });
   const none = await route(["mainnet", "masternodes", "f".repeat(64), "bench"], new URLSearchParams(""), get, ["home"]);
   assert.equal(none.combined, null);
   const sum = await route(["mainnet", "bench"], new URLSearchParams(""), get, ["home", "nyc", "sgp"]);
-  assert.equal(sum.vantages.length, 2);
+  assert.equal(sum.vantages.length, 3);
   assert.ok(KEY.test("v1/mainnet/bench/home/3f.json") && KEY.test("v1/testnet/bench/sgp-1/summary.json") && KEY.test("v1/mainnet/reference.json"));
   assert.ok(!KEY.test("v1/mainnet/bench/HOME/3f.json") && !KEY.test("v1/mainnet/bench/home/x.json"));
 });

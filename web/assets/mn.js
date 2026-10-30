@@ -128,7 +128,6 @@ async function main() {
     el("div", { class: "card-head" }, el("h2", { text: "Port-check uptime" }), el("span", { class: "sub", text: "daily, last 90 days (UTC)" })),
     uptimeStrip(m.uptime_daily)));
 
-
   root.append(el("div", { class: "cols-2 section" },
     el("section", {}, el("h2", { text: "Version history", style: { marginBottom: "10px" } }),
       el("div", { class: "table-wrap" }, el("table", { class: "data" },
@@ -143,7 +142,7 @@ async function main() {
 function labelled(heads, tr) {
   let i = 0;
   for (const td of tr.children) {
-    td.dataset.label = heads[i];
+    td.dataset.label ||= heads[i];
     i += Number(td.getAttribute("colspan") || 1);
   }
   return tr;
@@ -152,6 +151,30 @@ function labelled(heads, tr) {
 const GRADE_KIND = { A: "good", B: "good", C: "warning", D: "serious", F: "critical" };
 const ms = (v) => (v == null ? "–" : `${fmt(v)} ms`);
 const secs = (v) => (v == null ? "–" : `${v < 10 ? v.toFixed(1) : fmt(v)} s`);
+const SPEED_HEADS = ["Location", "Tested", "Ping", "Connect", "50k headers", "Headers/s", "MN list", "Grade"];
+const SPEED_DIMS = [["completeness", "Served everything asked"], ["throughput", "Header throughput"], ["reliability", "No stalls or bad data"],
+  ["latency", "Ping"], ["connectivity", "Connect and handshake"]];
+// The newest run decides: a node that stopped answering must not keep showing an old grade.
+const latestResult = (v) => v.results[0];
+const score1 = (x) => (Math.round(x * 10) / 10).toFixed(1);
+
+/** One table row for a test location's latest result. */
+function speedRow(v) {
+  const r = latestResult(v);
+  const g = r.grade;
+  return labelled(SPEED_HEADS, el("tr", {},
+    el("td", { title: v.location || "" }, v.location || v.vantage),
+    el("td", { title: dateTime(r.ts), text: ago(r.ts) }),
+    r.ok
+      ? [el("td", { class: "r", text: ms(r.ping_ms?.median) }),
+        el("td", { class: "r", text: ms(r.connect_ms != null && r.handshake_ms != null ? r.connect_ms + r.handshake_ms : r.connect_ms) }),
+        el("td", { class: "r", title: r.headers ? `${fmt(r.headers.served)} of ${fmt(r.headers.requested)} headers${r.headers.valid ? "" : ", failed validation"}` : "",
+          text: r.headers ? `${secs(r.headers.seconds)}${r.headers.served < r.headers.requested ? " (incomplete)" : ""}` : "–" }),
+        el("td", { class: "r", text: r.headers?.per_sec != null ? fmt(r.headers.per_sec) : "–" }),
+        el("td", { class: "r", text: r.mnlistdiff?.ok ? secs(r.mnlistdiff.seconds) : "–" })]
+      : el("td", { colspan: 5, class: "muted", "data-label": "Result", text: `Test failed: ${r.error || "no answer"}` }),
+    el("td", { class: "r" }, g ? badge(GRADE_KIND[g.letter], `${g.letter} · ${score1(g.score)}`) : badge("critical", "Failed"))));
+}
 
 /** Speed tests from each vantage point: grade, rank and the measurements behind them. */
 function speedSection(box, b) {
@@ -169,38 +192,22 @@ function speedSection(box, b) {
   const summary = el("div", { class: "speed-summary" },
     el("div", { class: `grade grade-${c?.letter || "none"}`, "aria-label": c ? `Grade ${c.letter}` : "No grade" }, c?.letter || "–"),
     el("div", {},
-      el("p", { class: "speed-score" }, c ? el("b", { class: "num", text: `${Math.round(c.score)}` }) : "–", " out of 100",
+      el("p", { class: "speed-score" }, c ? el("b", { class: "num", text: score1(c.score) }) : "–", " out of 100",
         c && c.vantages > 1 ? ` (average of ${c.vantages} locations)` : ""),
-      rank != null ? el("p", { class: "sub", text: `Better than ${pct(rank, 0)} of masternodes tested from the same location${ranks.length > 1 ? "s" : ""}.` }) : null));
-  const latest = (v) => v.results.find((r) => r.ok) || v.results[0];
-  const HEADS = ["Location", "Tested", "Ping", "Connect", "50k headers", "Headers/s", "MN list", "Grade"];
-  const rows = tested.map((v) => {
-    const r = latest(v);
-    const g = r.grade;
-    return labelled(HEADS, el("tr", {},
-      el("td", { title: v.location || "" }, v.location || v.vantage),
-      el("td", { title: dateTime(r.ts), text: ago(r.ts) }),
-      r.ok
-        ? [el("td", { class: "r", text: ms(r.ping_ms?.median) }),
-          el("td", { class: "r", text: ms(r.connect_ms != null && r.handshake_ms != null ? r.connect_ms + r.handshake_ms : r.connect_ms) }),
-          el("td", { class: "r", title: r.headers ? `${fmt(r.headers.served)} of ${fmt(r.headers.requested)} headers${r.headers.valid ? "" : ", failed validation"}` : "",
-            text: r.headers ? `${secs(r.headers.seconds)}${r.headers.served < r.headers.requested ? " (incomplete)" : ""}` : "–" }),
-          el("td", { class: "r", text: r.headers?.per_sec != null ? fmt(r.headers.per_sec) : "–" }),
-          el("td", { class: "r", text: r.mnlistdiff?.ok ? secs(r.mnlistdiff.seconds) : "–" })]
-        : el("td", { colspan: 5, class: "muted", text: `Test failed: ${r.error || "no answer"}` }),
-      el("td", { class: "r" }, g ? badge(GRADE_KIND[g.letter], `${g.letter} · ${Math.round(g.score)}`) : "–")));
-  });
-  const first = latest(tested[0]).grade;
-  const DIMS = [["completeness", "Served everything asked"], ["throughput", "Header throughput"], ["reliability", "No stalls or bad data"],
-    ["latency", "Ping"], ["connectivity", "Connect and handshake"]];
-  const dims = first ? el("div", { class: "speed-dims" }, ...DIMS.filter(([k]) => first[k] != null).map(([k, label]) =>
+      rank != null ? el("p", { class: "sub", text: `Better than ${pct(rank, 0)} of masternodes tested from the same location${ranks.length > 1 ? "s" : ""}.` }) : null,
+      c ? null : el("p", { class: "sub", text: "The latest test failed; it's retried within a day." })));
+  // The breakdown is one location's latest run; say which when there are several.
+  const firstV = tested.find((v) => latestResult(v).grade);
+  const first = firstV && latestResult(firstV).grade;
+  const dims = first ? el("div", { class: "speed-dims" }, ...SPEED_DIMS.filter(([k]) => first[k] != null).map(([k, label]) =>
     el("div", {}, el("span", { text: label }), el("span", { class: "track" }, el("span", { style: { width: `${first[k]}%` } })),
       el("span", { class: "num", text: Math.round(first[k]) })))) : null;
-  box.replaceChildren(head, el("div", { class: "speed-grid" }, el("div", {}, summary, dims),
+  const dimsNote = first && tested.length > 1 ? el("p", { class: "muted small", text: `Breakdown from ${firstV.location || firstV.vantage}.` }) : null;
+  box.replaceChildren(head, el("div", { class: "speed-grid" }, el("div", {}, summary, dims, dimsNote),
     el("div", { class: "table-wrap" }, el("table", { class: "data stack" },
-      el("thead", {}, el("tr", {}, ...HEADS.map((h, i) =>
+      el("thead", {}, el("tr", {}, ...SPEED_HEADS.map((h, i) =>
         el("th", { class: i > 1 ? "r" : null, text: h })))),
-      el("tbody", {}, ...rows)))),
+      el("tbody", {}, ...tested.map(speedRow))))),
     el("p", { class: "muted small" }, "Each test downloads the latest 50,000 block headers and the masternode list from this node and checks them against our own node. Grades use the scoring of ",
       el("a", { href: "https://github.com/dashpay/spv-network-health", text: "spv-network-health" }), "."));
   box.hidden = false;

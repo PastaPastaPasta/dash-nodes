@@ -13,7 +13,7 @@
   },
   "r2_buckets": [{ "binding": "DATA", "bucket_name": "dash-nodes-data" }],
   // Speed-test vantage points whose results are combined (each writes with its own BENCH_TOKENS entry).
-  "vars": { "BENCH_VANTAGES": "home" },
+  "vars": { "BENCH_VANTAGES": "us-central" },
   "routes": [{ "pattern": "nodes.dashhq.org", "custom_domain": true }],
   "observability": { "enabled": true }
 }

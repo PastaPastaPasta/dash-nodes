@@ -207,6 +207,21 @@ body, `x-body-encoding: gzip`; a round stops at the first failed upload and resu
 The transports are the crawler's (`TOR_PROXY`, `I2P_PROXY`, `CRAWL_IPV6`, `IPV6_PROXY`, `CJDNS`);
 masternodes on a network without a route are skipped, not failed.
 
+**Adding a vantage.** Each vantage writes only its own documents, with its own token. Generate a
+random token, give the vantage the token itself (`BENCH_TOKEN_FILE`), and give the Worker its
+SHA-256 in lowercase hex, plus the vantage id in the list the Worker combines:
+
+```sh
+head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' > bench_token     # for the vantage
+printf '%s' "$(cat bench_token)" | sha256sum | cut -d' ' -f1         # for BENCH_TOKENS
+cd worker && npx wrangler secret put BENCH_TOKENS   # {"local":"<sha256>","nyc":"<sha256>",…}
+# and add the id to BENCH_VANTAGES in wrangler.jsonc ("local,nyc,…"), then npm run deploy
+```
+
+The Worker answers `/api/v1/{net}/masternodes/{protx}/bench` (every vantage's runs, each one's rank
+among the masternodes it tested and the average of their latest grades; a vantage whose newest run
+failed shows the failure and counts for neither) and `/api/v1/{net}/bench` (each vantage's summary).
+
 ```sh
 SOURCE=http://127.0.0.1:8080 cargo run --release -- bench --once 1.2.3.4:9999
 # Without TARGET a sweep only keeps results in STATE_DIR. Never publish as another vantage's id:

@@ -255,15 +255,17 @@ async function renderSpeed() {
   const vs = (b?.vantages || []).filter((v) => v.tested);
   $("speed-section").hidden = !vs.length;
   if (!vs.length) return;
+  // Failed tests have no score but still count as tests that didn't earn an A or B.
   const all = vs.flatMap((v) => v.scores || []);
+  const runs = all.length + vs.reduce((a, v) => a + (v.failed || 0), 0);
   const good = all.filter((x) => x >= 75).length;
-  $("speed-lede").textContent = `Every enabled masternode downloads 50,000 headers and the masternode list to us once every two weeks. ` +
-    `${pct(all.length ? good / all.length : null, 0)} of tests earned an A or B.`;
+  $("speed-lede").textContent = `Once every two weeks we download the latest 50,000 headers and the masternode list from every enabled masternode. ` +
+    `${pct(runs ? good / runs : null, 0)} of the latest tests earned an A or B.`;
   $("speed-vantages").replaceChildren(...vs.map((v) => {
     const bar = el("div", { class: "sharebar" });
     const legend = el("div", { class: "share-legend" });
     shareBar(bar, legend, ["A", "B", "C", "D", "F"].map((g) => [g, v.grades?.[g] || 0]).filter(([, n]) => n),
-      { color: (k) => GRADE_TONES[k], label: (k) => `Grade ${k}`, limit: 5 });
+      { color: (k) => GRADE_TONES[k], label: (k) => `Grade ${k}` });
     return el("div", { class: "speed-vantage" },
       el("h3", { text: v.location || v.vantage }),
       bar, legend,

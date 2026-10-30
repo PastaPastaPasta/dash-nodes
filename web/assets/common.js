@@ -112,7 +112,7 @@ export function nodeStatus(m, unchecked = "Not checked") {
 }
 
 /** Masternode filters shared by the list and the map, so either page can link to the other. */
-const MN_FILTERS = ["q", "type", "status", "version", "country"];
+export const MN_FILTERS = ["q", "type", "status", "version", "country"];
 
 export function mnFilters(params) {
   return Object.fromEntries(MN_FILTERS.map((k) => [k, params.get(k) || ""]));
@@ -231,7 +231,7 @@ export function chrome(page, { footer = true } = {}) {
     ...NETWORKS.map((n) => el("button", {
       type: "button", "data-net": n, "aria-pressed": String(n === net),
       onclick: () => n !== net && setNet(n), "aria-label": n === "mainnet" ? "Mainnet" : "Testnet",
-    }, n === "mainnet" ? "Main" : "Test", el("span", { class: "net-full", text: "net" }))));
+    }, n === "mainnet" ? "Mainnet" : "Testnet")));
   const status = el("span", { class: "chain-status", id: "chain-status" }, el("span", { class: "dot" }), "connecting…");
   const theme = el("button", { class: "theme-toggle", type: "button", "aria-label": "Toggle dark mode", title: "Toggle dark mode" });
   const paintTheme = () => { theme.innerHTML = isDark() ? SUN : MOON; };
@@ -255,7 +255,12 @@ export function chrome(page, { footer = true } = {}) {
   const setMenu = (open) => { header.classList.toggle("menu-open", open); more.setAttribute("aria-expanded", String(open)); };
   more.addEventListener("click", (e) => { e.stopPropagation(); setMenu(!header.classList.contains("menu-open")); });
   document.addEventListener("click", (e) => { if (!right.contains(e.target)) setMenu(false); });
-  document.addEventListener("keydown", (e) => { if (e.key === "Escape") setMenu(false); });
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape" || !header.classList.contains("menu-open")) return;
+    const inside = right.contains(document.activeElement);
+    setMenu(false);
+    if (inside) more.focus();
+  });
   document.body.prepend(header);
 
   matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { if (!localStorage.getItem("theme")) themeChanged(); });

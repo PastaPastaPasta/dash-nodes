@@ -50,6 +50,7 @@ function assignVersionTones() {
   });
 }
 
+const phone = () => matchMedia("(max-width: 900px)").matches;
 const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(`--${name}`).trim();
 
 // ---- basemap ----
@@ -135,7 +136,7 @@ map.keyboard.disableRotation();
 map.addControl(new NavigationControl({ showCompass: false }), "bottom-right");
 map.addControl(new AttributionControl({ compact: true, customAttribution: "Basemap © Natural Earth · Geolocation by DB-IP (CC BY 4.0)" }), "bottom-right");
 // Phones: start with the attribution folded into its (i) button instead of across the map.
-if (matchMedia("(max-width: 900px)").matches) {
+if (phone()) {
   map.once("load", () => document.querySelector(".maplibregl-ctrl-attrib")?.classList.remove("maplibregl-compact-show"));
 }
 map.on("zoom", () => { if (map.isStyleLoaded() && map.getZoom() >= HIGH - 0.6) addDetail(); });
@@ -273,8 +274,6 @@ function openCluster(f) {
 
 let popup = null;
 
-const phone = () => matchMedia("(max-width: 900px)").matches;
-
 function nodeCard(m) {
   const paid = !m.last_paid_height ? "never" : tip ? `${fmt(tip - m.last_paid_height)} blocks ago` : `block ${fmt(m.last_paid_height)}`;
   const [k, l] = nodeStatus(m);
@@ -297,21 +296,24 @@ function nodeCard(m) {
 function openPopup(m) {
   popup?.remove();
   if (phone()) {
-    const back = group ? () => { nodeBox.hidden = true; renderGroup(); select(""); } : () => { setMode("peek"); select(""); };
-    nodeBox.replaceChildren(
-      el("div", { class: "mp-row" }, el("button", { class: "link", type: "button", onclick: back, text: group ? "← Back to the list" : "Close" })),
-      nodeCard(m));
+    // Back returns to the list this node was picked from, if it's still there.
+    const back = () => {
+      select("");
+      if (group) { nodeBox.hidden = true; renderGroup(); groupBox.querySelector("button")?.focus(); } else setMode("peek");
+    };
+    const backButton = el("button", { class: "link", type: "button", onclick: back, text: group ? "← Back to the list" : "Close" });
+    nodeBox.replaceChildren(el("div", { class: "mp-row" }, backButton), nodeCard(m));
     nodeBox.hidden = false;
     groupBox.hidden = true;
     setMode("detail");
     select(m.protx);
+    backButton.focus({ preventScroll: true });
     // Keep the node in view above the sheet.
     map.easeTo({ center: [m.lon, m.lat], zoom: Math.max(map.getZoom(), 5), offset: [0, -panel.offsetHeight / 2], duration: 400 });
     return;
   }
-  const content = nodeCard(m);
   const p = new Popup({ offset: 12, maxWidth: "320px", className: "mp-popup", focusAfterOpen: false })
-    .setLngLat([m.lon, m.lat]).setDOMContent(content).addTo(map);
+    .setLngLat([m.lon, m.lat]).setDOMContent(nodeCard(m)).addTo(map);
   p.on("close", () => { if (popup === p) { popup = null; select(""); } });
   popup = p;
   select(m.protx);
@@ -337,6 +339,8 @@ handle.addEventListener("click", () => {
   setMode(panel.dataset.mode === "peek" ? "open" : "peek");
 });
 handle.addEventListener("pointerdown", (e) => {
+  // A touch drag fires no click afterwards, so a flag left from the last drag would eat the next tap.
+  dragged = false;
   const y0 = e.clientY;
   handle.setPointerCapture(e.pointerId);
   const move = (ev) => {
@@ -344,28 +348,37 @@ handle.addEventListener("pointerdown", (e) => {
     if (Math.abs(dy) > 6) dragged = true;
     panel.style.transform = dy > 0 ? `translateY(${dy}px)` : "";
   };
+  const drag = new AbortController();
   const up = (ev) => {
     const dy = ev.clientY - y0;
     panel.style.transform = "";
-    handle.removeEventListener("pointermove", move);
-    handle.removeEventListener("pointerup", up);
-    handle.removeEventListener("pointercancel", up);
+    drag.abort();
     if (dy > 50) setMode("peek");
     else if (dy < -40) setMode("open");
   };
-  handle.addEventListener("pointermove", move);
-  handle.addEventListener("pointerup", up);
-  handle.addEventListener("pointercancel", up);
+  handle.addEventListener("pointermove", move, { signal: drag.signal });
+  handle.addEventListener("pointerup", up, { signal: drag.signal });
+  handle.addEventListener("pointercancel", up, { signal: drag.signal });
 });
 
 // Phones: the map controls sit just above the bottom sheet, whatever its height.
 new ResizeObserver(() => document.documentElement.style.setProperty("--sheet-h", `${panel.offsetHeight}px`)).observe(panel);
 
 function setMode(mode) {
+  // Leaving a masternode's details drops its selection, and the place list it came from shows again.
+  if (mode !== "detail" && !nodeBox.hidden) {
+    nodeBox.hidden = true;
+    groupBox.hidden = !group;
+    select("");
+  }
   panel.dataset.mode = mode;
   handle.setAttribute("aria-expanded", String(mode !== "peek"));
-  if (mode !== "detail") nodeBox.hidden = true;
 }
+panel.addEventListener("keydown", (e) => { if (e.key === "Escape" && phone() && panel.dataset.mode !== "peek") { setMode("peek"); handle.focus(); } });
+
+// Showing a place or folding it away: the sheet follows on phones, the floating panel stays as it is.
+const showDetails = () => setMode(phone() ? "detail" : "open");
+const foldDetails = () => { if (phone()) setMode("peek"); };
 
 const headline = el("p", { class: "mp-headline" });
 const chips = el("div", { class: "chips", role: "group", "aria-label": "Show or hide categories" });
@@ -416,7 +429,7 @@ function renderChips() {
 function showGroup(list) {
   group = list;
   renderGroup();
-  setMode(phone() ? "detail" : "open");
+  showDetails();
 }
 
 const groupHead = (title, onClose) =>
@@ -426,9 +439,9 @@ function showCity(p) {
   group = null;
   groupBox.hidden = false;
   groupBox.replaceChildren(
-    groupHead((!p.cluster && place(geo.points[p.i])) || "This area", () => { groupBox.hidden = true; if (phone()) setMode("peek"); }),
+    groupHead((!p.cluster && place(geo.points[p.i])) || "This area", () => { groupBox.hidden = true; foldDetails(); }),
     el("p", { class: "sub", text: `${fmt(p.nodes)} reachable nodes: ${fmt(p.masternodes)} masternodes and ${fmt(p.nodes - p.masternodes)} other full nodes.` }));
-  setMode(phone() ? "detail" : "open");
+  showDetails();
 }
 
 function renderGroup() {
@@ -441,7 +454,7 @@ function renderGroup() {
   const title = places.size === 1 ? place(group[0]) || "Same location" : `${places.size} places nearby`;
   const reach = group.filter((m) => nodeStatus(m)[1] === "Reachable").length;
   groupBox.replaceChildren(
-    groupHead(title, () => { group = null; renderGroup(); if (phone()) setMode("peek"); }),
+    groupHead(title, () => { group = null; renderGroup(); foldDetails(); }),
     el("p", { class: "sub", text: `${fmt(group.length)} masternodes, ${fmt(reach)} reachable.` }),
     el("ul", { class: "mn-list" }, ...sorted.map((m) => {
       const [k, l] = nodeStatus(m);

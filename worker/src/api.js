@@ -123,14 +123,16 @@ async function bench(get, net, protx, vantages) {
     const [results, summary] = await Promise.all([get(`v1/${net}/bench/${v}/${shard}`), get(`v1/${net}/bench/${v}/summary.json`)]);
     const runs = results?.[id];
     if (!runs?.length) continue;
-    const latest = runs.find((r) => r.ok && r.grade) || null;
+    // The newest run decides, so a node that stopped answering doesn't keep an old grade.
+    const latest = runs[0].ok && runs[0].grade ? runs[0] : null;
     out.push({
       vantage: v, location: summary?.location ?? null, results: runs,
       percentile: latest && summary?.scores ? below(summary.scores, latest.grade.score) : null,
     });
   }
-  const scores = out.map((v) => v.results.find((r) => r.ok && r.grade)?.grade.score).filter((x) => x != null);
-  const score = scores.length ? scores.reduce((a, b) => a + b, 0) / scores.length : null;
+  const scores = out.map((v) => (v.results[0].ok ? v.results[0].grade?.score : null)).filter((x) => x != null);
+  // One decimal, like the crawler's own scores, so the letter always matches the number shown.
+  const score = scores.length ? Math.round((scores.reduce((a, b) => a + b, 0) / scores.length) * 10) / 10 : null;
   return { protx: id, vantages: out, combined: score == null ? null : { score, letter: letterFor(score), vantages: scores.length } };
 }
 

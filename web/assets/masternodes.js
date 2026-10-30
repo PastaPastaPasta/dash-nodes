@@ -1,5 +1,5 @@
 import { api, chrome, currentNet, el, fmt, pct, href, countryName, flag, shortHash, badge, ago, nodeStatus, uptimeKind, evoPill,
-  mnFilters, mnMatches, rememberParams, filterQuery, filterControls } from "./common.js";
+  MN_FILTERS, mnFilters, mnMatches, rememberParams, filterQuery, filterControls } from "./common.js";
 
 chrome("masternodes");
 const net = currentNet();
@@ -15,9 +15,11 @@ const state = {
 let rows = [];
 let tip = null;
 
+const uptimePct = (u) => pct(u, u >= 0.999 ? 0 : 1);
+
 function uptimeBadge(u) {
   if (u == null) return el("span", { class: "muted", text: "–" });
-  return badge(uptimeKind(u), pct(u, u >= 0.999 ? 0 : 1));
+  return badge(uptimeKind(u), uptimePct(u));
 }
 
 const COLUMNS = [
@@ -72,17 +74,17 @@ function render() {
     text: c.label,
   })));
   const pageRows = list.slice(state.page * PAGE, (state.page + 1) * PAGE);
-  const body = pageRows.map((m) => el("tr", {}, ...COLUMNS.map((c) => c.cell(m))));
-  document.getElementById("cards").replaceChildren(...(pageRows.length ? pageRows.map(cardFor)
-    : [el("li", { class: "empty", text: rows.length ? "No masternode matches these filters." : "No masternode list yet." })]));
-  const table = document.getElementById("table");
-  table.replaceChildren(el("thead", {}, head), el("tbody", {}, ...(body.length ? body : [el("tr", {}, el("td", { colspan: COLUMNS.length, class: "empty", text: rows.length ? "No masternode matches these filters." : "No masternode list yet." }))])));
+  const emptyText = rows.length ? "No masternode matches these filters." : "No masternode list yet.";
+  document.getElementById("cards").replaceChildren(...(pageRows.length ? pageRows.map(cardFor) : [el("li", { class: "empty", text: emptyText })]));
+  document.getElementById("table").replaceChildren(el("thead", {}, head), el("tbody", {}, ...(pageRows.length
+    ? pageRows.map((m) => el("tr", {}, ...COLUMNS.map((c) => c.cell(m))))
+    : [el("tr", {}, el("td", { colspan: COLUMNS.length, class: "empty", text: emptyText }))])));
   document.getElementById("pager").replaceChildren(
     el("span", { text: `${fmt(list.length)} of ${fmt(rows.length)} masternodes` }),
     el("button", { class: "btn", type: "button", disabled: state.page === 0, onclick: () => { state.page--; render(); }, text: "Previous" }),
     el("span", { text: `Page ${state.page + 1} of ${pages}` }),
     el("button", { class: "btn", type: "button", disabled: state.page >= pages - 1, onclick: () => { state.page++; render(); }, text: "Next" }));
-  const active = ["q", "type", "status", "version", "country"].filter((k) => state[k]).length;
+  const active = MN_FILTERS.filter((k) => state[k]).length;
   document.getElementById("filters-toggle").textContent = active ? `Filters and sort (${active} on)` : "Filters and sort";
   remember();
 }
@@ -96,7 +98,7 @@ function cardFor(m) {
       el("span", { class: "mn-card-version", text: m.version || "–" })),
     el("div", { class: "mono mn-card-addr", text: m.service || shortHash(m.protx) }),
     el("div", { class: "mn-card-sub" },
-      [m.country ? `${flag(m.country)} ${m.country}` : null, m.as_org, m.uptime_7d != null ? `${pct(m.uptime_7d, m.uptime_7d >= 0.999 ? 0 : 1)} up 7d` : null, paid]
+      [m.country ? `${flag(m.country)} ${m.country}` : null, m.as_org, m.uptime_7d != null ? `${uptimePct(m.uptime_7d)} up 7d` : null, paid]
         .filter(Boolean).join(" · "))));
 }
 
@@ -111,13 +113,13 @@ function renderFilters() {
   const sort = el("select", { "aria-label": "Sort by", onchange: () => {
     const [key, dir] = sort.value.split(":");
     state.sort = key; state.dir = Number(dir); state.page = 0; render();
-  } }, ...COLUMNS.flatMap((c) => [[c.key, 1, `${c.label} ↑`], [c.key, -1, `${c.label} ↓`]]).map(([k, d, t]) => el("option", { value: `${k}:${d}`, text: t })));
+  } }, ...COLUMNS.flatMap((c) => [1, -1].map((d) => el("option", { value: `${c.key}:${d}`, text: `${c.label} ${d > 0 ? "↑" : "↓"}` }))));
   sort.value = `${state.sort}:${state.dir}`;
   document.getElementById("filters").replaceChildren(...filterControls(rows, state, () => { state.page = 0; render(); }),
     el("label", { class: "sort-select" }, "Sort", sort));
   const toggle = document.getElementById("filters-toggle");
   const box = document.getElementById("filters");
-  toggle.onclick = () => { const open = !box.classList.contains("open"); box.classList.toggle("open", open); toggle.setAttribute("aria-expanded", String(open)); };
+  toggle.onclick = () => toggle.setAttribute("aria-expanded", String(box.classList.toggle("open")));
 }
 
 function csv() {
