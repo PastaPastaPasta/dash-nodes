@@ -162,6 +162,10 @@ async fn probe(addr: &str, network: &str, getaddr: bool, transport: &TransportAr
     let net = Network::parse(network).context("network must be mainnet or testnet")?;
     let addr: PeerAddr = match addr.parse() {
         Ok(a) => a,
+        // A mistyped onion or I2P name must not go to the system resolver.
+        Err(e) if addr.rsplit_once(':').is_some_and(|(h, _)| h.ends_with(".onion") || h.ends_with(".i2p")) => {
+            return Err(e);
+        }
         // A host name: resolve it.
         Err(_) => PeerAddr::from_socket(tokio::net::lookup_host(addr).await?.next().context("no address")?),
     };

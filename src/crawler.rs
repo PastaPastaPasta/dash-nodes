@@ -182,33 +182,47 @@ async fn crawl_once(ctx: &NetCtx) -> Result<i64> {
     let tip = ctx.status.read().unwrap().blocks as i32;
     let budget = Duration::from_secs_f64(ctx.crawl_cfg.interval_secs.max(60) as f64 * PROXIED_BUDGET_SHARE);
     let deadline = started + budget;
-    // Known-good addresses first, so a proxied network that runs out of time skips new ones.
+    // Direct networks and proxied ones (Tor, I2P) run side by side, so a slow overlay never holds
+    // up IPv4. Known-good addresses go first, so a proxied network that runs out of time skips
+    // new ones.
+    let proxied = |a: &PeerAddr| matches!(routes.for_addr(a), Some(Route::Socks5(_)));
     let unproven: HashSet<PeerAddr> = unproven.into_iter().collect();
-    let mut first_pass: Vec<(PeerAddr, bool)> = targets.iter().map(|(a, g)| (*a, *g)).collect();
-    first_pass.sort_by_key(|(a, _)| unproven.contains(a));
-    let mut outcomes = probe_all(ctx, &routes, first_pass, tip, deadline).await;
-
-    // Second pass: probe addresses we just learned about, so this crawl's picture is complete.
-    // Gossip is only trusted for the network's default port (port 0 for I2P): anything else could
-    // aim us at arbitrary services on third-party hosts. Masternodes on other ports come from the
-    // list. Addresses on networks we can't reach are kept as known.
-    let mut seen: HashSet<PeerAddr> = targets.keys().copied().collect();
-    let mut gossip = Vec::new();
-    for o in &mut outcomes {
-        if let Ok(p) = &mut o.result {
-            gossip.extend(
-                std::mem::take(&mut p.addrs)
-                    .into_iter()
-                    .filter(|a| a.is_routable() && a.port == ctx.net.default_port_for(a.net())),
-            );
-        }
+    let [mut direct_first, mut proxied_first]: [Vec<(PeerAddr, bool)>; 2] = Default::default();
+    for (a, g) in &targets {
+        if proxied(a) { &mut proxied_first } else { &mut direct_first }.push((*a, *g));
     }
-    let mut fresh: Vec<PeerAddr> = gossip.iter().copied().filter(|a| usable(a) && seen.insert(*a)).collect();
-    let discovered = fresh.len();
-    fresh.shuffle(&mut rng);
-    fresh.truncate(MAX_UNPROVEN_PER_CRAWL);
+    for list in [&mut direct_first, &mut proxied_first] {
+        list.sort_by_key(|(a, _)| unproven.contains(a));
+    }
+
+    // Each side then makes a second pass over addresses it just learned about, so this crawl's
+    // picture is complete. The proxied side also takes what direct peers gossiped (that's where
+    // most onion addresses come from); the direct side doesn't wait for the proxied one.
+    let seen: HashSet<PeerAddr> = targets.keys().copied().collect();
+    let (direct_gossip_tx, direct_gossip_rx) = tokio::sync::oneshot::channel();
+    let direct_run = async {
+        let mut out = probe_all(ctx, &routes, direct_first, tip, None).await;
+        let gossip = take_gossip(ctx, &mut out);
+        let _ = direct_gossip_tx.send(gossip.clone());
+        let (fresh, found) = fresh_targets(&gossip, &seen, |a| usable(a) && !proxied(a));
+        out.extend(probe_all(ctx, &routes, fresh, tip, None).await);
+        (out, gossip, found)
+    };
+    let proxied_run = async {
+        let mut out = probe_all(ctx, &routes, proxied_first, tip, Some(deadline)).await;
+        let gossip = take_gossip(ctx, &mut out);
+        let mut all = direct_gossip_rx.await.unwrap_or_default();
+        all.extend_from_slice(&gossip);
+        let (fresh, found) = fresh_targets(&all, &seen, proxied);
+        out.extend(probe_all(ctx, &routes, fresh, tip, Some(deadline)).await);
+        (out, gossip, found)
+    };
+    let ((mut outcomes, mut gossip, direct_found), (proxied_out, proxied_gossip, proxied_found)) =
+        futures::join!(direct_run, proxied_run);
+    outcomes.extend(proxied_out);
+    gossip.extend(proxied_gossip);
+    let discovered = direct_found + proxied_found;
     upsert_addrs(ctx, gossip, "getaddr").await?;
-    outcomes.extend(probe_all(ctx, &routes, fresh.into_iter().map(|a| (a, false)).collect(), tip, deadline).await);
 
     let tried = outcomes.len();
     let rows: Vec<ProbeRow> = outcomes.into_iter().map(|o| ProbeRow::from(o, &ctx.geo)).collect();
@@ -217,15 +231,49 @@ async fn crawl_once(ctx: &NetCtx) -> Result<i64> {
     Ok(id)
 }
 
+/// Takes the gossiped addresses out of successful probes. Gossip is only trusted for the network's
+/// default port (port 0 for I2P): anything else could aim us at arbitrary services on third-party
+/// hosts. Masternodes on other ports come from the list. Addresses on networks we can't reach
+/// are kept too, as known.
+fn take_gossip(ctx: &NetCtx, outcomes: &mut [Outcome]) -> Vec<PeerAddr> {
+    let mut gossip = Vec::new();
+    for o in outcomes {
+        if let Ok(p) = &mut o.result {
+            gossip.extend(
+                std::mem::take(&mut p.addrs)
+                    .into_iter()
+                    .filter(|a| a.is_routable() && a.port == ctx.net.default_port_for(a.net())),
+            );
+        }
+    }
+    gossip
+}
+
+/// Second-pass targets: gossiped addresses `keep` accepts that this crawl hasn't probed, a random
+/// sample of at most MAX_UNPROVEN_PER_CRAWL. Also returns how many there were before sampling.
+fn fresh_targets(
+    gossip: &[PeerAddr],
+    seen: &HashSet<PeerAddr>,
+    keep: impl Fn(&PeerAddr) -> bool,
+) -> (Vec<(PeerAddr, bool)>, usize) {
+    let mut new = HashSet::new();
+    let mut fresh: Vec<PeerAddr> =
+        gossip.iter().copied().filter(|a| keep(a) && !seen.contains(a) && new.insert(*a)).collect();
+    let found = fresh.len();
+    fresh.shuffle(&mut rand::rng());
+    fresh.truncate(MAX_UNPROVEN_PER_CRAWL);
+    (fresh.into_iter().map(|a| (a, false)).collect(), found)
+}
+
 /// Probes every target over its network's route, each network with its own concurrency limit.
-/// Networks behind a proxy stop starting probes at `deadline`; probes that didn't run aren't
-/// recorded and keep their place for the next crawl.
+/// With a `deadline`, no new probe starts after it (running ones finish within their timeouts);
+/// probes that didn't start aren't recorded and keep their place for the next crawl.
 async fn probe_all(
     ctx: &NetCtx,
     routes: &Routes,
     targets: Vec<(PeerAddr, bool)>,
     tip: i32,
-    deadline: Instant,
+    deadline: Option<Instant>,
 ) -> Vec<Outcome> {
     let net = ctx.net;
     let mut by_net: [Vec<(PeerAddr, bool)>; 5] = Default::default();
@@ -239,16 +287,15 @@ async fn probe_all(
             let Some(route) = route else { return Vec::new() };
             let total = list.len();
             let route = &route;
-            let probes = futures::stream::iter(list)
+            let done: Vec<Outcome> = futures::stream::iter(list)
+                .take_while(|_| std::future::ready(deadline.is_none_or(|d| Instant::now() < d)))
                 .map(|(addr, asked_addrs)| async move {
                     let result = p2p::probe(net, &addr, route, tip, asked_addrs, &limits.timeouts).await;
                     Outcome { addr, asked_addrs, result }
                 })
-                .buffer_unordered(limits.concurrency);
-            let done: Vec<Outcome> = match route {
-                Route::Direct => probes.collect().await,
-                Route::Socks5(_) => probes.take_until(tokio::time::sleep_until(deadline.into())).collect().await,
-            };
+                .buffer_unordered(limits.concurrency)
+                .collect()
+                .await;
             if done.len() < total {
                 tracing::info!(
                     net = net.name(),
@@ -418,7 +465,7 @@ fn record(
         params![id, now],
     )?;
 
-    let agg = aggregate(&tx, id, now, routes)?;
+    let agg = aggregate(&tx, id, now)?;
     let networks = network_stats(&tx, id, now, Some(routes))?;
     {
         let mut ins =
@@ -477,20 +524,13 @@ fn asn_key(asn: Option<i64>, org: Option<String>) -> String {
     }
 }
 
-/// Names of the networks this crawl could reach, as a JSON array for `json_each`.
-fn crawled_json(routes: &Routes) -> String {
-    let names: Vec<&str> =
-        AddrNet::ALL.into_iter().filter(|n| routes.get(*n).route.is_some()).map(AddrNet::name).collect();
-    json!(names).to_string()
-}
-
 /// Distribution counts for this crawl. Scopes:
 /// - `all`: every node that answered this crawl; `nonmn`: those that aren't a registered masternode.
 /// - `mn` / `evo`: every enabled (not PoSe-banned) masternode / evonode, reachable or not, with the
 ///   user agent it last announced within the active window.
 ///
 /// Each address counts as a node: a node reachable over both IPv4 and Tor counts twice.
-fn aggregate(c: &Connection, id: i64, now: i64, routes: &Routes) -> Result<Aggregate> {
+fn aggregate(c: &Connection, id: i64, now: i64) -> Result<Aggregate> {
     let mut counts = Counts::default();
 
     let mn_addrs: HashSet<String> = query_all(c, "SELECT addr FROM mn_addrs", [], |r| r.get(0))?;
@@ -519,14 +559,15 @@ fn aggregate(c: &Connection, id: i64, now: i64, routes: &Routes) -> Result<Aggre
             counts.add(s, "network", network.clone());
         }
     }
-    // Network-wide reachability over the active set: recently seen nodes plus enabled masternodes,
-    // on networks this crawl could reach (the rest are known but not crawled, not unreachable).
+    // Network-wide reachability over the active set: recently seen nodes plus enabled masternodes
+    // that failed this crawl. Every such address on a crawled network is probed every crawl, so
+    // this only leaves out networks we can't reach and proxied probes that ran out of time:
+    // known, but not crawled, isn't unreachable.
     let unreachable: i64 = c.query_row(
-        "SELECT count(*) FROM nodes n WHERE NOT (n.last_crawl = ?1 AND n.last_ok = 1)
-           AND n.network IN (SELECT value FROM json_each(?3))
+        "SELECT count(*) FROM nodes n WHERE n.last_crawl = ?1 AND n.last_ok = 0
            AND (n.last_success > ?2 OR n.addr IN
                 (SELECT service FROM masternodes WHERE removed IS NULL AND coalesce(pose_ban_height, -1) = -1))",
-        params![id, now - ACTIVE_WINDOW, crawled_json(routes)],
+        params![id, now - ACTIVE_WINDOW],
         |r| r.get(0),
     )?;
     counts.add_n("all", "reachable", "yes".into(), reachable);
@@ -588,7 +629,7 @@ fn aggregate(c: &Connection, id: i64, now: i64, routes: &Routes) -> Result<Aggre
 /// Per address network, for a crawl (the `networks` array of /summary, always all five, in
 /// `AddrNet::ALL` order):
 /// - `known`: addresses gossiped, listed by dashd or the masternode list, or reachable within the
-///   active window before `now`;
+///   active window before `now`, or tried in this crawl;
 /// - `tried` / `reachable`: probed / answered in crawl `id`;
 /// - `masternodes`: reachable addresses that are a registered masternode's core P2P address;
 /// - `crawled` / `reason`: whether the crawl had a route to the network, and why not. Without
@@ -598,7 +639,7 @@ pub fn network_stats(c: &Connection, id: i64, now: i64, routes: Option<&Routes>)
     let mut by_net: HashMap<String, [i64; 4]> = HashMap::new();
     let mut st = c.prepare(
         "SELECT network,
-                sum(max(coalesce(last_gossip, 0), coalesce(last_success, 0)) > ?2),
+                sum(max(coalesce(last_gossip, 0), coalesce(last_success, 0)) > ?2 OR last_crawl = ?1),
                 sum(last_crawl = ?1),
                 sum(last_crawl = ?1 AND last_ok = 1),
                 sum(last_crawl = ?1 AND last_ok = 1 AND addr IN (SELECT addr FROM mn_addrs))
