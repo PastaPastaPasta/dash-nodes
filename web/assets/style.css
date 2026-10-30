@@ -111,6 +111,8 @@ nav.main a[aria-current="page"] { color: var(--ink); background: var(--surface-2
   .top-right .seg.net { justify-content: stretch; }
   .top-right .seg.net button { flex: 1; }
   .top-right .theme-toggle { align-self: flex-start; }
+  .top-right .menu-only { display: block; }
+  nav.main a.nav-api { display: none; }
 }
 .chain-status { color: var(--muted); font-size: 12.5px; white-space: nowrap; }
 .chain-status .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 6px; vertical-align: 1px; background: var(--muted); }
@@ -378,7 +380,9 @@ main.overview { padding-top: 26px; }
 .ov-head { max-width: 760px; margin-bottom: 22px; }
 .ov-lede { margin: 8px 0 0; font-size: 16px; color: var(--ink-2); text-wrap: pretty; }
 .ov-grid { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 6fr); gap: 36px; align-items: start; }
-.ov-grid.even { grid-template-columns: 1fr 1fr; }
+.ov-grid.even { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+/* Grid items default to their content's minimum width; let them shrink so wide tables scroll inside. */
+.ov-grid > *, .cols-2 > * { min-width: 0; }
 .ov-grid > *, .speed-grid > * { min-width: 0; }
 .ov-grid h3, .speed-vantage h3 { color: var(--ink); font-size: 15px; margin-bottom: 10px; }
 .chart-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
@@ -411,7 +415,9 @@ main.overview { padding-top: 26px; }
   .hero-map { position: relative; right: auto; width: 100%; height: auto; display: block; margin-top: 8px; }
   .hero-inner { padding-top: 8px; }
   .hero-inner > * { max-width: none; }
-  .ov-grid, .ov-grid.even { grid-template-columns: 1fr; gap: 26px; }
+  /* minmax(0, …): a bare 1fr won't shrink below its widest content (a wide table), which widens the
+     whole page on phones and lets Safari zoom out. Tables scroll inside their own .table-wrap. */
+  .ov-grid, .ov-grid.even { grid-template-columns: minmax(0, 1fr); gap: 26px; }
 }
 
 .speed-vantages { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 28px; }
@@ -567,4 +573,9 @@ button.link { font: inherit; font-size: 13px; background: none; border: 0; paddi
 .stat-row .stat-good { border-left: 4px solid var(--good); }
 .stat-row .stat-warning { border-left: 4px solid var(--warning); }
 /* The earnings notes are sentences: give them room. */
-#earn-stats { grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); }
+#earn-stats { grid-template-columns: repeat(auto-fill, minmax(min(300px, 100%), 1fr)); }
+/* The change-kind filter wraps on narrow screens instead of running off the side. */
+.filters .seg { flex-wrap: wrap; max-width: 100%; }
+/* The API link moves into the menu on phones (the nav has room for four). */
+.menu-only { display: none; }
+.menu-row { display: flex; align-items: center; gap: 12px; }

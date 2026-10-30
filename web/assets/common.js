@@ -256,7 +256,7 @@ export function chrome(page, { footer = true } = {}) {
   document.title = `${document.title}${net === "testnet" ? " · testnet" : ""}`;
   const nav = el("nav", { class: "main" },
     ...[["overview", "/", "Overview"], ["masternodes", "/masternodes", "Masternodes"], ["changes", "/changes", "Changes"], ["map", "/map", "Map"], ["api", "/api", "API"]].map(([id, path, label]) =>
-      el("a", { href: href(path), "aria-current": id === page ? "page" : null, text: label })));
+      el("a", { href: href(path), class: id === "api" ? "nav-api" : null, "aria-current": id === page ? "page" : null, text: label })));
   const seg = el("div", { class: "seg net", role: "group", "aria-label": "Network" },
     ...NETWORKS.map((n) => el("button", {
       type: "button", "data-net": n, "aria-pressed": String(n === net),
@@ -280,7 +280,8 @@ export function chrome(page, { footer = true } = {}) {
   // Phones: the network switch, theme and status fold into a menu behind one button.
   const more = el("button", { class: "more-toggle", type: "button", "aria-label": "Network and display settings", "aria-expanded": "false", "aria-controls": "top-right" });
   more.innerHTML = MORE;
-  const right = el("div", { class: "top-right", id: "top-right" }, status, seg, theme);
+  const right = el("div", { class: "top-right", id: "top-right" }, status, seg,
+    el("div", { class: "menu-row" }, theme, el("a", { class: "menu-only", href: href("/api"), text: "API" })));
   const header = el("header", { class: "top" }, el("div", { class: "top-inner" }, brand, nav, more, right));
   const setMenu = (open) => { header.classList.toggle("menu-open", open); more.setAttribute("aria-expanded", String(open)); };
   more.addEventListener("click", (e) => { e.stopPropagation(); setMenu(!header.classList.contains("menu-open")); });
