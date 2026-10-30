@@ -69,9 +69,11 @@ pub async fn check_once(p2p: &str, https: &str) -> Check {
 pub async fn run(ctx: Arc<NetCtx>) {
     let client = client();
     loop {
-        if ctx.mn_loaded.load(std::sync::atomic::Ordering::Acquire)
-            && let Err(e) = round(&ctx, &client).await
-        {
+        // The evonodes come from the masternode list: wait for its first load rather than a whole interval.
+        while !ctx.mn_loaded.load(std::sync::atomic::Ordering::Acquire) {
+            tokio::time::sleep(Duration::from_secs(10)).await;
+        }
+        if let Err(e) = round(&ctx, &client).await {
             tracing::warn!(net = ctx.net.name(), "platform checks: {e:#}");
         }
         tokio::time::sleep(PLATFORM_INTERVAL).await;

@@ -34,6 +34,11 @@
         announced in the past 7 days, else <code>Unknown</code>).</p>
       <p class="sub">Dimensions: <code>ua</code>, <code>version</code>, <code>client</code>, <code>protocol</code>, <code>country</code> (ISO 3166),
         <code>asn</code>, <code>network</code>, <code>reachable</code>, <code>status</code> and <code>type</code> (masternode scopes).</p>
+      <p class="sub">Also <code>returns</code> (the median annualized yield of enabled regular masternodes and evonodes over the last 90
+        days, on their 1,000 and 4,000 DASH collateral; core-chain payments only) and <code>platform</code> (evonode Platform health from
+        the latest checks: <code>checked</code>, <code>healthy</code>, <code>https_ok</code>, <code>p2p_ok</code>,
+        <code>cert_expiring_3d</code>, <code>max_height</code> and the <code>drive</code>, <code>tenderdash</code> and <code>dapi</code>
+        versions as <code>[[version, count], …]</code>).</p>
       <pre class="code">curl https://nodes.dashhq.org/api/v1/mainnet/summary | jq '.dists.mn.version'</pre>
     </div>
     <div class="api-ep">
@@ -60,11 +65,32 @@
     <div class="api-ep">
       <h3>GET /api/v1/{net}/masternodes/{protx}</h3>
       <p class="sub">One masternode: everything from the list plus collateral and keys, every registered Core address
-        (<code>core_p2p: [{address, network}]</code>), version history, 90 days of daily uptime and its 25 latest payments.</p>
+        (<code>core_p2p: [{address, network}]</code>), version history, 90 days of daily uptime, its 25 latest payments,
+        <code>returns</code> (paid in the last 30, 90 and 365 days, in duffs, and <code>annual_yield</code> on its collateral over the
+        last 90 days or since registration), its 50 latest registration <code>changes</code>, and for evonodes <code>platform</code>
+        (the latest Platform check and 30 days of daily results).</p>
     </div>
     <div class="api-ep">
       <h3>GET /api/v1/{net}/masternodes/{protx}/payments?before={height}&amp;limit=100</h3>
       <p class="sub">Older payments, newest first. Page with <code>before</code> set to the last height you got.</p>
+    </div>
+    <div class="api-ep">
+      <h3>POST /api/v1/{net}/masternodes/{protx}/check</h3>
+      <p class="sub">Checks a registered masternode now: a P2P version handshake with its registered Core address from the Cloudflare
+        location serving you. Returns <code>ok</code>, <code>connect_ms</code>, <code>handshake_ms</code>, <code>user_agent</code>,
+        <code>protocol</code>, <code>height</code> or an <code>error</code>, and <code>from</code>. Five checks a minute per client; a
+        masternode checked in the last minute gets that result again (<code>cached: true</code>).</p>
+    </div>
+    <div class="api-ep">
+      <h3>GET /api/v1/{net}/changes</h3>
+      <p class="sub">The 300 latest registration changes, newest first: <code>{ts, height, protx, type, field, old, new}</code>.
+        <code>field</code> is <code>registered</code>, <code>removed</code>, <code>pose</code> (enabled or banned at a height) or the
+        changed field (<code>service</code>, <code>payout_address</code>, <code>pubkey_operator</code>, …). Recorded since 30 Oct 2026.</p>
+    </div>
+    <div class="api-ep">
+      <h3>GET /api/v1/health</h3>
+      <p class="sub">200 while every network's data is fresh (crawled and read from the chain within 45 minutes) and its snapshots are
+        saved; 503 with what's wrong otherwise. For uptime checks.</p>
     </div>
   </section>
 

@@ -227,7 +227,7 @@ async function check(request, env, ctx, url, net, protx) {
   }
   const cacheKey = `${url.origin}/_check/${net}/${protx}`;
   const recent = await caches.default.match(cacheKey);
-  if (recent) return new Response(recent.body, { headers: { ...API_HEADERS, "cache-control": "no-store" } });
+  if (recent) return json(200, { ...(await recent.json()), cached: true }, "no-store");
   const mn = (await getJson(env, shardKey(net, protx)))?.[protx];
   if (!mn || mn.removed) return fail(404, "not a registered masternode");
   if (!mn.service) return fail(400, "this masternode has no core P2P address registered");
