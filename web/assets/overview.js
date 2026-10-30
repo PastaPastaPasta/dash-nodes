@@ -7,7 +7,7 @@ const net = currentNet();
 
 const SCOPES = [["mn", "Masternodes"], ["evo", "Evonodes"], ["nonmn", "Other full nodes"], ["all", "All nodes"]];
 const RANGES = [["1", "24h"], ["7", "7d"], ["30", "30d"], ["90", "90d"], ["365", "1y"]];
-const NETWORKS = { ipv4: "IPv4", ipv6: "IPv6", onion: "Tor", i2p: "I2P", cjdns: "CJDNS" };
+const ADDRESS_NETWORKS = { ipv4: "IPv4", ipv6: "IPv6", onion: "Tor", i2p: "I2P", cjdns: "CJDNS" };
 const params = new URLSearchParams(location.search);
 let scope = SCOPES.some(([s]) => s === params.get("scope")) ? params.get("scope") : "mn";
 let days = RANGES.some(([d]) => d === params.get("days")) ? params.get("days") : "30";
@@ -43,12 +43,12 @@ function byOrg(rows) {
 
 // ---- shared pieces ----
 
-/** A 100% bar of the largest groups, each in its own color, with a legend that names them. */
+/** A 100% bar of the largest groups, each in its own color (color(key, rank)), with a legend that names them. */
 function shareBar(bar, legend, rows, { color, label = (k) => k, limit = 5 }) {
   const sum = total(rows);
   const top = rows.slice(0, limit);
   const rest = sum - total(top);
-  const parts = [...top.map(([k, n]) => ({ k, n, c: color(k), l: label(k) })), ...(rest > 0 ? [{ k: "Other", n: rest, c: "var(--other)", l: "Everything else" }] : [])];
+  const parts = [...top.map(([k, n], i) => ({ n, c: color(k, i), l: label(k) })), ...(rest > 0 ? [{ n: rest, c: "var(--other)", l: "Everything else" }] : [])];
   bar.replaceChildren(...parts.map((p) => el("div", { title: `${p.l}: ${fmt(p.n)} (${pct(p.n / sum)})`, style: { flexGrow: String(p.n), background: p.c } })));
   bar.setAttribute("role", "img");
   bar.setAttribute("aria-label", parts.map((p) => `${p.l} ${pct(p.n / sum)}`).join(", "));
@@ -56,7 +56,7 @@ function shareBar(bar, legend, rows, { color, label = (k) => k, limit = 5 }) {
     el("b", { class: "num", text: pct(p.n / sum) }))));
 }
 
-/** Ranked rows with a share bar each; the top `colored` rows carry the colors of the share bar above. */
+/** Ranked rows with a share bar each, dotted with the same colors as the share bar above. */
 function ranked(box, rows, { label = (k) => k, title, color, limit = 8 }) {
   const sum = total(rows);
   let expanded = false;
@@ -79,7 +79,8 @@ function ranked(box, rows, { label = (k) => k, title, color, limit = 8 }) {
   render();
 }
 
-const slotColor = (i) => (i < 5 ? `var(--s${i + 1})` : "var(--axis)");
+/** The five largest groups get a series color, in rank order; the rest and "Unknown" the axis gray. */
+const rankColor = (k, i) => (k === "Unknown" || i >= 5 ? "var(--axis)" : `var(--s${i + 1})`);
 
 // ---- hero ----
 
@@ -90,23 +91,23 @@ function renderHero() {
   const diff = prev ? c.reachable - prev.reachable : null;
   $("hero-title").textContent = `${fmt(c.reachable)} Dash nodes answered our last crawl`;
   $("hero-sub").textContent = `Among them ${fmt(c.mn_reachable)} of the ${fmt(c.mn_total)} enabled masternodes. ` +
+    (diff ? `That's ${fmt(Math.abs(diff))} ${diff > 0 ? "more" : "fewer"} nodes than a day ago. ` : "") +
     `Crawled ${ago(c.finished)}, at block ${fmt(c.tip_height)}.`;
   const stat = (value, label, note) => el("div", {}, el("dt", { text: label }), el("dd", { class: "num" }, value, note ? el("small", { text: note }) : null));
   $("hero-stats").replaceChildren(
-    stat(fmt(c.mn_total), "Masternodes", type.Evo ? `${fmt(type.Evo)} evonodes` : null),
+    stat(fmt(c.mn_total), "Enabled masternodes", type.Evo ? `${fmt(type.Evo)} of them evonodes` : null),
     stat(fmt(status.pose_banned || 0), "PoSe-banned"),
     stat(fmt((all.country || []).filter(([k]) => k !== "Unknown").length), "Countries"),
     stat(fmt(byOrg(all.asn || []).filter(([k]) => k !== "Unknown").length), "Hosting providers"),
-    stat(fmt(c.tried), "Addresses tried", diff ? `${diff > 0 ? "+" : "−"}${fmt(Math.abs(diff))} nodes in 24h` : null),
+    stat(fmt(c.tried), "Addresses tried"),
   );
   $("to-map").href = href("/map");
   $("to-list").href = href("/masternodes");
 }
 
-async function renderHeroMap() {
-  let points = null;
+async function heroPoints() {
   try {
-    points = (await api(`${net}/geo`)).points;
+    return (await api(`${net}/geo`)).points;
   } catch {
     // Older servers: masternodes only.
     const { masternodes } = await api(`${net}/masternodes`);
@@ -116,9 +117,8 @@ async function renderHeroMap() {
       const k = `${m.lat},${m.lon}`;
       at.set(k, { lat: m.lat, lon: m.lon, nodes: (at.get(k)?.nodes || 0) + 1 });
     }
-    points = [...at.values()];
+    return [...at.values()];
   }
-  await worldMap($("hero-map"), points);
 }
 
 // ---- sections ----
@@ -160,16 +160,16 @@ function renderWhere() {
   const orgs = byOrg(d.asn || []);
   const countries = d.country || [];
   const sumO = total(orgs), sumC = total(countries);
-  const hostColor = (k, i) => (k === "Unknown" ? "var(--axis)" : slotColor(i));
-  shareBar($("host-bar"), null, orgs, { color: (k) => hostColor(k, orgs.findIndex((r) => r[0] === k)) });
-  ranked($("host-list"), orgs, { color: hostColor, title: (r) => r[2].join(", ") });
+  shareBar($("host-bar"), null, orgs, { color: rankColor });
+  ranked($("host-list"), orgs, { color: rankColor, title: (r) => r[2].join(", ") });
   const cLabel = (k) => (k === "Unknown" ? "Unknown" : `${flag(k)} ${countryName(k)}`);
-  shareBar($("country-bar"), null, countries, { color: (k) => hostColor(k, countries.findIndex((r) => r[0] === k)), label: cLabel });
-  ranked($("country-list"), countries, { color: hostColor, label: cLabel });
-  if (!orgs.length) { $("where-lede").textContent = ""; return; }
-  const top3 = total(orgs.slice(0, 3));
-  const [c0] = countries;
-  $("where-lede").textContent = `${orgs[0][0]} hosts ${pct(orgs[0][1] / sumO)} of ${noun()}, and the three largest providers host ${pct(top3 / sumO)}.` +
+  shareBar($("country-bar"), null, countries, { color: rankColor, label: cLabel });
+  ranked($("country-list"), countries, { color: rankColor, label: cLabel });
+  // Lead with real providers and countries; "Unknown" (not geolocated yet) only counts in the totals.
+  const known = (rows) => rows.filter(([k]) => k !== "Unknown");
+  const [o0] = known(orgs), [c0] = known(countries);
+  if (!o0) { $("where-lede").textContent = ""; return; }
+  $("where-lede").textContent = `${o0[0]} hosts ${pct(o0[1] / sumO)} of ${noun()}, and the three largest providers host ${pct(total(known(orgs).slice(0, 3)) / sumO)}.` +
     (c0 ? ` ${countryName(c0[0])} alone has ${pct(c0[1] / sumC)}.` : "");
 }
 
@@ -184,17 +184,18 @@ function renderReach() {
   $("reach-bar").hidden = !rows.length;
   $("reach-legend").hidden = !rows.length;
   if (rows.length) shareBar($("reach-bar"), $("reach-legend"), rows, { color: (k) => colors[k], label: (k) => names[k] });
+  const lede = $("reach-lede");
   if (scope === "nonmn") {
-    $("reach-lede").textContent = `${fmt(total(d.version || []))} other full nodes accept connections. Nodes that only connect out can't be seen from outside, so the real number is higher.`;
+    lede.textContent = `${fmt(total(d.version || []))} other full nodes accept connections. Nodes that only connect out can't be seen from outside, so the real number is higher.`;
   } else if (scope === "all") {
-    $("reach-lede").textContent = `${fmt(c.reachable)} nodes answered out of ${fmt(c.tried)} addresses tried. Counted are nodes that answered at least once this week, plus every enabled masternode.`;
+    lede.textContent = `${fmt(c.reachable)} nodes answered out of ${fmt(c.tried)} addresses tried. Counted are nodes that answered at least once this week, plus every enabled masternode.`;
   } else {
-    $("reach-lede").textContent = yes + no
+    lede.textContent = yes + no
       ? `${pct(yes / (yes + no))} of enabled ${noun()} answered our handshake on their registered address; ${fmt(no)} didn't.`
       : "";
   }
   if (no && scope !== "all") {
-    $("reach-lede").append(" ", el("a", { href: href(`/masternodes?status=Unreachable${scope === "evo" ? "&type=Evo" : ""}`), text: "See which" }));
+    lede.append(" ", el("a", { href: href(`/masternodes?status=Unreachable${scope === "evo" ? "&type=Evo" : ""}`), text: "See which" }));
   }
   renderNetworks();
 }
@@ -209,7 +210,7 @@ function renderNetworks() {
       el("thead", {}, el("tr", {}, el("th", { text: "Network" }), el("th", { class: "r", text: "Known addresses" }),
         el("th", { class: "r", text: "Reachable now" }), el("th", { class: "r", text: "Masternodes" }))),
       el("tbody", {}, ...nets.map((n) => el("tr", {},
-        el("td", { text: NETWORKS[n.network] || n.network }),
+        el("td", { text: ADDRESS_NETWORKS[n.network] || n.network }),
         el("td", { class: "r", text: fmt(n.known) }),
         n.crawled
           ? el("td", { class: "r", text: fmt(n.reachable) })
@@ -217,13 +218,17 @@ function renderNetworks() {
         el("td", { class: "r", text: n.crawled ? fmt(n.masternodes) : "–" })))))));
 }
 
+let historyRequest = 0;
+
 async function loadHistory() {
+  const mine = ++historyRequest;
   versionsChart?.loading();
   sizeChart?.loading();
   const [v, s] = await Promise.all([
     api(`${net}/history?scope=${scope}&dim=version&days=${days}&top=6`),
     api(`${net}/history?dim=totals&days=${days}`),
   ]);
+  if (mine !== historyRequest) return; // a newer scope or range was picked meanwhile
   const labels = { reachable_nodes: "Reachable nodes", masternodes: "Enabled masternodes", masternodes_reachable: "Masternodes reachable" };
   const vopts = { stacked: true, share: true, palette: versionPalette, label: (k) => (k === "Unknown" ? "No answer this week" : k), title: "Version share over time", height: 240 };
   const sopts = { stacked: false, palette: sizePalette, label: (k) => labels[k] || k, title: "Network size", height: 220 };
@@ -268,7 +273,7 @@ async function main() {
     return;
   }
   renderHero();
-  renderHeroMap().catch(() => {});
+  heroPoints().then((points) => worldMap($("hero-map"), points)).catch(() => {});
   renderControls();
   renderSections();
   await loadHistorySafely();

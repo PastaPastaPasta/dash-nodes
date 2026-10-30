@@ -1,11 +1,11 @@
-// Hand-rolled SVG charts: stacked area / line time series with a crosshair tooltip, and bar lists.
+// Hand-rolled SVG charts: stacked area / line time series with a crosshair tooltip.
 // Marks follow the dataviz reference: 2px lines, hairline solid grid, 2px surface gaps, colors by role.
 import { el, compact, fmt } from "./common.js";
 
 const SVG = "http://www.w3.org/2000/svg";
 const SLOTS = 6;
 
-function svg(tag, attrs = {}) {
+export function svg(tag, attrs = {}) {
   const e = document.createElementNS(SVG, tag);
   for (const [k, v] of Object.entries(attrs)) if (v != null) e.setAttribute(k, v);
   return e;
@@ -210,30 +210,4 @@ export function timeChart(container, data, opts) {
     update(data, opts) { state = { data, opts: { ...state.opts, ...opts } }; container.classList.remove("loading"); draw(); },
     loading() { container.classList.add("loading"); },
   };
-}
-
-/** Ranked horizontal bars. rows: [[key, count], ...] sorted desc. Single series: one color. */
-export function barList(container, rows, { label = (k) => k, limit = 8, total } = {}) {
-  const sum = total ?? rows.reduce((a, r) => a + r[1], 0);
-  let expanded = false;
-  const render = () => {
-    const shown = expanded ? rows : rows.slice(0, limit);
-    const max = Math.max(1, ...shown.map((r) => r[1]));
-    const grid = el("div", { class: "bars" });
-    for (const [k, v] of shown) {
-      const name = label(k);
-      grid.append(
-        el("div", { class: "k", title: typeof name === "string" ? name : k }, name),
-        el("div", { class: "track" }, el("div", { class: `fill${k === "Unknown" ? " other" : ""}`, style: { width: `${(v / max) * 100}%` } })),
-        el("div", { class: "v" }, fmt(v), el("small", { text: sum ? `${((v / sum) * 100).toFixed(1)}%` : "" })),
-      );
-    }
-    const parts = [rows.length ? grid : el("div", { class: "empty", text: "No data yet" })];
-    if (rows.length > limit) {
-      parts.push(el("button", { class: "more", type: "button", onclick: () => { expanded = !expanded; render(); },
-        text: expanded ? "Show fewer" : `Show all ${rows.length}` }));
-    }
-    container.replaceChildren(...parts);
-  };
-  render();
 }

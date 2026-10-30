@@ -1,8 +1,8 @@
 // Network map: masternodes (or every reachable node, counted per city) on a self-hosted Natural Earth
 // basemap. MapLibre draws it on the GPU so zoom and pan stay smooth; clusters are small DOM donuts.
 import { Map as GLMap, Marker, Popup, NavigationControl, AttributionControl, LngLatBounds } from "/assets/vendor/maplibre-gl.mjs";
-import { api, chrome, currentNet, el, fmt, pct, compact, href, place, shortHash, badge, nodeStatus, evoPill,
-  mnFilters, mnMatches, rememberParams, filterQuery, countBy, countryName, flag } from "./common.js";
+import { api, chrome, currentNet, el, fmt, pct, compact, href, place, shortHash, badge, nodeStatus, evoPill, mnFilters, mnMatches,
+  rememberParams, filterQuery, countBy, segmented, filterSelect, searchBox, STATUSES, TYPE_OPTIONS, versionOptions, countryOptions } from "./common.js";
 
 chrome("map", { footer: false });
 const net = currentNet();
@@ -25,7 +25,6 @@ let group = null; // masternodes at one place, listed in the panel
 // A mode maps a masternode to a legend category and a category to a tone. Tones are CSS color roles,
 // so markers, donuts and chips agree in both themes.
 const STATUS_TONES = { Reachable: "good", Unreachable: "critical", "PoSe-banned": "serious", "Not checked": "axis" };
-const STATUSES = Object.keys(STATUS_TONES);
 const MODES = {
   status: { label: "Status", key: (m) => nodeStatus(m)[1], order: STATUSES, tone: (k) => STATUS_TONES[k] },
   version: { label: "Version" }, // filled in from the data by assignVersionTones()
@@ -135,37 +134,34 @@ map.touchZoomRotate.disableRotation();
 map.keyboard.disableRotation();
 map.addControl(new NavigationControl({ showCompass: false }), "bottom-right");
 map.addControl(new AttributionControl({ compact: true, customAttribution: "Basemap © Natural Earth · Geolocation by DB-IP (CC BY 4.0)" }), "bottom-right");
-map.on("zoom", () => { if (map.getZoom() >= HIGH - 0.6) addDetail(); });
+// Phones: start with the attribution folded into its (i) button instead of across the map.
+if (matchMedia("(max-width: 900px)").matches) {
+  map.once("load", () => document.querySelector(".maplibregl-ctrl-attrib")?.classList.remove("maplibregl-compact-show"));
+}
+map.on("zoom", () => { if (map.isStyleLoaded() && map.getZoom() >= HIGH - 0.6) addDetail(); });
 window.addEventListener("themechange", () => { repaint(); refreshClusters(true); });
 
 // ---- data on the map ----
 
+/** Masternodes matching the search and selects; the chips then hide categories of these on the map. */
+const filtered = () => rows.filter((m) => mnMatches(m, state));
+
 function visible() {
   const mode = MODES[state.color];
-  return rows.filter((m) => mnMatches(m, state) && !state.hidden.has(mode.key(m)));
+  return filtered().filter((m) => !state.hidden.has(mode.key(m)));
 }
+
+const collection = (features) => ({ type: "FeatureCollection", features });
+const feature = (lon, lat, properties) => ({ type: "Feature", geometry: { type: "Point", coordinates: [lon, lat] }, properties });
 
 function mnFeatures(list) {
   const mode = MODES[state.color];
-  return {
-    type: "FeatureCollection",
-    features: list.filter((m) => m.lat != null && m.lon != null).map((m) => ({
-      type: "Feature",
-      geometry: { type: "Point", coordinates: [m.lon, m.lat] },
-      properties: { protx: m.protx, tone: mode.tone(mode.key(m)), evo: m.type === "Evo" },
-    })),
-  };
+  return collection(list.filter((m) => m.lat != null && m.lon != null)
+    .map((m) => feature(m.lon, m.lat, { protx: m.protx, tone: mode.tone(mode.key(m)), evo: m.type === "Evo" })));
 }
 
 function nodeFeatures() {
-  return {
-    type: "FeatureCollection",
-    features: (geo?.points || []).map((p, i) => ({
-      type: "Feature",
-      geometry: { type: "Point", coordinates: [p.lon, p.lat] },
-      properties: { i, nodes: p.nodes, masternodes: p.masternodes },
-    })),
-  };
+  return collection((geo?.points || []).map((p, i) => feature(p.lon, p.lat, { i, nodes: p.nodes, masternodes: p.masternodes })));
 }
 
 function addDataLayers() {
@@ -186,43 +182,37 @@ function addDataLayers() {
     type: "geojson", data: nodeFeatures(), cluster: true, clusterRadius: 50, clusterMaxZoom: 9,
     clusterProperties: { nodes: ["+", ["get", "nodes"]], masternodes: ["+", ["get", "masternodes"]] },
   });
+  // MapLibre only loads sources a layer uses; this invisible one keeps "nodes" queryable for its donuts.
+  map.addLayer({ id: "nodes-anchor", type: "circle", source: "nodes", paint: { "circle-radius": 0, "circle-opacity": 0 } });
   map.on("click", "mn-point", (e) => {
     const m = byProtx.get(e.features[0].properties.protx);
     if (m) openPopup(m);
   });
   map.on("mouseenter", "mn-point", () => { map.getCanvas().style.cursor = "pointer"; });
   map.on("mouseleave", "mn-point", () => { map.getCanvas().style.cursor = ""; });
-  map.on("render", () => refreshClusters());
+  // Donuts follow the clustering: refreshed at most every 120 ms while frames render, and once the map is idle.
+  let last = 0;
+  map.on("render", () => { const now = performance.now(); if (now - last > 120) { last = now; refreshClusters(); } });
+  map.on("idle", () => refreshClusters());
 }
 
-// Clusters (and, for all nodes, every city) are DOM donuts: one marker per cluster on screen, reused
-// while the cluster exists, dropped when the data or theme changes.
-let markers = new Map();
+// Clusters (and, for all nodes, every city) are DOM donuts: one marker per cluster on screen, kept
+// while that cluster stays in view, dropped when the data or theme changes.
 let shown = new Map();
-
-const sourceId = () => (state.layer === "mn" ? "mn" : "nodes");
 
 function refreshClusters(reset = false) {
   if (reset) {
     for (const m of shown.values()) m.remove();
-    markers = new Map();
     shown = new Map();
   }
-  const src = sourceId();
+  const src = state.layer; // the layer names its source
   if (!map.getSource(src) || !map.isSourceLoaded(src)) return;
   const next = new Map();
-  for (const f of map.querySourceFeatures(src)) {
+  for (const f of map.querySourceFeatures(src, src === "mn" ? { filter: ["has", "point_count"] } : undefined)) {
     const p = f.properties;
-    if (src === "mn" && !p.cluster) continue;
     const id = p.cluster ? `c${p.cluster_id}` : `p${p.i}`;
     if (next.has(id)) continue;
-    let mk = markers.get(id);
-    if (!mk) {
-      mk = new Marker({ element: src === "mn" ? mnDonut(f) : nodeDonut(f) }).setLngLat(f.geometry.coordinates);
-      markers.set(id, mk);
-    }
-    next.set(id, mk);
-    if (!shown.has(id)) mk.addTo(map);
+    next.set(id, shown.get(id) || new Marker({ element: src === "mn" ? mnDonut(f) : nodeDonut(f) }).setLngLat(f.geometry.coordinates).addTo(map));
   }
   for (const [id, mk] of shown) if (!next.has(id)) mk.remove();
   shown = next;
@@ -240,7 +230,7 @@ function donut(segments, total, label, onClick) {
   return el("button", {
     type: "button", class: "donut", "aria-label": label, title: label,
     style: { width: `${size}px`, height: `${size}px`, background: `conic-gradient(${stops.join(", ")})` },
-    onclick: (e) => { e.stopPropagation(); onClick(); },
+    onclick: (e) => { e.stopPropagation(); Promise.resolve(onClick()).catch(() => {}); },
   }, el("span", { text: compact(total) }));
 }
 
@@ -265,8 +255,10 @@ function nodeDonut(f) {
 /** Zooms into a cluster; when it can't split any further (one place), `atBottom` runs instead. */
 async function zoomInto(src, id, center, atBottom) {
   const zoom = await map.getSource(src).getClusterExpansionZoom(id);
-  if (zoom > map.getMaxZoom()) atBottom();
-  else map.easeTo({ center, zoom, duration: 450 });
+  if (zoom > map.getMaxZoom()) return atBottom();
+  map.easeTo({ center, zoom, duration: 450 });
+  // From the keyboard, the focused donut is about to be replaced: keep focus on the map instead.
+  if (document.activeElement?.matches(".donut:focus-visible")) map.getCanvas().focus();
 }
 
 function openCluster(f) {
@@ -319,6 +311,9 @@ const body = document.getElementById("panel-body");
 const handle = document.getElementById("panel-handle");
 handle.addEventListener("click", () => setOpen(!panel.classList.contains("open")));
 
+// Phones: the map controls sit just above the bottom sheet, whatever its height.
+new ResizeObserver(() => document.documentElement.style.setProperty("--sheet-h", `${panel.offsetHeight}px`)).observe(panel);
+
 function setOpen(open) {
   panel.classList.toggle("open", open);
   handle.setAttribute("aria-expanded", String(open));
@@ -329,44 +324,24 @@ const chips = el("div", { class: "chips", role: "group", "aria-label": "Show or 
 const groupBox = el("section", { class: "mp-group", hidden: true, "aria-live": "polite" });
 const foot = el("p", { class: "mp-foot" });
 
-function seg(options, value, onChange, label) {
-  const root = el("div", { class: "seg", role: "group", "aria-label": label });
-  for (const [v, text, disabled] of options) {
-    root.append(el("button", {
-      type: "button", "aria-pressed": String(v === value), disabled,
-      onclick: (e) => {
-        for (const b of root.children) b.setAttribute("aria-pressed", String(b === e.currentTarget));
-        onChange(v);
-      },
-    }, text));
-  }
-  return root;
+function refilter() {
+  group = null;
+  render();
 }
 
-function filterSelect(name, label, options) {
-  const s = el("select", { "aria-label": label, onchange: () => { state[name] = s.value; group = null; render(); } },
-    el("option", { value: "", text: `Any ${label.toLowerCase()}` }), ...options.map(([v, t]) => el("option", { value: v, text: t })));
-  s.value = state[name];
-  return s;
-}
+const pick = (name, label, options) => filterSelect(state, name, label, options, refilter, `Any ${label.toLowerCase()}`);
 
 function buildPanel() {
-  const search = el("input", { type: "search", placeholder: "Search ProTx, IP, city, hosting", value: state.q, "aria-label": "Search masternodes" });
-  let timer;
-  search.addEventListener("input", () => { clearTimeout(timer); timer = setTimeout(() => { state.q = search.value; group = null; render(); }, 150); });
-  head.replaceChildren(search, headline);
-  const layers = seg([["mn", "Masternodes"], ["nodes", geo ? "All nodes" : "All nodes (soon)", !geo]], state.layer,
-    (v) => { state.layer = v; group = null; render(); }, "Show");
-  const colors = seg(Object.entries(MODES).map(([k, m]) => [k, m.label]), state.color,
+  head.replaceChildren(searchBox(state, refilter, "Search ProTx, IP, city, hosting", "Search masternodes"), headline);
+  const layers = segmented([["mn", "Masternodes"], ["nodes", geo ? "All nodes" : "All nodes (soon)", !geo]], state.layer,
+    (v) => { state.layer = v; refilter(); }, "Show");
+  const colors = segmented(Object.entries(MODES).map(([k, m]) => [k, m.label]), state.color,
     (v) => { state.color = v; state.hidden.clear(); render(); }, "Color by");
   body.replaceChildren(
     el("div", { class: "mp-row" }, el("span", { class: "mp-label", text: "Show" }), layers),
     el("div", { class: "mp-row mn-only" }, el("span", { class: "mp-label", text: "Color" }), colors),
     chips,
-    el("div", { class: "mp-filters mn-only" },
-      filterSelect("type", "Type", [["Regular", "Regular"], ["Evo", "Evo"]]),
-      filterSelect("version", "Version", countBy(rows, (r) => r.version || "Unknown").map(([v, n]) => [v, `${v} (${fmt(n)})`])),
-      filterSelect("country", "Country", countBy(rows, (r) => r.country || "Unknown").map(([c, n]) => [c, `${flag(c)} ${countryName(c)} (${fmt(n)})`]))),
+    el("div", { class: "mp-filters mn-only" }, pick("type", "Type", TYPE_OPTIONS), pick("version", "Version", versionOptions(rows)), pick("country", "Country", countryOptions(rows))),
     groupBox, foot);
 }
 
@@ -378,12 +353,12 @@ function renderChips() {
     return;
   }
   const mode = MODES[state.color];
-  const counts = new Map(countBy(rows.filter((m) => m.lat != null && mnMatches(m, state)), mode.key));
+  const counts = new Map(countBy(filtered(), mode.key));
   chips.replaceChildren(...mode.order.filter((k) => counts.get(k)).map((k) => {
     const on = !state.hidden.has(k);
     return el("button", {
       type: "button", class: "chip", "aria-pressed": String(on), title: on ? `Hide ${k}` : `Show ${k}`,
-      onclick: () => { if (on) state.hidden.add(k); else state.hidden.delete(k); group = null; render(); },
+      onclick: () => { if (on) state.hidden.add(k); else state.hidden.delete(k); refilter(); },
     }, el("i", { class: `t-${mode.tone(k)}` }), el("span", { text: k }), el("b", { class: "num", text: fmt(counts.get(k)) }));
   }));
 }
@@ -394,14 +369,14 @@ function showGroup(list) {
   setOpen(true);
 }
 
+const groupHead = (title, onClose) =>
+  el("div", { class: "mp-row" }, el("h2", { text: title }), el("button", { class: "link", type: "button", onclick: onClose, text: "Close" }));
+
 function showCity(p) {
-  const point = p.cluster ? null : geo.points[p.i];
-  const title = point?.country ? `${flag(point.country)} ${[point.city, countryName(point.country)].filter(Boolean).join(", ")}` : "This area";
   group = null;
   groupBox.hidden = false;
   groupBox.replaceChildren(
-    el("div", { class: "mp-row" }, el("h2", { text: title }),
-      el("button", { class: "link", type: "button", onclick: () => { groupBox.hidden = true; }, text: "Close" })),
+    groupHead((!p.cluster && place(geo.points[p.i])) || "This area", () => { groupBox.hidden = true; }),
     el("p", { class: "sub", text: `${fmt(p.nodes)} reachable nodes: ${fmt(p.masternodes)} masternodes and ${fmt(p.nodes - p.masternodes)} other full nodes.` }));
   setOpen(true);
 }
@@ -416,8 +391,7 @@ function renderGroup() {
   const title = places.size === 1 ? place(group[0]) || "Same location" : `${places.size} places nearby`;
   const reach = group.filter((m) => nodeStatus(m)[1] === "Reachable").length;
   groupBox.replaceChildren(
-    el("div", { class: "mp-row" }, el("h2", { text: title }),
-      el("button", { class: "link", type: "button", onclick: () => { group = null; renderGroup(); }, text: "Close" })),
+    groupHead(title, () => { group = null; renderGroup(); }),
     el("p", { class: "sub", text: `${fmt(group.length)} masternodes, ${fmt(reach)} reachable.` }),
     el("ul", { class: "mn-list" }, ...sorted.map((m) => {
       const [k, l] = nodeStatus(m);
@@ -429,7 +403,7 @@ function renderGroup() {
     })));
 }
 
-function renderHeadline(list) {
+function renderHeadline() {
   if (state.layer === "nodes") {
     const pts = geo?.points || [];
     const total = pts.reduce((a, p) => a + p.nodes, 0);
@@ -438,15 +412,19 @@ function renderHeadline(list) {
     foot.textContent = geo?.unlocated ? `${fmt(geo.unlocated)} reachable nodes on Tor or I2P have no location, so they aren't drawn.` : "";
     return;
   }
+  const list = filtered();
   const enabled = list.filter((m) => m.status === "enabled");
   const reach = enabled.filter((m) => m.reachable === true).length;
   const banned = list.length - enabled.length;
   headline.replaceChildren(el("b", { class: "num", text: fmt(reach) }), ` of ${fmt(enabled.length)} enabled masternodes answered the latest crawl`,
     banned ? `; ${fmt(banned)} more are PoSe-banned.` : ".");
   const missing = list.filter((m) => m.lat == null).length;
+  // On the list, one visible status chip is its status filter.
+  const statuses = state.color === "status" ? STATUSES.filter((k) => !state.hidden.has(k)) : [];
+  const query = filterQuery({ ...state, status: statuses.length === 1 ? statuses[0] : "" });
   foot.replaceChildren(
-    missing ? `${fmt(missing)} have no location (no address registered, or not crawled yet). ` : "",
-    el("a", { href: href(`/masternodes${filterQuery(state)}`), text: "Open these as a list" }));
+    missing ? `${fmt(missing)} aren't on the map: no address registered, or not crawled yet. ` : "",
+    el("a", { href: href(`/masternodes${query}`), text: "Open these as a list" }));
 }
 
 function remember() {
@@ -462,10 +440,11 @@ function render() {
   panel.dataset.layer = state.layer;
   const list = visible();
   map.getSource("mn").setData(mnFeatures(state.layer === "mn" ? list : []));
-  map.getSource("nodes").setData(state.layer === "nodes" ? nodeFeatures() : { type: "FeatureCollection", features: [] });
+  map.getSource("nodes").setData(state.layer === "nodes" ? nodeFeatures() : collection([]));
   if (state.layer !== "mn") popup?.remove();
+  if (popup && !list.some((m) => m.protx === state.protx)) popup.remove();
   renderChips();
-  renderHeadline(list);
+  renderHeadline();
   renderGroup();
   remember();
   // Cluster ids change with the data: drop the donuts now, rebuild once the source has re-clustered.

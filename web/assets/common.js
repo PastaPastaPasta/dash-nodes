@@ -101,7 +101,9 @@ export function badge(kind, label) {
   return el("span", { class: `badge ${kind}` }, el("i"), label);
 }
 
-/** One status per masternode; PoSe ban outranks the port check. Returns [badge kind, label]. */
+export const STATUSES = ["Reachable", "Unreachable", "PoSe-banned", "Not checked"];
+
+/** One status per masternode, one of STATUSES; PoSe ban outranks the port check. Returns [badge kind, label]. */
 export function nodeStatus(m, unchecked = "Not checked") {
   if (m.status === "pose_banned") return ["serious", "PoSe-banned"];
   if (m.reachable === true) return ["good", "Reachable"];
@@ -152,26 +154,38 @@ export function countBy(rows, key) {
   return [...m.entries()].sort((a, b) => b[1] - a[1]);
 }
 
+/** A select bound to `f[name]`: choosing stores the value and calls onChange. `any` names the empty option. */
+export function filterSelect(f, name, label, options, onChange, any = "All") {
+  const s = el("select", { "aria-label": label, onchange: () => { f[name] = s.value; onChange(); } },
+    el("option", { value: "", text: any }), ...options.map(([v, t]) => el("option", { value: v, text: t })));
+  s.value = f[name];
+  return s;
+}
+
+/** Search box bound to `f.q`, applied 150 ms after typing stops. */
+export function searchBox(f, onChange, placeholder, label) {
+  const search = el("input", { type: "search", placeholder, value: f.q, "aria-label": label });
+  let timer;
+  search.addEventListener("input", () => { clearTimeout(timer); timer = setTimeout(() => { f.q = search.value; onChange(); }, 150); });
+  return search;
+}
+
+export const TYPE_OPTIONS = [["Regular", "Regular"], ["Evo", "Evo"]];
+export const versionOptions = (rows) => countBy(rows, (r) => r.version || "Unknown").map(([v, n]) => [v, `${v} (${fmt(n)})`]);
+export const countryOptions = (rows) => countBy(rows, (r) => r.country || "Unknown").map(([c, n]) => [c, `${flag(c)} ${countryName(c)} (${fmt(n)})`]);
+
 /**
  * Search box and selects for the shared masternode filters. They edit `f` in place and call
  * onChange; option lists and counts come from `rows`.
  */
 export function filterControls(rows, f, onChange) {
-  const select = (name, label, options) => {
-    const s = el("select", { "aria-label": label, onchange: () => { f[name] = s.value; onChange(); } },
-      el("option", { value: "", text: "All" }), ...options.map(([v, t]) => el("option", { value: v, text: t })));
-    s.value = f[name];
-    return el("label", {}, label, s);
-  };
-  const search = el("input", { type: "search", placeholder: "ProTx, IP, payout address, hosting…", value: f.q, "aria-label": "Search" });
-  let timer;
-  search.addEventListener("input", () => { clearTimeout(timer); timer = setTimeout(() => { f.q = search.value; onChange(); }, 150); });
+  const select = (name, label, options) => el("label", {}, label, filterSelect(f, name, label, options, onChange));
   return [
-    search,
-    select("type", "Type", [["Regular", "Regular"], ["Evo", "Evo"]]),
-    select("status", "Status", ["Reachable", "Unreachable", "PoSe-banned", "Not checked"].map((s) => [s, s])),
-    select("version", "Version", countBy(rows, (r) => r.version || "Unknown").map(([v, n]) => [v, `${v} (${fmt(n)})`])),
-    select("country", "Country", countBy(rows, (r) => r.country || "Unknown").map(([c, n]) => [c, `${flag(c)} ${countryName(c)} (${fmt(n)})`])),
+    searchBox(f, onChange, "ProTx, IP, payout address, hosting…", "Search"),
+    select("type", "Type", TYPE_OPTIONS),
+    select("status", "Status", STATUSES.map((s) => [s, s])),
+    select("version", "Version", versionOptions(rows)),
+    select("country", "Country", countryOptions(rows)),
   ];
 }
 
@@ -215,17 +229,17 @@ export function chrome(page, { footer = true } = {}) {
   const seg = el("div", { class: "seg net", role: "group", "aria-label": "Network" },
     ...NETWORKS.map((n) => el("button", {
       type: "button", "data-net": n, "aria-pressed": String(n === net),
-      onclick: () => n !== net && setNet(n), text: n === "mainnet" ? "Mainnet" : "Testnet",
-    })));
+      onclick: () => n !== net && setNet(n), "aria-label": n === "mainnet" ? "Mainnet" : "Testnet",
+    }, n === "mainnet" ? "Main" : "Test", el("span", { class: "net-full", text: "net" }))));
   const status = el("span", { class: "chain-status", id: "chain-status" }, el("span", { class: "dot" }), "connecting…");
   const theme = el("button", { class: "theme-toggle", type: "button", "aria-label": "Toggle dark mode", title: "Toggle dark mode" });
   const paintTheme = () => { theme.innerHTML = isDark() ? SUN : MOON; };
+  const themeChanged = () => { paintTheme(); window.dispatchEvent(new Event("themechange")); };
   theme.addEventListener("click", () => {
     const next = isDark() ? "light" : "dark";
     localStorage.setItem("theme", next);
     document.documentElement.dataset.theme = next;
-    paintTheme();
-    window.dispatchEvent(new Event("themechange"));
+    themeChanged();
   });
   paintTheme();
   const brand = el("a", { class: "brand", href: href("/") });
@@ -235,9 +249,7 @@ export function chrome(page, { footer = true } = {}) {
     el("div", { class: "top-inner" }, brand, nav, el("div", { class: "top-right" }, status, seg, theme)));
   document.body.prepend(header);
 
-  matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
-    if (!localStorage.getItem("theme")) { paintTheme(); window.dispatchEvent(new Event("themechange")); }
-  });
+  matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { if (!localStorage.getItem("theme")) themeChanged(); });
   if (footer) document.body.append(el("footer", { class: "bottom" }, el("div", { class: "inner" },
     el("span", {}, "An independent Dash network monitor. Crawls the P2P network every 15 minutes from one vantage point; reachability is as seen from there."),
     el("span", {},
@@ -271,12 +283,12 @@ async function refreshStatus() {
   }
 }
 
-/** Segmented control. Returns the element; calls onChange(value). */
+/** Segmented control over [value, text, disabled?] options. Returns the element; calls onChange(value). */
 export function segmented(options, value, onChange, label) {
   const root = el("div", { class: "seg", role: "group", "aria-label": label });
   const paint = (v) => root.querySelectorAll("button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.v === v)));
-  for (const [v, text] of options) {
-    root.append(el("button", { type: "button", "data-v": v, onclick: () => { paint(v); onChange(v); }, text }));
+  for (const [v, text, disabled] of options) {
+    root.append(el("button", { type: "button", "data-v": v, disabled, onclick: () => { paint(v); onChange(v); }, text }));
   }
   paint(value);
   return root;

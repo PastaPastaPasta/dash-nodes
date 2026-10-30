@@ -1,7 +1,8 @@
 // A small static world map in the Equal Earth projection: land from the self-hosted Natural Earth file,
 // one dot per city with reachable nodes, sized by how many. Used as the overview's hero.
 
-const SVG = "http://www.w3.org/2000/svg";
+import { svg } from "./charts.js";
+
 const A1 = 1.340264, A2 = -0.081106, A3 = 0.000893, A4 = 0.003796, M = Math.sqrt(3) / 2;
 const X_MAX = 2.7064, Y_MAX = 1.3173; // projected extent of the whole globe
 
@@ -14,12 +15,6 @@ function project(lon, lat) {
   const y = t * (A1 + A2 * t2 + t6 * (A3 + A4 * t2));
   return [((x + X_MAX) / (2 * X_MAX)) * 1000, ((Y_MAX - y) / (2 * Y_MAX)) * 487];
 }
-
-const svg = (tag, attrs = {}) => {
-  const e = document.createElementNS(SVG, tag);
-  for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
-  return e;
-};
 
 function ringPath(ring) {
   let d = "";
