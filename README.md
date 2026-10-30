@@ -156,3 +156,7 @@ Production runs in container the host (`dash-nodes`, 192.0.2.10, 8 cores / 12 GB
   Without a TUN device, leave the `cjdns` profile off and `CJDNS=false`.
 - **Data:** SQLite in the `dash-nodes_app-data` volume (`mainnet.sqlite`, `testnet.sqlite`,
   `geo/`). Deleting a file rebuilds that network from scratch (history is lost).
+
+## License
+
+MIT, see [LICENSE](LICENSE). Vendored and third-party assets keep their own licenses (`web/assets/vendor/README.md`).
