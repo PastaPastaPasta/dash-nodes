@@ -208,6 +208,7 @@ services:
 
   publisher:
     image: node:${NODE_TAG:-24-alpine}
+    <<: *hardened
     restart: unless-stopped
     logging: *default-logging
     user: "1000:1000"
@@ -219,11 +220,14 @@ services:
       SOURCE: http://app:8080
       TARGET: ${PUBLISH_TARGET:-https://nodes.dashhq.org}
       INGEST_TOKEN_FILE: /run/secrets/ingest_token
+      STATE_FILE: /home/node/publisher.json
     secrets:
       - ingest_token
     volumes:
       - ../worker/src:/publisher/src:ro
       - ../worker/scripts:/publisher/scripts:ro
+      # Mounted over the image's /home/node (uid 1000), so the new volume is writable by the publisher.
+      - publisher-state:/home/node
     networks:
       - edge
 
@@ -252,6 +256,7 @@ volumes:
   dashd-mainnet:
   dashd-testnet:
   app-data:
+  publisher-state:
   tor-data:
   i2pd-data:
   cjdns-data:

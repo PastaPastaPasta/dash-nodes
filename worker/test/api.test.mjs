@@ -20,7 +20,8 @@ test("shards spread the first byte over 64 documents", () => {
 
 test("ingest keys are an allow-list", () => {
   for (const k of ["v1/status.json", "v1/mainnet/summary.json", "v1/testnet/mn/3f.json", "v1/mainnet/history/totals.json",
-    "v1/mainnet/history/mn/version.json", `v1/mainnet/payments/${"a".repeat(64)}.json`]) assert.ok(KEY.test(k), k);
+    "v1/mainnet/history/mn/version.json", `v1/mainnet/payments/${"a".repeat(64)}.json`,
+    `v1/mainnet/payments/${"a".repeat(64)}/25.json`]) assert.ok(KEY.test(k), k);
   for (const k of ["v1/devnet/summary.json", "v1/mainnet/../x.json", "v1/mainnet/history/mn/totals.json", "v1/mainnet/mn/3F.json",
     "status.json", "v1/mainnet/history/x/version.json"]) assert.ok(!KEY.test(k), k);
 });
@@ -36,11 +37,16 @@ test("route validates parameters before reading", async () => {
 
 test("history picks the range and narrows; payments page by height", async () => {
   const store = { "v1/mainnet/history/mn/version.json": { ranges: { 30: doc } },
-    [`v1/mainnet/payments/${"b".repeat(64)}.json`]: [{ height: 30 }, { height: 20 }, { height: 10 }] };
+    [`v1/mainnet/payments/${"b".repeat(64)}.json`]: { buckets: [2, 0] },
+    [`v1/mainnet/payments/${"b".repeat(64)}/2.json`]: [{ height: 200_030 }, { height: 200_020 }],
+    [`v1/mainnet/payments/${"b".repeat(64)}/0.json`]: [{ height: 30 }, { height: 20 }] };
   const get = async (k) => store[k] ?? null;
   const h = await route(["mainnet", "history"], new URLSearchParams("scope=mn&dim=version&top=2"), get);
   assert.deepEqual(h.series.map((s) => s.key), ["a", "b", "Other"]);
-  const p = await route(["mainnet", "masternodes", "b".repeat(64), "payments"], new URLSearchParams("before=30&limit=1"), get);
-  assert.deepEqual(p, { payments: [{ height: 20 }] });
+  const pay = (q) => route(["mainnet", "masternodes", "b".repeat(64), "payments"], new URLSearchParams(q), get);
+  assert.deepEqual(await pay("before=30&limit=1"), { payments: [{ height: 20 }] });
+  assert.deepEqual(await pay("limit=3"), { payments: [{ height: 200_030 }, { height: 200_020 }, { height: 30 }] });
+  assert.deepEqual(await pay("before=200021"), { payments: [{ height: 200_020 }, { height: 30 }, { height: 20 }] });
+  assert.deepEqual((await route(["mainnet", "masternodes", "c".repeat(64), "payments"], new URLSearchParams(""), get)), { payments: [] });
   await assert.rejects(route(["mainnet", "summary"], new URLSearchParams(""), get), (e) => e.status === 503);
 });
