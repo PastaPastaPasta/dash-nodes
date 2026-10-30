@@ -1,0 +1,18 @@
+# dash-nodes Tor client. The SOCKS port is only reachable on the compose network (it isn't
+# published), and SocksPolicy limits it to private ranges besides.
+SocksPort 0.0.0.0:9050 ExtendedErrors
+SocksPolicy accept 127.0.0.0/8
+SocksPolicy accept 10.0.0.0/8
+SocksPolicy accept 172.16.0.0/12
+SocksPolicy accept 192.168.0.0/16
+SocksPolicy reject *
+# Client only: never a relay, exit or directory mirror.
+ClientOnly 1
+ORPort 0
+DirPort 0
+ExitRelay 0
+ExitPolicy reject *:*
+ControlPort 0
+DataDirectory /var/lib/tor
+AvoidDiskWrites 1
+Log notice stdout

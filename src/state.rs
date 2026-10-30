@@ -1,15 +1,15 @@
-use std::net::SocketAddr;
 use std::sync::RwLock;
 use std::sync::atomic::AtomicBool;
 
 use serde::Serialize;
 
+use crate::addr::AddrNet;
 use crate::collector::ChainStatus;
 use crate::db::Db;
 use crate::geo::Geo;
 use crate::network::Network;
-use crate::p2p::{self, Timeouts};
 use crate::rpc::Rpc;
+use crate::transport::{NetLimits, TransportConfig};
 
 /// Everything the background tasks and API handlers share for one network.
 pub struct NetCtx {
@@ -30,17 +30,16 @@ pub struct NetCtx {
 #[derive(Clone, Debug)]
 pub struct CrawlConfig {
     pub interval_secs: u64,
-    pub concurrency: usize,
-    pub timeouts: Timeouts,
-    pub ipv6: bool,
+    pub transport: TransportConfig,
+    /// Timeouts and parallel probes, per address network (`AddrNet::index`).
+    pub limits: [NetLimits; AddrNet::COUNT],
     /// Max peers asked for addresses per crawl; each one is asked at most every 6 hours.
     pub getaddr_per_crawl: usize,
 }
 
 impl CrawlConfig {
-    /// Whether an address is worth probing: publicly routable, and IPv4 unless IPv6 crawling is on.
-    pub fn usable(&self, addr: &SocketAddr) -> bool {
-        p2p::is_routable(addr) && (self.ipv6 || addr.is_ipv4())
+    pub fn limits(&self, net: AddrNet) -> &NetLimits {
+        &self.limits[net.index()]
     }
 }
 

@@ -20,7 +20,9 @@ use tower_http::compression::CompressionLayer;
 use tower_http::services::{ServeDir, ServeFile};
 use tower_http::set_header::SetResponseHeaderLayer;
 
+use crate::addr::net_of;
 use crate::collector::{payments_range, pose_status};
+use crate::crawler::network_stats;
 use crate::db::{self, day_of, query_all};
 use crate::network::Network;
 use crate::state::NetCtx;
@@ -33,6 +35,7 @@ pub fn router(nets: Nets, web: &Path) -> Router {
         .route("/api/v1/status", get(status))
         .route("/api/v1/{net}/summary", get(summary))
         .route("/api/v1/{net}/history", get(history))
+        .route("/api/v1/{net}/geo", get(geo))
         .route("/api/v1/{net}/masternodes", get(masternodes))
         .route("/api/v1/{net}/masternodes/{protx}", get(masternode))
         .route("/api/v1/{net}/masternodes/{protx}/payments", get(payments))
@@ -185,14 +188,15 @@ fn latest_crawl(c: &Connection) -> rusqlite::Result<Option<i64>> {
     c.query_row("SELECT max(id) FROM crawls WHERE finished IS NOT NULL", [], |r| r.get(0))
 }
 
-/// Latest crawl and every distribution from it: `dists[scope][dim] = [[key, count], ...]`, largest first.
+/// Latest crawl and every distribution from it: `dists[scope][dim] = [[key, count], ...]`, largest
+/// first, plus per address network counts (`networks`, see crawler::network_stats).
 async fn summary(State(nets): State<Nets>, UrlPath(net): UrlPath<String>) -> ApiResult {
     let ctx = net_ctx(&nets, &net)?;
     let body = ctx
         .db
         .read(|c| {
             let Some(id) = latest_crawl(c)? else {
-                return Ok(json!({"crawl": null, "dists": {}}));
+                return Ok(json!({"crawl": null, "dists": {}, "networks": network_stats(c, 0, db::now(), None)?}));
             };
             let crawl = c.query_row("SELECT * FROM crawls WHERE id = ?1", [id], crawl_json)?;
             // The crawl closest to 24h earlier, for deltas.
@@ -215,7 +219,14 @@ async fn summary(State(nets): State<Nets>, UrlPath(net): UrlPath<String>) -> Api
                     v.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
                 }
             }
-            Ok(json!({"crawl": crawl, "day_ago": day_ago, "dists": dists}))
+            let stored: Option<String> =
+                c.query_row("SELECT networks FROM crawls WHERE id = ?1", [id], |r| r.get(0))?;
+            let networks = match stored.and_then(|s| serde_json::from_str::<Value>(&s).ok()) {
+                Some(v) => v,
+                // Crawls from before per-network stats were recorded.
+                None => json!(network_stats(c, id, started, None)?),
+            };
+            Ok(json!({"crawl": crawl, "day_ago": day_ago, "dists": dists, "networks": networks}))
         })
         .await?;
     Ok(Json(body))
@@ -238,7 +249,7 @@ async fn history(State(nets): State<Nets>, UrlPath(net): UrlPath<String>, Query(
     let scope = q.scope.unwrap_or_else(|| "all".into());
     let dim = q.dim;
     const DIMS: &[&str] =
-        &["totals", "ua", "version", "client", "protocol", "country", "asn", "reachable", "status", "type"];
+        &["totals", "ua", "version", "client", "protocol", "country", "asn", "network", "reachable", "status", "type"];
     if !DIMS.contains(&dim.as_str()) {
         return Err(ApiError(StatusCode::BAD_REQUEST, format!("unknown dim {dim}")));
     }
@@ -391,11 +402,13 @@ fn mn_json(r: &Row, latest: Option<i64>) -> rusqlite::Result<Value> {
         _ => None,
     };
     let ua: Option<String> = r.get("user_agent")?;
+    let service: Option<String> = r.get("service")?;
     Ok(json!({
         "protx": r.get::<_, String>("protx")?,
         "type": r.get::<_, String>("type")?,
         "status": pose_status(ban),
-        "service": r.get::<_, Option<String>>("service")?,
+        "network": service.as_deref().and_then(net_of),
+        "service": service,
         "payout_address": r.get::<_, Option<String>>("payout_address")?,
         "registered_height": r.get::<_, Option<i64>>("registered_height")?,
         "last_paid_height": r.get::<_, Option<i64>>("last_paid_height")?,
@@ -475,7 +488,7 @@ async fn masternode(State(nets): State<Nets>, UrlPath((net, protx)): UrlPath<(St
         .read(move |c| {
             let latest = latest_crawl(c)?;
             let sql = format!(
-                "SELECT {MN_COLUMNS}, m.collateral, m.collateral_address, m.platform_p2p, m.platform_https,
+                "SELECT {MN_COLUMNS}, m.core_p2p, m.collateral, m.collateral_address, m.platform_p2p, m.platform_https,
                     m.operator_payout_address, m.owner_address, m.voting_address, m.pubkey_operator,
                     m.consecutive_payments, m.pose_revived_height, m.revocation_reason, m.first_seen, m.removed,
                     n.services
@@ -496,6 +509,12 @@ async fn masternode(State(nets): State<Nets>, UrlPath((net, protx)): UrlPath<(St
                     for k in ["consecutive_payments", "pose_revived_height", "revocation_reason", "first_seen", "removed", "services"] {
                         v[k] = json!(r.get::<_, Option<i64>>(k)?);
                     }
+                    // Every core P2P address (v24 ProTx can list several, on any network), each with its network.
+                    let core_p2p: Vec<String> = r
+                        .get::<_, Option<String>>("core_p2p")?
+                        .and_then(|j| serde_json::from_str(&j).ok())
+                        .unwrap_or_else(|| v["service"].as_str().map(|s| vec![s.to_owned()]).unwrap_or_default());
+                    v["core_p2p"] = core_p2p.iter().map(|a| json!({"address": a, "network": net_of(a)})).collect();
                     Ok(v)
                 })
                 .optional()?
@@ -530,6 +549,41 @@ async fn masternode(State(nets): State<Nets>, UrlPath((net, protx)): UrlPath<(St
         })
         .await?;
     body.map(Json).ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "unknown protx".into()))
+}
+
+/// Where the latest crawl's reachable nodes are, by city coordinates, without their addresses.
+/// Onion and I2P nodes (and any IP without a location) are only counted in `unlocated`.
+async fn geo(State(nets): State<Nets>, UrlPath(net): UrlPath<String>) -> ApiResult {
+    let ctx = net_ctx(&nets, &net)?;
+    let body = ctx
+        .db
+        .read(|c| {
+            let Some(id) = latest_crawl(c)? else {
+                return Ok(json!({"crawl_id": null, "points": [], "unlocated": 0}));
+            };
+            let points: Vec<Value> = query_all(
+                c,
+                "SELECT lat, lon, max(city), max(country), count(*), sum(addr IN (SELECT addr FROM mn_addrs))
+                 FROM nodes WHERE last_crawl = ?1 AND last_ok = 1 AND lat IS NOT NULL AND lon IS NOT NULL
+                 GROUP BY lat, lon ORDER BY count(*) DESC, lat, lon",
+                [id],
+                |r| {
+                    Ok(json!({
+                        "lat": r.get::<_, f64>(0)?, "lon": r.get::<_, f64>(1)?,
+                        "city": r.get::<_, Option<String>>(2)?, "country": r.get::<_, Option<String>>(3)?,
+                        "nodes": r.get::<_, i64>(4)?, "masternodes": r.get::<_, i64>(5)?,
+                    }))
+                },
+            )?;
+            let unlocated: i64 = c.query_row(
+                "SELECT count(*) FROM nodes WHERE last_crawl = ?1 AND last_ok = 1 AND (lat IS NULL OR lon IS NULL)",
+                [id],
+                |r| r.get(0),
+            )?;
+            Ok(json!({"crawl_id": id, "points": points, "unlocated": unlocated}))
+        })
+        .await?;
+    Ok(Json(body))
 }
 
 fn recent_payments(c: &Connection, protx: &str, before: Option<i64>, limit: i64) -> Result<Vec<Value>> {

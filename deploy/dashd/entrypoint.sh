@@ -8,7 +8,13 @@
 #   RPC_PASSWORD_FILE  file holding the RPC password           (default /run/secrets/rpc_password)
 #   RPC_ALLOW_CIDR     who may call RPC besides localhost      (default 172.30.86.0/24, the compose net)
 #   DASHD_DBCACHE_MB   -dbcache in MiB                         (default 1024)
+#   DASHD_ONION        Tor SOCKS5 proxy ip:port for .onion peers (-onion; default none)
+#   DASHD_I2PSAM       i2pd SAM bridge ip:port for I2P peers (-i2psam, outbound only; default none)
+#   DASHD_CJDNSREACHABLE  true if this container can route fc00::/8 (-cjdnsreachable; default false)
 #   DASHD_EXTRA_ARGS   extra dashd flags, word-split
+#
+# The overlay options let dashd connect to (and so keep in its address manager, which the crawler
+# reads) onion, I2P and CJDNS peers. dashd resolves them once at startup: use IP addresses.
 set -eu
 umask 077
 
@@ -39,6 +45,18 @@ cp /etc/dash-nodes/dash.conf "$CONF"
   echo "rpcuser=$RPC_USER"
   echo "rpcpassword=$RPC_PASSWORD"
   echo "dbcache=${DASHD_DBCACHE_MB:-1024}"
+  if [ -n "${DASHD_ONION:-}" ]; then
+    echo "onion=$DASHD_ONION"
+    # Outbound only: no onion service of our own (listen=0 anyway).
+    echo 'listenonion=0'
+  fi
+  if [ -n "${DASHD_I2PSAM:-}" ]; then
+    echo "i2psam=$DASHD_I2PSAM"
+    echo 'i2pacceptincoming=0'
+  fi
+  case "${DASHD_CJDNSREACHABLE:-false}" in
+    true | TRUE | True | 1 | yes | on) echo 'cjdnsreachable=1' ;;
+  esac
 } >> "$CONF"
 
 # shellcheck disable=SC2086  # DASHD_EXTRA_ARGS is deliberately word-split

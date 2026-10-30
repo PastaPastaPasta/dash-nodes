@@ -2,7 +2,6 @@
 //! record what each node announces, then snapshot the distributions for the charts.
 
 use std::collections::{HashMap, HashSet};
-use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
@@ -14,10 +13,13 @@ use rand::seq::SliceRandom;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::{Value, json};
 
+use crate::addr::{AddrNet, PeerAddr, net_of};
 use crate::collector::pose_status;
 use crate::db::{self, day_of, get_meta, query_all, set_meta};
+use crate::network::Network;
 use crate::p2p::{self, Probe};
 use crate::state::NetCtx;
+use crate::transport::{Route, Routes};
 use crate::ua;
 
 const DAY: i64 = 86_400;
@@ -28,6 +30,9 @@ const GETADDR_EVERY: i64 = 6 * 3600;
 const NEW_ADDR_TRIES: i64 = 6;
 /// Never-reached addresses probed per crawl, per pass. The rest wait for the next crawl.
 const MAX_UNPROVEN_PER_CRAWL: usize = 5_000;
+/// Share of the crawl interval that networks reached through a proxy (Tor, I2P) may take. Probes
+/// not started by then wait for the next crawl, so a slow overlay never stalls the crawl.
+const PROXIED_BUDGET_SHARE: f64 = 0.6;
 /// The first crawl asks this many peers for addresses, to bootstrap the address table.
 const BOOTSTRAP_GETADDR: usize = 1_000;
 const PER_CRAWL_RETENTION: i64 = 14 * DAY;
@@ -88,13 +93,16 @@ pub async fn run(ctx: Arc<NetCtx>) {
 }
 
 struct Outcome {
-    addr: SocketAddr,
+    addr: PeerAddr,
     asked_addrs: bool,
     result: Result<Probe>,
 }
 
 async fn crawl_once(ctx: &NetCtx) -> Result<i64> {
     let now = db::now();
+    let started = Instant::now();
+    // Decided once per crawl: a proxy or CJDNS router that appears later counts from the next one.
+    let routes = ctx.crawl_cfg.transport.routes();
     learn_from_dashd(ctx).await?;
 
     let id = ctx
@@ -108,12 +116,8 @@ async fn crawl_once(ctx: &NetCtx) -> Result<i64> {
     let (mn_addrs, due) = ctx
         .db
         .read(move |c| {
-            let mn: Vec<String> = query_all(
-                c,
-                "SELECT DISTINCT service FROM masternodes WHERE removed IS NULL AND service IS NOT NULL",
-                [],
-                |r| r.get(0),
-            )?;
+            // Every core P2P address of every masternode, on any network.
+            let mn: Vec<String> = query_all(c, "SELECT DISTINCT addr FROM mn_addrs", [], |r| r.get(0))?;
             let due: Vec<(String, Option<i64>, Option<i64>)> =
                 query_all(c, "SELECT addr, last_success, last_getaddr FROM nodes WHERE next_try <= ?1", [now], |r| {
                     Ok((r.get(0)?, r.get(1)?, r.get(2)?))
@@ -129,16 +133,21 @@ async fn crawl_once(ctx: &NetCtx) -> Result<i64> {
         })
         .await?;
     let mut rng = rand::rngs::StdRng::from_rng(&mut rand::rng());
-    let usable = |a: &SocketAddr| ctx.crawl_cfg.usable(a);
-    let mut targets: HashMap<SocketAddr, bool> = HashMap::new();
-    for a in mn_addrs.iter().filter_map(|s| s.parse().ok()).filter(usable) {
+    // Masternode addresses count as known on every network, crawled or not.
+    let mn_addrs: Vec<PeerAddr> =
+        mn_addrs.iter().filter_map(|s| s.parse().ok()).filter(PeerAddr::is_routable).collect();
+    upsert_addrs(ctx, mn_addrs.clone(), "mnlist").await?;
+    // Addresses on networks we can't reach right now stay in `nodes` untouched: known, not crawled.
+    let usable = |a: &PeerAddr| routes.for_addr(a).is_some();
+    let mut targets: HashMap<PeerAddr, bool> = HashMap::new();
+    for a in mn_addrs.into_iter().filter(usable) {
         targets.insert(a, false);
     }
     // Ask nodes that answered recently for addresses, a random sample each crawl.
     let mut getaddr_candidates = Vec::new();
     let mut unproven = Vec::new();
     for (addr, last_success, last_getaddr) in &due {
-        let Ok(a) = addr.parse::<SocketAddr>() else {
+        let Ok(a) = addr.parse::<PeerAddr>() else {
             continue;
         };
         if !usable(&a) {
@@ -155,8 +164,9 @@ async fn crawl_once(ctx: &NetCtx) -> Result<i64> {
         }
     }
     unproven.shuffle(&mut rng);
-    for a in unproven.into_iter().take(MAX_UNPROVEN_PER_CRAWL) {
-        targets.entry(a).or_insert(false);
+    unproven.truncate(MAX_UNPROVEN_PER_CRAWL);
+    for a in &unproven {
+        targets.entry(*a).or_insert(false);
     }
     // Bootstrap: with nothing heard yet, ask a sample of whoever we have.
     let limit = if first_crawl {
@@ -171,71 +181,158 @@ async fn crawl_once(ctx: &NetCtx) -> Result<i64> {
     }
 
     let tip = ctx.status.read().unwrap().blocks as i32;
-    let mut outcomes = probe_all(ctx, targets.iter().map(|(a, g)| (*a, *g)).collect(), tip).await;
-
-    // Second pass: probe addresses we just learned about, so this crawl's picture is complete.
-    // Gossip is only trusted for the network's default port: anything else could aim us at
-    // arbitrary services on third-party hosts. Masternodes on other ports come from the list.
-    let mut seen: HashSet<SocketAddr> = targets.keys().copied().collect();
-    let mut gossip = Vec::new();
-    for o in &mut outcomes {
-        if let Ok(p) = &mut o.result {
-            gossip.extend(
-                std::mem::take(&mut p.addrs).into_iter().filter(|a| usable(a) && a.port() == ctx.net.default_port()),
-            );
-        }
+    let budget = Duration::from_secs_f64(ctx.crawl_cfg.interval_secs.max(60) as f64 * PROXIED_BUDGET_SHARE);
+    let deadline = started + budget;
+    // Direct networks and proxied ones (Tor, I2P) run side by side, so a slow overlay never holds
+    // up IPv4. Known-good addresses go first, so a proxied network that runs out of time skips
+    // new ones.
+    let proxied = |a: &PeerAddr| matches!(routes.for_addr(a), Some(Route::Socks5(_)));
+    let unproven: HashSet<PeerAddr> = unproven.into_iter().collect();
+    let (mut proxied_first, mut direct_first): (Vec<_>, Vec<_>) =
+        targets.iter().map(|(a, g)| (*a, *g)).partition(|(a, _)| proxied(a));
+    for list in [&mut direct_first, &mut proxied_first] {
+        list.sort_by_key(|(a, _)| unproven.contains(a));
     }
-    let mut fresh: Vec<SocketAddr> = gossip.iter().copied().filter(|a| seen.insert(*a)).collect();
-    let discovered = fresh.len();
-    fresh.shuffle(&mut rng);
-    fresh.truncate(MAX_UNPROVEN_PER_CRAWL);
+
+    // Each side then makes a second pass over addresses it just learned about, so this crawl's
+    // picture is complete. The proxied side also takes what direct peers gossiped (that's where
+    // most onion addresses come from); the direct side doesn't wait for the proxied one.
+    let seen: HashSet<PeerAddr> = targets.keys().copied().collect();
+    let (direct_gossip_tx, direct_gossip_rx) = tokio::sync::oneshot::channel();
+    let direct_run = async {
+        let mut out = probe_all(ctx, &routes, direct_first, tip, None).await;
+        let gossip = take_gossip(ctx, &mut out);
+        let _ = direct_gossip_tx.send(gossip.clone());
+        let (fresh, found) = fresh_targets(&gossip, &seen, |a| usable(a) && !proxied(a));
+        out.extend(probe_all(ctx, &routes, fresh, tip, None).await);
+        (out, gossip, found)
+    };
+    let proxied_run = async {
+        let mut out = probe_all(ctx, &routes, proxied_first, tip, Some(deadline)).await;
+        let gossip = take_gossip(ctx, &mut out);
+        let mut all = direct_gossip_rx.await.unwrap_or_default();
+        all.extend_from_slice(&gossip);
+        let (fresh, found) = fresh_targets(&all, &seen, proxied);
+        out.extend(probe_all(ctx, &routes, fresh, tip, Some(deadline)).await);
+        (out, gossip, found)
+    };
+    let ((mut outcomes, mut gossip, direct_found), (proxied_out, proxied_gossip, proxied_found)) =
+        futures::join!(direct_run, proxied_run);
+    outcomes.extend(proxied_out);
+    gossip.extend(proxied_gossip);
+    let discovered = direct_found + proxied_found;
     upsert_addrs(ctx, gossip, "getaddr").await?;
-    outcomes.extend(probe_all(ctx, fresh.into_iter().map(|a| (a, false)).collect(), tip).await);
 
     let tried = outcomes.len();
     let rows: Vec<ProbeRow> = outcomes.into_iter().map(|o| ProbeRow::from(o, &ctx.geo)).collect();
     let tip = tip as i64;
-    ctx.db.write(move |c| record(c, id, now, tip, tried, discovered, rows)).await.context("record crawl")?;
+    ctx.db.write(move |c| record(c, id, now, tip, tried, discovered, rows, &routes)).await.context("record crawl")?;
     Ok(id)
 }
 
-async fn probe_all(ctx: &NetCtx, targets: Vec<(SocketAddr, bool)>, tip: i32) -> Vec<Outcome> {
+/// Whether an address learned from a peer or dashd is worth recording: routable, on the network's
+/// default port (port 0 for I2P). Anything else could aim us at arbitrary services on third-party
+/// hosts; masternodes on other ports come from the list.
+fn is_trusted_gossip(net: Network, a: &PeerAddr) -> bool {
+    a.is_routable() && a.port == net.default_port_for(a.net())
+}
+
+/// Takes the trusted gossiped addresses out of successful probes. Addresses on networks we can't
+/// reach are kept too, as known.
+fn take_gossip(ctx: &NetCtx, outcomes: &mut [Outcome]) -> Vec<PeerAddr> {
+    let mut gossip = Vec::new();
+    for o in outcomes {
+        if let Ok(p) = &mut o.result {
+            gossip.extend(std::mem::take(&mut p.addrs).into_iter().filter(|a| is_trusted_gossip(ctx.net, a)));
+        }
+    }
+    gossip
+}
+
+/// Second-pass targets: gossiped addresses `keep` accepts that this crawl hasn't probed, a random
+/// sample of at most MAX_UNPROVEN_PER_CRAWL. Also returns how many there were before sampling.
+fn fresh_targets(
+    gossip: &[PeerAddr],
+    seen: &HashSet<PeerAddr>,
+    keep: impl Fn(&PeerAddr) -> bool,
+) -> (Vec<(PeerAddr, bool)>, usize) {
+    let mut new = HashSet::new();
+    let mut fresh: Vec<PeerAddr> =
+        gossip.iter().copied().filter(|a| keep(a) && !seen.contains(a) && new.insert(*a)).collect();
+    let found = fresh.len();
+    fresh.shuffle(&mut rand::rng());
+    fresh.truncate(MAX_UNPROVEN_PER_CRAWL);
+    (fresh.into_iter().map(|a| (a, false)).collect(), found)
+}
+
+/// Probes every target over its network's route, each network with its own concurrency limit.
+/// With a `deadline`, no new probe starts after it (running ones finish within their timeouts);
+/// probes that didn't start aren't recorded and keep their place for the next crawl.
+async fn probe_all(
+    ctx: &NetCtx,
+    routes: &Routes,
+    targets: Vec<(PeerAddr, bool)>,
+    tip: i32,
+    deadline: Option<Instant>,
+) -> Vec<Outcome> {
     let net = ctx.net;
-    let timeouts = &ctx.crawl_cfg.timeouts;
-    futures::stream::iter(targets)
-        .map(|(addr, asked_addrs)| async move {
-            let result = p2p::probe(net, addr, tip, asked_addrs, timeouts).await;
-            Outcome { addr, asked_addrs, result }
-        })
-        .buffer_unordered(ctx.crawl_cfg.concurrency)
-        .collect()
-        .await
+    let mut by_net: [Vec<(PeerAddr, bool)>; AddrNet::COUNT] = Default::default();
+    for t in targets {
+        by_net[t.0.net().index()].push(t);
+    }
+    let runs = AddrNet::ALL.into_iter().zip(by_net).filter(|(_, list)| !list.is_empty()).map(|(an, list)| {
+        let route = routes.get(an).route.clone();
+        let limits = ctx.crawl_cfg.limits(an);
+        async move {
+            let Some(route) = route else { return Vec::new() };
+            let total = list.len();
+            let route = &route;
+            let done: Vec<Outcome> = futures::stream::iter(list)
+                .take_while(|_| std::future::ready(deadline.is_none_or(|d| Instant::now() < d)))
+                .map(|(addr, asked_addrs)| async move {
+                    let result = p2p::probe(net, &addr, route, tip, asked_addrs, &limits.timeouts).await;
+                    Outcome { addr, asked_addrs, result }
+                })
+                .buffer_unordered(limits.concurrency)
+                .collect()
+                .await;
+            if done.len() < total {
+                tracing::info!(
+                    net = net.name(),
+                    "{an}: out of time, {} of {total} probes left for the next crawl",
+                    total - done.len()
+                );
+            }
+            done
+        }
+    });
+    futures::future::join_all(runs).await.into_iter().flatten().collect()
 }
 
 /// Pulls dashd's address manager into `nodes`; on an empty database, falls back to DNS seeds.
 async fn learn_from_dashd(ctx: &NetCtx) -> Result<()> {
     let mut addrs = Vec::new();
+    // Every network dashd knows (it only keeps onion/I2P/CJDNS addresses when it can reach them).
     match ctx.rpc.call::<Vec<Value>>("getnodeaddresses", json!([0])).await {
         Ok(list) => {
             for e in list {
-                let (Some(ip), Some(port)) = (e["address"].as_str(), e["port"].as_u64()) else {
+                let (Some(host), Some(port)) = (e["address"].as_str(), e["port"].as_u64()) else {
                     continue;
                 };
-                let ip = ip.trim_matches(|c| c == '[' || c == ']');
-                if let Ok(ip) = ip.parse() {
-                    addrs.push(SocketAddr::new(ip, port as u16));
+                if let Some(a) = u16::try_from(port).ok().and_then(|port| PeerAddr::from_parts(host, port)) {
+                    addrs.push(a);
                 }
             }
         }
         Err(e) => tracing::warn!(net = ctx.net.name(), "getnodeaddresses: {e:#}"),
     }
-    addrs.retain(|a| ctx.crawl_cfg.usable(a) && a.port() == ctx.net.default_port());
+    addrs.retain(|a| is_trusted_gossip(ctx.net, a));
     let empty =
         ctx.db.read(|c| Ok(c.query_row("SELECT count(*) FROM nodes", [], |r| r.get::<_, i64>(0))? == 0)).await?;
     if addrs.is_empty() && empty {
         for seed in ctx.net.dns_seeds() {
             match tokio::net::lookup_host((*seed, ctx.net.default_port())).await {
-                Ok(found) => addrs.extend(found),
+                Ok(found) => addrs.extend(found.map(PeerAddr::from_socket)),
                 Err(e) => tracing::warn!("dns seed {seed}: {e}"),
             }
         }
@@ -245,7 +342,7 @@ async fn learn_from_dashd(ctx: &NetCtx) -> Result<()> {
     }
 }
 
-async fn upsert_addrs(ctx: &NetCtx, addrs: Vec<SocketAddr>, source: &'static str) -> Result<()> {
+async fn upsert_addrs(ctx: &NetCtx, addrs: Vec<PeerAddr>, source: &'static str) -> Result<()> {
     if addrs.is_empty() {
         return Ok(());
     }
@@ -255,11 +352,11 @@ async fn upsert_addrs(ctx: &NetCtx, addrs: Vec<SocketAddr>, source: &'static str
             let tx = c.transaction()?;
             {
                 let mut st = tx.prepare_cached(
-                    "INSERT INTO nodes (addr, source, first_seen, last_gossip) VALUES (?1, ?2, ?3, ?3)
+                    "INSERT INTO nodes (addr, network, source, first_seen, last_gossip) VALUES (?1, ?2, ?3, ?4, ?4)
                      ON CONFLICT(addr) DO UPDATE SET last_gossip = excluded.last_gossip",
                 )?;
                 for a in &addrs {
-                    st.execute(params![a.to_string(), source, now])?;
+                    st.execute(params![a.to_string(), a.net().name(), source, now])?;
                 }
             }
             tx.commit()?;
@@ -270,6 +367,7 @@ async fn upsert_addrs(ctx: &NetCtx, addrs: Vec<SocketAddr>, source: &'static str
 
 struct ProbeRow {
     addr: String,
+    net: AddrNet,
     asked_addrs: bool,
     ok: Option<p2p::Version>,
     error: Option<String>,
@@ -278,15 +376,17 @@ struct ProbeRow {
 
 impl ProbeRow {
     fn from(o: Outcome, geo: &crate::geo::Geo) -> ProbeRow {
-        let info = geo.loaded().then(|| geo.lookup(o.addr.ip()));
+        // Onion, I2P and CJDNS addresses say nothing about where a node is.
+        let info = o.addr.public_ip().filter(|_| geo.loaded()).map(|ip| geo.lookup(ip));
         let (ok, error) = match o.result {
             Ok(p) => (Some(p.version), None),
             Err(e) => (None, Some(format!("{e:#}"))),
         };
-        ProbeRow { addr: o.addr.to_string(), asked_addrs: o.asked_addrs, ok, error, geo: info }
+        ProbeRow { addr: o.addr.to_string(), net: o.addr.net(), asked_addrs: o.asked_addrs, ok, error, geo: info }
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn record(
     c: &mut Connection,
     id: i64,
@@ -295,11 +395,13 @@ fn record(
     tried: usize,
     discovered: usize,
     rows: Vec<ProbeRow>,
+    routes: &Routes,
 ) -> Result<()> {
     let tx = c.transaction()?;
     {
         let mut ensure = tx.prepare_cached(
-            "INSERT INTO nodes (addr, source, first_seen) VALUES (?1, 'mnlist', ?2) ON CONFLICT(addr) DO NOTHING",
+            "INSERT INTO nodes (addr, network, source, first_seen) VALUES (?1, ?2, 'mnlist', ?3)
+             ON CONFLICT(addr) DO NOTHING",
         )?;
         let mut ok_st = tx.prepare_cached(
             "UPDATE nodes SET last_tried = ?2, last_success = ?2, fail_streak = 0, next_try = ?2,
@@ -326,7 +428,7 @@ fn record(
              WHERE addr = ?1",
         )?;
         for r in &rows {
-            ensure.execute(params![r.addr, now])?;
+            ensure.execute(params![r.addr, r.net.name(), now])?;
             match &r.ok {
                 Some(v) => ok_st.execute(params![
                     r.addr,
@@ -364,6 +466,7 @@ fn record(
     )?;
 
     let agg = aggregate(&tx, id, now)?;
+    let networks = network_stats(&tx, id, now, Some(routes))?;
     {
         let mut ins =
             tx.prepare_cached("INSERT INTO crawl_agg (crawl_id, scope, dim, key, count) VALUES (?1, ?2, ?3, ?4, ?5)")?;
@@ -373,8 +476,18 @@ fn record(
     }
     tx.execute(
         "UPDATE crawls SET finished = ?2, tip_height = ?3, tried = ?4, reachable = ?5, discovered = ?6,
-            mn_total = ?7, mn_reachable = ?8 WHERE id = ?1",
-        params![id, db::now(), tip, tried, agg.reachable, discovered, agg.mn_total, agg.mn_reachable],
+            mn_total = ?7, mn_reachable = ?8, networks = ?9 WHERE id = ?1",
+        params![
+            id,
+            db::now(),
+            tip,
+            tried,
+            agg.reachable,
+            discovered,
+            agg.mn_total,
+            agg.mn_reachable,
+            Value::from(networks).to_string()
+        ],
     )?;
     tx.commit()?;
     Ok(())
@@ -415,17 +528,16 @@ fn asn_key(asn: Option<i64>, org: Option<String>) -> String {
 /// - `all`: every node that answered this crawl; `nonmn`: those that aren't a registered masternode.
 /// - `mn` / `evo`: every enabled (not PoSe-banned) masternode / evonode, reachable or not, with the
 ///   user agent it last announced within the active window.
+///
+/// Each address counts as a node: a node reachable over both IPv4 and Tor counts twice.
 fn aggregate(c: &Connection, id: i64, now: i64) -> Result<Aggregate> {
     let mut counts = Counts::default();
 
-    let mn_services: HashSet<String> =
-        query_all(c, "SELECT service FROM masternodes WHERE removed IS NULL AND service IS NOT NULL", [], |r| {
-            r.get(0)
-        })?;
+    let mn_addrs: HashSet<String> = query_all(c, "SELECT addr FROM mn_addrs", [], |r| r.get(0))?;
 
     let mut reachable = 0;
     let mut st = c.prepare(
-        "SELECT addr, user_agent, protocol, country, asn, as_org FROM nodes WHERE last_crawl = ?1 AND last_ok = 1",
+        "SELECT addr, user_agent, protocol, country, asn, as_org, network FROM nodes WHERE last_crawl = ?1 AND last_ok = 1",
     )?;
     let mut rows = st.query([id])?;
     while let Some(r) = rows.next()? {
@@ -435,7 +547,8 @@ fn aggregate(c: &Connection, id: i64, now: i64) -> Result<Aggregate> {
         let protocol: i64 = r.get::<_, Option<i64>>(2)?.unwrap_or(0);
         let country = r.get::<_, Option<String>>(3)?.unwrap_or_else(|| "Unknown".into());
         let asn = asn_key(r.get(4)?, r.get(5)?);
-        let scopes: &[&'static str] = if mn_services.contains(&addr) { &["all"] } else { &["all", "nonmn"] };
+        let network = r.get::<_, Option<String>>(6)?.unwrap_or_else(|| "Unknown".into());
+        let scopes: &[&'static str] = if mn_addrs.contains(&addr) { &["all"] } else { &["all", "nonmn"] };
         for &s in scopes {
             counts.add(s, "ua", ua.clone());
             counts.add(s, "version", ua::version_label(&ua));
@@ -443,11 +556,15 @@ fn aggregate(c: &Connection, id: i64, now: i64) -> Result<Aggregate> {
             counts.add(s, "protocol", protocol.to_string());
             counts.add(s, "country", country.clone());
             counts.add(s, "asn", asn.clone());
+            counts.add(s, "network", network.clone());
         }
     }
-    // Network-wide reachability over the active set: recently seen nodes plus enabled masternodes.
+    // Network-wide reachability over the active set: recently seen nodes plus enabled masternodes
+    // that failed this crawl. Every such address on a crawled network is probed every crawl, so
+    // this only leaves out networks we can't reach and proxied probes that ran out of time:
+    // known, but not crawled, isn't unreachable.
     let unreachable: i64 = c.query_row(
-        "SELECT count(*) FROM nodes n WHERE NOT (n.last_crawl = ?1 AND n.last_ok = 1)
+        "SELECT count(*) FROM nodes n WHERE n.last_crawl = ?1 AND n.last_ok = 0
            AND (n.last_success > ?2 OR n.addr IN
                 (SELECT service FROM masternodes WHERE removed IS NULL AND coalesce(pose_ban_height, -1) = -1))",
         params![id, now - ACTIVE_WINDOW],
@@ -459,13 +576,15 @@ fn aggregate(c: &Connection, id: i64, now: i64) -> Result<Aggregate> {
     let (mut mn_total, mut mn_reachable) = (0, 0);
     let mut st = c.prepare(
         "SELECT m.type, coalesce(m.pose_ban_height, -1), n.last_crawl, n.last_ok, n.last_success, n.user_agent,
-                n.protocol, n.country, n.asn, n.as_org
+                n.protocol, n.country, n.asn, n.as_org, m.service
          FROM masternodes m LEFT JOIN nodes n ON n.addr = m.service WHERE m.removed IS NULL",
     )?;
     let mut rows = st.query([])?;
     while let Some(r) = rows.next()? {
         let mn_type: String = r.get(0)?;
         let status = pose_status(r.get(1)?);
+        // Network of the primary service address.
+        let network = r.get::<_, Option<String>>(10)?.as_deref().and_then(net_of).map(AddrNet::name);
         let evo = mn_type == "Evo";
         counts.add("mn", "status", status.into());
         if evo {
@@ -478,7 +597,7 @@ fn aggregate(c: &Connection, id: i64, now: i64) -> Result<Aggregate> {
         let checked = r.get::<_, Option<i64>>(2)? == Some(id);
         let ok = checked && r.get::<_, Option<i64>>(3)? == Some(1);
         mn_reachable += i64::from(ok);
-        // Not checked: no usable service address (e.g. IPv6 while IPv6 crawling is off).
+        // Not checked: no usable service address (e.g. IPv6 without an IPv6 route).
         let reach = if ok {
             "yes"
         } else if checked {
@@ -501,9 +620,53 @@ fn aggregate(c: &Connection, id: i64, now: i64) -> Result<Aggregate> {
             counts.add(s, "protocol", protocol.clone().unwrap_or_else(|| "Unknown".into()));
             counts.add(s, "country", country.clone());
             counts.add(s, "asn", asn.clone());
+            counts.add(s, "network", network.unwrap_or("Unknown").into());
         }
     }
     Ok(Aggregate { counts, reachable, mn_total, mn_reachable })
+}
+
+/// Per address network, for a crawl (the `networks` array of /summary, always all five, in
+/// `AddrNet::ALL` order):
+/// - `known`: addresses gossiped, listed by dashd or the masternode list, or reachable within the
+///   active window before `now`, or tried in this crawl;
+/// - `tried` / `reachable`: probed / answered in crawl `id`;
+/// - `masternodes`: reachable addresses that are a registered masternode's core P2P address;
+/// - `crawled` / `reason`: whether the crawl had a route to the network, and why not. Without
+///   `routes` (crawls recorded before this was stored), a network counts as crawled if anything
+///   on it was tried.
+pub fn network_stats(c: &Connection, id: i64, now: i64, routes: Option<&Routes>) -> Result<Vec<Value>> {
+    let mut by_net: HashMap<String, [i64; 4]> = HashMap::new();
+    let mut st = c.prepare(
+        "SELECT network,
+                sum(max(coalesce(last_gossip, 0), coalesce(last_success, 0)) > ?2 OR last_crawl = ?1),
+                sum(last_crawl = ?1),
+                sum(last_crawl = ?1 AND last_ok = 1),
+                sum(last_crawl = ?1 AND last_ok = 1 AND addr IN (SELECT addr FROM mn_addrs))
+         FROM nodes WHERE network IS NOT NULL GROUP BY network",
+    )?;
+    let mut rows = st.query(params![id, now - ACTIVE_WINDOW])?;
+    while let Some(r) = rows.next()? {
+        let mut v = [0i64; 4];
+        for (i, x) in v.iter_mut().enumerate() {
+            *x = r.get::<_, Option<i64>>(i + 1)?.unwrap_or(0);
+        }
+        by_net.insert(r.get(0)?, v);
+    }
+    Ok(AddrNet::ALL
+        .into_iter()
+        .map(|n| {
+            let [known, tried, reachable, masternodes] = by_net.get(n.name()).copied().unwrap_or_default();
+            let (crawled, reason) = match routes {
+                Some(r) => (r.get(n).route.is_some(), r.get(n).reason.clone()),
+                None => (tried > 0, None),
+            };
+            json!({
+                "network": n.name(), "known": known, "tried": tried, "reachable": reachable,
+                "masternodes": masternodes, "crawled": crawled, "reason": reason,
+            })
+        })
+        .collect())
 }
 
 /// Daily rollups for finished days, then retention.
@@ -543,7 +706,8 @@ pub fn maintenance(c: &mut Connection) -> Result<()> {
     c.execute("DELETE FROM mn_daily WHERE day < ?1", [day_of(now - MN_DAILY_RETENTION)])?;
     c.execute(
         "DELETE FROM nodes WHERE first_seen < ?1 AND coalesce(last_success, 0) < ?1 AND coalesce(last_gossip, 0) < ?1
-           AND addr NOT IN (SELECT service FROM masternodes WHERE service IS NOT NULL)",
+           AND addr NOT IN (SELECT service FROM masternodes WHERE service IS NOT NULL)
+           AND addr NOT IN (SELECT addr FROM mn_addrs)",
         [now - NODE_RETENTION],
     )?;
     // Unfinished crawls are left over from a restart mid-crawl.

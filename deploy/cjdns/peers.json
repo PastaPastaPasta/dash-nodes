@@ -1,0 +1,223 @@
+{
+  "107.170.57.34:63472": {
+    "login": "public-peer",
+    "password": "ppm6j89mgvss7uvtntcd9scy6166mwb",
+    "peerName": "cord.ventricle.us",
+    "publicKey": "1xkf13m9r9h502yuffsq1cg13s5648bpxrtf2c3xcq1mlj893s90.k"
+  },
+  "130.240.202.22:5039": {
+    "login": "public-peer",
+    "password": "zuqcdlv9kj0cvghl4vdx28bcz4vnzf9",
+    "peerName": "bohr.willeponken.me",
+    "publicKey": "b83r3fpguqp0w506n1u41dx8wk9kd7shv7ldfy7vxkkxb6h7yjj0.k"
+  },
+  "137.220.55.93:32307": {
+    "login": "public-peer",
+    "password": "242yl4g4nmu0rygusyhxu9xd13lrhuj",
+    "peerName": "kusoneko.moe",
+    "publicKey": "nvl82112jgj26sgv6r7sbuqc7wh1n7w1stsj327lbcu8n2yycf20.k"
+  },
+  "139.162.119.37:22237": {
+    "login": "default-login",
+    "password": "x6knr8yqg6620dd0dxf81w7sy1p4723",
+    "peerName": "trnsz-jp",
+    "publicKey": "u64fnj4b3s0mcbgf9zfh08qbxh556p8z2z2plw2qp97bpcdg6gf0.k"
+  },
+  "140.238.168.104:17122": {
+    "login": "eey6ay0mi3aiwohV2Eequaiciequ2eiz",
+    "password": "bbfgfh3lgbxw9yr70wmux6jn85h9dcn",
+    "peerName": "0.h.pfactum.k",
+    "publicKey": "mz1hh3f7fc8bwrjvsh0rfrrjndspkj8pfdppcxnjcsu4bw7xm410.k"
+  },
+  "146.185.162.175:46398": {
+    "login": "public",
+    "password": "meshwithme",
+    "peerName": "florianb",
+    "publicKey": "g2xyf69w70q4q2nzfyhs5ybdhpgx0uz56zxqlj27g2ytnklqvxv0.k"
+  },
+  "149.56.19.79:55159": {
+    "login": "default-login",
+    "password": "dgv86ktpblc2h4y93fsqpshcg2lbp5d",
+    "peerName": "git.stashcrypto.net",
+    "publicKey": "zbfurpx9n6whzwu6vrlfgmw8g56rmchfmhxxtpg0hwhl84vqf1y0.k"
+  },
+  "149.56.98.167:3703": {
+    "login": "public-peer",
+    "password": "ppm6j89mgvss7uvtntcd9scy6166mwb",
+    "peerName": "larynx.ventricle.us",
+    "publicKey": "jg035j9hup776kwz1k4n0bwpggxp1qmts6t715x53g8vutxktzz0.k"
+  },
+  "158.69.119.35:9218": {
+    "login": "default-login",
+    "password": "w5huch4mn6tkgfp3j9sr8p8r13j3j33",
+    "peerName": "seed.stashcrypto.net",
+    "publicKey": "rzg61b3fsb675732g5rn8g1x61ypm1z7402n072qmrbbhgzm93f0.k"
+  },
+  "160.20.147.198:53340": {
+    "login": "default-login",
+    "password": "w6db8n5gb4wtjy0ud32vhql7469g1sb",
+    "peerName": "h.rwfr.k",
+    "publicKey": "byxcwmgbhkcgt3vv2820vujbc65szwkn9sj7vk1x3tjdw4q0sc30.k"
+  },
+  "163.172.222.21:3111": {
+    "login": "default-login",
+    "password": "lwmnsu9t63rzfbjj74ttv525s2phq96",
+    "peerName": "h.sabsare.geek",
+    "publicKey": "c6x0vfhh88ncz4by4ss3kmf09c7lp5nv9jufs8r3mkcudxfvb9v0.k"
+  },
+  "163.172.26.210:27410": {
+    "login": "public-peer",
+    "password": "ZGZWKOX5H535MG7MRYRKFMF4IY5GFCO5",
+    "peerName": "h.totem.tfnux.org",
+    "publicKey": "8bqv77rkzn888mcr8wu3k9b22hpczhn7c0zzyrqpj4bbx8rbf810.k"
+  },
+  "165.227.44.84:34838": {
+    "login": "public-access",
+    "password": "8n2w2qu2lfndhgx8xwgp18vyq7fhvux",
+    "peerName": "linux1.tor1.watters.ws",
+    "publicKey": "b465hml7z3g1vj22ktqdrc3z17mwjxl44cg0mj903n9vycxzqpv0.k"
+  },
+  "173.62.245.186:55249": {
+    "password": "Public",
+    "peerName": "NAT",
+    "publicKey": "vgxqyputh4ldhxktg9msmr61pw938l0ymhkmryljsyzvmr0dtwy0.k"
+  },
+  "185.140.54.19:35907": {
+    "login": "public",
+    "password": "fwlmbx2f3udkd0ymknq4pwwgu2bjklx",
+    "peerName": "ic.hellomouse.cf",
+    "publicKey": "gtbfndu2tvfbwuydm7v0kpnqpgcburtymhz3ph9kfrjg4n8bh3j0.k"
+  },
+  "185.140.54.73:30800": {
+    "login": "public",
+    "password": "fwlmbx2f3udkd0ymknq4pwwgu2bjklx",
+    "peerName": "ic2.hellomouse.cf",
+    "publicKey": "c15sfmskdpmj2qw5lfvgfuzggyyk1bjzj4lu3yf6h1x2ckclwdd0.k"
+  },
+  "185.243.112.90:27823": {
+    "password": "alfa-charlie-alfa-bravo",
+    "peerName": "igel-amersfoort",
+    "publicKey": "1nctdb89gtfrlnu71zyq97n14frl1r4z0ylwzc8vn7kpvrzu4yl0.k"
+  },
+  "185.25.48.153:13109": {
+    "password": "public",
+    "peerName": "borg-vilnius",
+    "publicKey": "pkq30hrl9zyzwn03u6lchh20crfgq46m1dfb5zwfhpx3c6v2l420.k"
+  },
+  "185.35.202.206:60392": {
+    "login": "public",
+    "password": "bKOWX81lA1qHLdi1kxw8qZC1",
+    "peerName": "hyperboria.hackeriet.no",
+    "publicKey": "vufgpj15lvfcwu9rk6vg0y14rl1xhg3m491bjlus5zr6bq9llcb0.k"
+  },
+  "192.169.7.142:14400": {
+    "password": "alfa-charlie-alfa-bravo",
+    "peerName": "igel-losangeles",
+    "publicKey": "mh9m0411cfcg7xhdc8n6ckls1tjgnvvbdfzdgqf5196tfkw96rr0.k"
+  },
+  "192.34.85.155:2359": {
+    "password": "alfa-charlie-alfa-bravo",
+    "peerName": "igel-boston",
+    "publicKey": "rdxg1nzvmjdj4fyguqydmnl659p7m3x26r6un4ql966q4xt988j0.k"
+  },
+  "194.67.213.84:24519": {
+    "login": "default-login",
+    "password": "37yuffz9hs4lk0wjnvyzj5yx45l444v",
+    "peerName": "node01.msk.ru-mesh.net",
+    "publicKey": "9f79752ml0p6glqdnj93352tj3hmctmf8jg8rbgp1wj8mh09lmv0.k"
+  },
+  "198.58.100.240:22237": {
+    "login": "default-login",
+    "password": "pqr5brz16vzzu6vhjuj7tv3n078kr5f",
+    "peerName": "trnsz",
+    "publicKey": "ubbtkp0txwjh44v8kkznvhjqqwr1hd2jzv5ms9zlkfk25svxvtg0.k"
+  },
+  "212.187.50.177:62810": {
+    "login": "meshwithme",
+    "password": "iwanttomesh",
+    "peerName": "cjdns-01.finlaydag33k.nl",
+    "publicKey": "67zwu83kcglutjp18xfhjjc41qn0m5srjc07un0bn4x09uwq1by0.k"
+  },
+  "44.131.22.1:43022": {
+    "login": "public-peer",
+    "password": "s22z2q6y8fsj28myjlp7yx6gv0wn1q2",
+    "peerName": "penfar.cwningen.cymru",
+    "publicKey": "pp6c01cnz51t2vyl1jmzbply1n662c13nm6mzprx0g5djkvl3470.k"
+  },
+  "44.131.22.48:9740": {
+    "login": "public-peer",
+    "password": "6uyxcspqzuxycd1nrwjugmhfh7r2qwd",
+    "peerName": "traed.cwningen.cymru",
+    "publicKey": "p8q8bsbvlr3xjh2hqlzyfcgjsk2mjm7fl8s5w73v68925n4f6nb0.k"
+  },
+  "45.231.133.188:63319": {
+    "login": "public",
+    "password": "40wr3r9l3l5f2p812mzy5bdd80xjb6k",
+    "peerName": "h.sp.yetanothernerd.xyz",
+    "publicKey": "9jjq45h13t7fdq2t8tdf59p6cplnv8un35dhmwjf032wmf3340w0.k"
+  },
+  "45.32.152.232:5078": {
+    "login": "default-login",
+    "password": "v277jzr7r3jgk0vk1389b2c3h0gy98t",
+    "peerName": "sssemil.k",
+    "publicKey": "08bz912l989nzqc21q9x5qr96ns465nd71f290hb9q40z94jjw60.k"
+  },
+  "51.15.3.66:27410": {
+    "login": "public-peer",
+    "password": "jkb46blldfp56j3lbm37nj3uj1j72h1",
+    "peerName": "h.totem.tfnux.org",
+    "publicKey": "8bqv77rkzn888mcr8wu3k9b22hpczhn7c0zzyrqpj4bbx8rbf810.k"
+  },
+  "51.254.84.52:40504": {
+    "login": "agusha",
+    "password": "IIYTNH_B3Pb1BAET_D0MA_HA_FEHOBAPBITAG_Bminor_Em_C_D",
+    "peerName": "valdek.ml",
+    "publicKey": "fnqfcu85xcxk6s052xzlu5rk68z91qyyf9jtf33cp48f8cuhl4g0.k"
+  },
+  "51.75.35.194:1132": {
+    "password": "thah9aePha1Vusha6ovhpublic",
+    "peerName": "Magik6k-waw-public",
+    "publicKey": "kw0vfw3tmb6u6p21z5jmmymdlumwknlg3x8muk5mcw66tdpqlw30.k"
+  },
+  "68.96.83.151:60405": {
+    "password": "98b31ngx6mw2zcd4jwqycrkcp7jnc31",
+    "peerName": "yk3music-irvine",
+    "publicKey": "kllz76rusmyk3748yz3tgnv9xhtv08nd2nss31fjuwkgwf9hvys0.k"
+  },
+  "82.5.34.168:37144": {
+    "login": "julian_assange_public",
+    "password": "qu3r1l25lgqkqspjhms1phclj56tvr5",
+    "peerName": "Coco's public node",
+    "publicKey": "3bur7ln0ccbvwwgqjn662ttwuwgyfvsnw3d0h6d1qf8x54cs4m20.k"
+  },
+  "91.122.62.105:36510": {
+    "login": "default-login",
+    "password": "hf3y45w5hf0ckl8zltldn8pry02lccd",
+    "peerName": "ru.spb.tokakoka",
+    "publicKey": "mvds4b1j97zn7uvxyczwsdhmcq5chs561gu0fml7996zvbvpmu00.k"
+  },
+  "91.234.81.181:7485": {
+    "login": "default-login",
+    "password": "zfhb88fzf2lmpb5g2bgju6ps33lfr1c",
+    "peerName": "meanmail",
+    "publicKey": "0x3bvhjx0knnq67ruwmz369tuflr8zknkzbx7wgn60s4nujugdk0.k"
+  },
+  "94.142.141.189:50433": {
+    "login": "default-login",
+    "password": "c5q2j63x5nkmt2yg2vjmlnfuh1jnjjf",
+    "peerName": "h.bunjlabs.com",
+    "publicKey": "0gdj2xzn01lzjjcrykjvwp8flnxkp1b3jny0drl5b168lmpsmfj0.k"
+  },
+  "95.213.251.59:60246": {
+    "login": "public",
+    "password": "public_passwd",
+    "peerName": "dskrylnikov",
+    "publicKey": "v0wjlvtkxdu5tr7htymsuytwxtqlrnyjlhk59pw6s11mj4ggw7p0.k"
+  },
+  "97.90.35.107:55602": {
+    "login": "default-login",
+    "password": "4w386mlblb5rgypmh79gpft1l6vywj8",
+    "peerName": "computer-pig",
+    "publicKey": "fgyf3hnrygwlud6xp92n4q2b2h7qsghkmrrvcscrcmj7qb00c8s0.k"
+  }
+}

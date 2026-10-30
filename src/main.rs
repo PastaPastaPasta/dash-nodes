@@ -1,3 +1,4 @@
+mod addr;
 mod api;
 mod collector;
 mod crawler;
@@ -6,22 +7,25 @@ mod geo;
 mod network;
 mod p2p;
 mod rpc;
+mod socks5;
 mod state;
+mod transport;
 mod ua;
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, RwLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand};
 
+use crate::addr::{AddrNet, PeerAddr};
 use crate::geo::Geo;
 use crate::network::Network;
-use crate::p2p::Timeouts;
 use crate::state::{CrawlConfig, NetCtx};
+use crate::transport::{Toggle, TransportConfig};
 
 #[derive(Parser)]
 #[command(version, about = "Dash network crawler and masternode monitor")]
@@ -33,16 +37,52 @@ struct Cli {
 #[derive(Subcommand)]
 enum Cmd {
     /// Run the crawler, the dashd collectors and the web server.
-    Serve(ServeArgs),
-    /// Handshake with one node and print what it announces.
+    Serve(Box<ServeArgs>),
+    /// Handshake with one node and print what it announces. Onion, I2P and CJDNS addresses go
+    /// through the same proxies and routes as the crawler (TOR_PROXY, I2P_PROXY, ...).
     Probe {
+        /// ip:port, [ipv6]:port, <name>.onion:port, <name>.b32.i2p:0 or host:port.
         addr: String,
         #[arg(long, default_value = "mainnet")]
         network: String,
         /// Also ask for addresses.
         #[arg(long)]
         getaddr: bool,
+        #[command(flatten)]
+        transport: TransportArgs,
     },
+}
+
+/// How to reach each address network. See transport.rs.
+#[derive(Args)]
+struct TransportArgs {
+    /// Crawl IPv6: auto (if this host has a global IPv6 route, or IPV6_PROXY is set), true, false.
+    #[arg(long, env = "CRAWL_IPV6", default_value = "auto")]
+    crawl_ipv6: Toggle,
+    /// SOCKS5 proxy (host:port) for IPv6 peers, for hosts without IPv6.
+    #[arg(long, env = "IPV6_PROXY")]
+    ipv6_proxy: Option<String>,
+    /// Tor SOCKS5 proxy (host:port) for .onion peers.
+    #[arg(long, env = "TOR_PROXY")]
+    tor_proxy: Option<String>,
+    /// I2P SOCKS5 proxy (host:port, i2pd's socksproxy) for .b32.i2p peers.
+    #[arg(long, env = "I2P_PROXY")]
+    i2p_proxy: Option<String>,
+    /// Crawl CJDNS (fc00::/8) directly: auto (if a local cjdns interface routes it), true, false.
+    #[arg(long, env = "CJDNS", default_value = "auto")]
+    cjdns: Toggle,
+}
+
+impl TransportArgs {
+    fn config(&self) -> TransportConfig {
+        TransportConfig {
+            ipv6: self.crawl_ipv6,
+            ipv6_proxy: self.ipv6_proxy.clone(),
+            tor_proxy: self.tor_proxy.clone(),
+            i2p_proxy: self.i2p_proxy.clone(),
+            cjdns: self.cjdns,
+        }
+    }
 }
 
 #[derive(Args)]
@@ -67,10 +107,17 @@ struct ServeArgs {
     /// Seconds between crawl starts.
     #[arg(long, env = "CRAWL_INTERVAL", default_value_t = 900)]
     crawl_interval: u64,
+    /// Parallel handshakes for each directly reached network (IPv4, IPv6; CJDNS at most 32).
     #[arg(long, env = "CRAWL_CONCURRENCY", default_value_t = 128)]
     crawl_concurrency: usize,
-    #[arg(long, env = "CRAWL_IPV6", default_value_t = false)]
-    crawl_ipv6: bool,
+    /// Parallel handshakes through Tor.
+    #[arg(long, env = "TOR_CONCURRENCY", default_value_t = 16)]
+    tor_concurrency: usize,
+    /// Parallel handshakes through I2P.
+    #[arg(long, env = "I2P_CONCURRENCY", default_value_t = 8)]
+    i2p_concurrency: usize,
+    #[command(flatten)]
+    transport: TransportArgs,
     #[arg(long, env = "GETADDR_PER_CRAWL", default_value_t = 200)]
     getaddr_per_crawl: usize,
     /// Lowest height to backfill masternode payments to (default: DIP3 enforcement).
@@ -98,10 +145,6 @@ where
     });
 }
 
-fn timeouts() -> Timeouts {
-    Timeouts { connect: Duration::from_secs(5), handshake: Duration::from_secs(10), getaddr: Duration::from_secs(10) }
-}
-
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
@@ -110,18 +153,43 @@ async fn main() -> Result<()> {
         )
         .init();
     match Cli::parse().cmd {
-        Cmd::Serve(args) => serve(args).await,
-        Cmd::Probe { addr, network, getaddr } => {
-            let net = Network::parse(&network).context("network must be mainnet or testnet")?;
-            let addr = tokio::net::lookup_host(&addr).await?.next().context("no address")?;
-            let p = p2p::probe(net, addr, 0, getaddr, &timeouts()).await?;
-            println!("{:#?}", p.version);
-            if getaddr {
-                println!("{} addresses", p.addrs.len());
-            }
-            Ok(())
+        Cmd::Serve(args) => serve(*args).await,
+        Cmd::Probe { addr, network, getaddr, transport } => probe(&addr, &network, getaddr, &transport).await,
+    }
+}
+
+async fn probe(addr: &str, network: &str, getaddr: bool, transport: &TransportArgs) -> Result<()> {
+    let net = Network::parse(network).context("network must be mainnet or testnet")?;
+    let addr: PeerAddr = match addr.parse() {
+        Ok(a) => a,
+        // A mistyped onion or I2P name must not go to the system resolver.
+        Err(e) if addr.rsplit_once(':').is_some_and(|(h, _)| h.ends_with(".onion") || h.ends_with(".i2p")) => {
+            return Err(e);
+        }
+        // A host name: resolve it.
+        Err(_) => PeerAddr::from_socket(tokio::net::lookup_host(addr).await?.next().context("no address")?),
+    };
+    let routes = transport.config().routes();
+    let net_route = routes.get(addr.net());
+    let route = net_route.route.clone().with_context(|| {
+        format!("{} isn't reachable: {}", addr.net(), net_route.reason.as_deref().unwrap_or("no route"))
+    })?;
+    let limits = transport::default_limits(1, 1, 1);
+    let started = Instant::now();
+    let p = p2p::probe(net, &addr, &route, 0, getaddr, &limits[addr.net().index()].timeouts).await?;
+    println!("{addr} ({}, via {route:?}) in {:.1?}", addr.net(), started.elapsed());
+    println!("{:#?}", p.version);
+    if getaddr {
+        let mut by_net = BTreeMap::new();
+        for a in &p.addrs {
+            *by_net.entry(a.net()).or_insert(0) += 1;
+        }
+        println!("{} addresses: {by_net:?}", p.addrs.len());
+        for a in p.addrs.iter().filter(|a| a.net() != AddrNet::Ipv4) {
+            println!("  {a}");
         }
     }
+    Ok(())
 }
 
 async fn serve(args: ServeArgs) -> Result<()> {
@@ -136,11 +204,22 @@ async fn serve(args: ServeArgs) -> Result<()> {
 
     let crawl_cfg = CrawlConfig {
         interval_secs: args.crawl_interval,
-        concurrency: args.crawl_concurrency,
-        timeouts: timeouts(),
-        ipv6: args.crawl_ipv6,
+        transport: args.transport.config(),
+        limits: transport::default_limits(
+            args.crawl_concurrency.max(1),
+            args.tor_concurrency.max(1),
+            args.i2p_concurrency.max(1),
+        ),
         getaddr_per_crawl: args.getaddr_per_crawl,
     };
+    let routes = crawl_cfg.transport.routes();
+    for net in AddrNet::ALL {
+        let r = routes.get(net);
+        match &r.route {
+            Some(route) => tracing::info!("{net}: crawled via {route:?}"),
+            None => tracing::info!("{net}: not crawled ({})", r.reason.as_deref().unwrap_or("")),
+        }
+    }
     let mut nets = HashMap::new();
     for (net, url, floor) in [
         (Network::Mainnet, &args.mainnet_rpc, args.payments_floor_mainnet),

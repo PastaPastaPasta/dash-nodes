@@ -1,5 +1,7 @@
 use serde::Serialize;
 
+use crate::addr::AddrNet;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Network {
@@ -33,6 +35,14 @@ impl Network {
         match self {
             Network::Mainnet => 9999,
             Network::Testnet => 19999,
+        }
+    }
+
+    /// Default P2P port for addresses on `net`: I2P has no ports (SAM 3.1), so it's always 0.
+    pub fn default_port_for(self, net: AddrNet) -> u16 {
+        match net {
+            AddrNet::I2p => 0,
+            _ => self.default_port(),
         }
     }
 

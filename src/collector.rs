@@ -8,6 +8,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 use serde::Serialize;
 use serde_json::{Value, json};
 
+use crate::addr::PeerAddr;
 use crate::db::{self, get_meta, set_meta};
 use crate::state::NetCtx;
 
@@ -80,6 +81,8 @@ pub struct MnRow {
     pub collateral_address: Option<String>,
     pub operator_reward: Option<f64>,
     pub service: Option<String>,
+    /// JSON array of every core P2P address, `service` first.
+    pub core_p2p: Option<String>,
     pub platform_p2p: Option<String>,
     pub platform_https: Option<String>,
     pub platform_node_id: Option<String>,
@@ -104,11 +107,17 @@ pub fn parse_mn(v: &Value) -> Result<MnRow> {
     let st = &v["state"];
     let s = |x: &Value| x.as_str().filter(|s| !s.is_empty()).map(str::to_owned);
     let first_addr = |purpose: &str| st["addresses"][purpose].as_array().and_then(|a| a.first()).and_then(s);
-    // Normalized through SocketAddr so it matches the crawler's `nodes.addr` keys.
-    let service = first_addr("core_p2p")
-        .or_else(|| s(&st["service"]))
+    // v24 ExtNetInfo (ProTx version 3) can list several core P2P addresses, on any network
+    // (IPv4, IPv6, onion, I2P, CJDNS); the first is the primary. Normalized through PeerAddr so
+    // they match the crawler's `nodes.addr` keys.
+    let listed: Vec<String> =
+        st["addresses"]["core_p2p"].as_array().map(|a| a.iter().filter_map(s).collect()).unwrap_or_default();
+    let core_p2p: Vec<String> = if listed.is_empty() { s(&st["service"]).into_iter().collect() } else { listed }
+        .into_iter()
         .filter(|a| !is_null_service(a))
-        .map(|a| a.parse::<std::net::SocketAddr>().map(|sa| sa.to_string()).unwrap_or(a));
+        .map(|a| a.parse::<PeerAddr>().map(|p| p.to_string()).unwrap_or(a))
+        .collect();
+    let service = core_p2p.first().cloned();
     let platform_port = |field: &str| {
         let port = st[field].as_i64().filter(|&p| p > 0)?;
         let host = service.as_deref()?.rsplit_once(':')?.0;
@@ -136,6 +145,7 @@ pub fn parse_mn(v: &Value) -> Result<MnRow> {
         platform_p2p: first_addr("platform_p2p").or_else(|| platform_port("platformP2PPort")),
         platform_https: first_addr("platform_https").or_else(|| platform_port("platformHTTPPort")),
         service,
+        core_p2p: (!core_p2p.is_empty()).then(|| json!(core_p2p).to_string()),
         platform_node_id: s(&st["platformNodeID"]),
         payout_address,
         operator_payout_address: s(&st["operatorPayoutAddress"]),
@@ -182,8 +192,8 @@ async fn sync_masternodes(ctx: &NetCtx) -> Result<()> {
                         platform_p2p, platform_https, platform_node_id, payout_address, operator_payout_address,
                         owner_address, voting_address, pubkey_operator, registered_height, last_paid_height,
                         consecutive_payments, pose_penalty, pose_revived_height, pose_ban_height, revocation_reason,
-                        first_seen, updated, removed)
-                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?22,NULL)
+                        first_seen, updated, removed, core_p2p)
+                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?22,NULL,?23)
                      ON CONFLICT(protx) DO UPDATE SET type=excluded.type, collateral=excluded.collateral,
                         collateral_address=excluded.collateral_address, operator_reward=excluded.operator_reward,
                         service=excluded.service, platform_p2p=excluded.platform_p2p,
@@ -194,7 +204,7 @@ async fn sync_masternodes(ctx: &NetCtx) -> Result<()> {
                         last_paid_height=excluded.last_paid_height, consecutive_payments=excluded.consecutive_payments,
                         pose_penalty=excluded.pose_penalty, pose_revived_height=excluded.pose_revived_height,
                         pose_ban_height=excluded.pose_ban_height, revocation_reason=excluded.revocation_reason,
-                        updated=excluded.updated, removed=NULL",
+                        updated=excluded.updated, removed=NULL, core_p2p=excluded.core_p2p",
                 )?;
                 for r in &rows {
                     up.execute(params![
@@ -202,7 +212,7 @@ async fn sync_masternodes(ctx: &NetCtx) -> Result<()> {
                         r.platform_p2p, r.platform_https, r.platform_node_id, r.payout_address,
                         r.operator_payout_address, r.owner_address, r.voting_address, r.pubkey_operator,
                         r.registered_height, r.last_paid_height, r.consecutive_payments, r.pose_penalty,
-                        r.pose_revived_height, r.pose_ban_height, r.revocation_reason, now,
+                        r.pose_revived_height, r.pose_ban_height, r.revocation_reason, now, r.core_p2p,
                     ])?;
                 }
             }
@@ -478,13 +488,34 @@ mod tests {
         });
         let r = parse_mn(&v).unwrap();
         assert_eq!(r.service.as_deref(), Some("5.6.7.8:9999"));
+        assert_eq!(r.core_p2p.as_deref(), Some(r#"["5.6.7.8:9999"]"#));
         assert_eq!(r.payout_address.as_deref(), Some("Xa,Xb"));
         assert_eq!(r.pose_ban_height, Some(1234));
     }
 
     #[test]
+    fn keeps_every_core_p2p_address() {
+        // ProTx version 3 (ExtNetInfo): several addresses on different networks, the first primary.
+        let onion = "pg6mmjiyjmcrsslvykfwnntlaru7p5svn6y2ymmju6nubxndf4pscryd.onion:9999";
+        let v = json!({
+            "type": "Evo", "proTxHash": "dd",
+            "state": {"version": 3, "addresses": {
+                "core_p2p": ["[2a01:4f8:0:0::1]:19999", onion.to_uppercase(), "1.2.3.4:19999"],
+                "platform_https": ["evo.example.com:443"]
+            }}
+        });
+        let r = parse_mn(&v).unwrap();
+        assert_eq!(r.service.as_deref(), Some("[2a01:4f8::1]:19999"));
+        let all: Vec<String> = serde_json::from_str(r.core_p2p.as_deref().unwrap()).unwrap();
+        assert_eq!(all, ["[2a01:4f8::1]:19999", onion, "1.2.3.4:19999"]);
+        assert_eq!(r.platform_https.as_deref(), Some("evo.example.com:443"));
+    }
+
+    #[test]
     fn null_service_is_none() {
         let v = json!({"proTxHash": "cc", "state": {"service": "[::]:0"}});
-        assert_eq!(parse_mn(&v).unwrap().service, None);
+        let r = parse_mn(&v).unwrap();
+        assert_eq!(r.service, None);
+        assert_eq!(r.core_p2p, None);
     }
 }
