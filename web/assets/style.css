@@ -566,3 +566,5 @@ button.link { font: inherit; font-size: 13px; background: none; border: 0; paddi
 .stat-row small { display: block; font-size: 12.5px; font-weight: 450; font-stretch: 100%; color: var(--muted); margin-top: 3px; }
 .stat-row .stat-good { border-left: 4px solid var(--good); }
 .stat-row .stat-warning { border-left: 4px solid var(--warning); }
+/* The earnings notes are sentences: give them room. */
+#earn-stats { grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); }

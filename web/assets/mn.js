@@ -253,7 +253,8 @@ function platformSection(m) {
   const daily = m.platform.daily || [];
   if (daily.length) {
     const at = daily.reduce((a, d) => a + d.attempts, 0), ok = daily.reduce((a, d) => a + d.ok, 0);
-    box.append(el("p", { class: "muted small", text: `Healthy in ${pct(ok / at)} of ${fmt(at)} checks over the last ${daily.length} days (both endpoints answered, as this evonode).` }));
+    const n = (k, word) => `${fmt(k)} ${word}${k === 1 ? "" : "s"}`;
+    box.append(el("p", { class: "muted small", text: `Healthy in ${pct(ok / at)} of ${n(at, "check")} over the last ${n(daily.length, "day")} (both endpoints answered, as this evonode).` }));
   }
   return box;
 }
