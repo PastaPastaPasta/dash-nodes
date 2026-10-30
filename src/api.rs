@@ -39,6 +39,7 @@ pub fn router(nets: Nets, web: &Path) -> Router {
         .route("/api/v1/{net}/masternodes", get(masternodes))
         .route("/api/v1/{net}/masternodes/{protx}", get(masternode))
         .route("/api/v1/{net}/masternodes/{protx}/payments", get(payments))
+        .route("/api/v1/{net}/changes", get(changes))
         .route("/api/v1/{net}/reference", get(reference))
         .with_state(nets)
         .layer(SetResponseHeaderLayer::if_not_present(
@@ -50,6 +51,7 @@ pub fn router(nets: Nets, web: &Path) -> Router {
     let pages = Router::new()
         .route_service("/", page("index.html"))
         .route_service("/masternodes", page("masternodes.html"))
+        .route_service("/changes", page("changes.html"))
         .route_service("/map", page("map.html"))
         .route_service("/mn/{protx}", page("mn.html"))
         .route_service("/api", page("api.html"))
@@ -231,7 +233,12 @@ async fn summary(State(nets): State<Nets>, UrlPath(net): UrlPath<String>) -> Api
                 // Crawls from before per-network stats were recorded.
                 None => json!(network_stats(c, id, started, None)?),
             };
-            Ok(json!({"crawl": crawl, "day_ago": day_ago, "dists": dists, "networks": networks}))
+            let returns = network_returns(c)?;
+            let platform = platform_summary(c)?;
+            Ok(json!({
+                "crawl": crawl, "day_ago": day_ago, "dists": dists, "networks": networks, "returns": returns,
+                "platform": platform,
+            }))
         })
         .await?;
     Ok(Json(body))
@@ -548,12 +555,205 @@ async fn masternode(State(nets): State<Nets>, UrlPath((net, protx)): UrlPath<(St
                 "indexed": indexed_json(range),
             });
             mn["payments"] = json!(recent_payments(c, &protx, None, 25)?);
+            let evo = mn["type"].as_str() == Some("Evo");
+            mn["returns"] = mn_returns(c, &protx, evo, mn["removed"].as_i64().is_some())?;
+            if evo {
+                let latest = c
+                    .query_row("SELECT * FROM platform_status WHERE protx = ?1", [&protx], crate::platform::status_json)
+                    .optional()?;
+                let daily: Vec<Value> = query_all(
+                    c,
+                    "SELECT day, attempts, ok FROM platform_daily WHERE protx = ?1 AND day >= ?2 ORDER BY day",
+                    params![&protx, day_of(db::now() - 29 * 86_400)],
+                    |r| Ok(json!({"day": r.get::<_, String>(0)?, "attempts": r.get::<_, i64>(1)?, "ok": r.get::<_, i64>(2)?})),
+                )?;
+                mn["platform"] = json!({"latest": latest, "daily": daily});
+            }
+            let changes: Vec<Value> = query_all(
+                c,
+                "SELECT ts, height, field, old, new FROM mn_changes WHERE protx = ?1 ORDER BY id DESC LIMIT 50",
+                [&protx],
+                change_json,
+            )?;
+            mn["changes"] = json!(changes);
             mn["versions"] = json!(versions);
             mn["uptime_daily"] = json!(uptime_daily);
             Ok(Some(mn))
         })
         .await?;
     body.map(Json).ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "unknown protx".into()))
+}
+
+// ---- realized returns ----------------------------------------------------------------------------
+//
+// What masternodes actually earned, from the payments index: everything a block paid a masternode
+// (owner and operator shares, and an evonode's platform share), against its collateral. The yield is
+// annualized over the last RETURN_WINDOW days, or since registration for a newer masternode.
+
+const RETURN_WINDOW: i64 = 90;
+const DAY: i64 = 86_400;
+const COIN: f64 = 1e8;
+
+fn collateral_duffs(evo: bool) -> f64 {
+    if evo { 4_000.0 * COIN } else { 1_000.0 * COIN }
+}
+
+/// `paid` duffs over `days` days, as a yearly share of the collateral.
+fn annualized(paid: i64, days: i64, evo: bool) -> f64 {
+    paid as f64 / days as f64 * 365.0 / collateral_duffs(evo)
+}
+
+/// The first indexed block at or after `ts` (None: nothing indexed that late).
+fn height_at(c: &Connection, ts: i64) -> Result<Option<i64>> {
+    // Written so SQLite walks the blocks_time index (a min() over a range would scan by height).
+    Ok(c.query_row("SELECT height FROM blocks WHERE time >= ?1 ORDER BY time, height LIMIT 1", [ts], |r| r.get(0))
+        .optional()?)
+}
+
+/// When the payments index starts (the time of its lowest block), if it has any.
+fn index_start(c: &Connection) -> Result<Option<i64>> {
+    Ok(c.query_row("SELECT time FROM blocks ORDER BY height LIMIT 1", [], |r| r.get(0)).optional()?)
+}
+
+/// What `protx` was paid from height `from` on.
+fn paid_since(c: &Connection, protx: &str, from: Option<i64>) -> Result<i64> {
+    let Some(from) = from else { return Ok(0) };
+    Ok(c.query_row(
+        "SELECT coalesce(sum(amount), 0) FROM payments WHERE protx = ?1 AND height >= ?2",
+        params![protx, from],
+        |r| r.get(0),
+    )?)
+}
+
+/// Paid in the last 30, 90 and 365 days (as far as the payments index goes back), and the annualized
+/// yield over the last 90 days, or since registration or the start of the index if later (none under
+/// two weeks: too few payments to say).
+fn mn_returns(c: &Connection, protx: &str, evo: bool, removed: bool) -> Result<Value> {
+    let now = db::now();
+    let paid = |days: i64| -> Result<i64> { paid_since(c, protx, height_at(c, now - days * DAY)?) };
+    let registered: Option<i64> = c
+        .query_row(
+            "SELECT b.time FROM masternodes m JOIN blocks b ON b.height = m.registered_height WHERE m.protx = ?1",
+            [protx],
+            |r| r.get(0),
+        )
+        .optional()?;
+    let indexed_since = index_start(c)?;
+    let from = [Some(now - RETURN_WINDOW * DAY), registered, indexed_since].into_iter().flatten().max().unwrap_or(now);
+    // Whole days, and payments summed over exactly those days.
+    let window = (now - from) / DAY;
+    // A masternode that left the list stopped being paid then: a yield up to now would mean nothing.
+    let annual_yield = (window >= 14 && !removed)
+        .then(|| -> Result<i64> { paid_since(c, protx, height_at(c, now - window * DAY)?) })
+        .transpose()?
+        .map(|p| round4(annualized(p, window, evo)));
+    Ok(json!({
+        "paid_30d": paid(30)?, "paid_90d": paid(RETURN_WINDOW)?, "paid_365d": paid(365)?,
+        "window_days": window, "annual_yield": annual_yield, "indexed_since": indexed_since,
+    }))
+}
+
+fn round4(x: f64) -> f64 {
+    (x * 1e4).round() / 1e4
+}
+
+/// The median annualized yield of enabled masternodes registered for the whole window, by type, and
+/// how many that is. None until the payments index covers the window.
+fn network_returns(c: &Connection) -> Result<Value> {
+    let since = db::now() - RETURN_WINDOW * DAY;
+    let covered = index_start(c)?.is_some_and(|t| t <= since);
+    let from = if covered { height_at(c, since)? } else { None };
+    let rows: Vec<(String, i64)> = match from {
+        None => Vec::new(),
+        Some(from) => query_all(
+            c,
+            // A registration with no indexed block predates the index (and so the window).
+            "SELECT m.type, coalesce((SELECT sum(p.amount) FROM payments p WHERE p.protx = m.protx AND p.height >= ?2), 0)
+             FROM masternodes m LEFT JOIN blocks rb ON rb.height = m.registered_height
+             WHERE m.removed IS NULL AND (m.pose_ban_height IS NULL OR m.pose_ban_height <= 0)
+               AND (rb.time < ?1 OR (rb.time IS NULL AND m.registered_height < (SELECT min(height) FROM blocks)))",
+            params![since, from],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?,
+    };
+    let median_yield = |evo: bool| {
+        let mut ys: Vec<f64> = rows
+            .iter()
+            .filter(|(t, _)| (t == "Evo") == evo)
+            .map(|(_, paid)| annualized(*paid, RETURN_WINDOW, evo))
+            .collect();
+        ys.sort_by(f64::total_cmp);
+        let n = ys.len();
+        json!({"masternodes": n, "median_annual_yield": (n > 0).then(|| round4(ys[n / 2]))})
+    };
+    Ok(json!({"window_days": RETURN_WINDOW, "regular": median_yield(false), "evo": median_yield(true)}))
+}
+
+/// Evonode Platform health across the network, from the latest checks (see platform.rs): how many
+/// answered on each endpoint, which software they run, and certificates about to expire.
+fn platform_summary(c: &Connection) -> Result<Value> {
+    // Only evonodes still registered and not banned; a check older than a day is stale (the checker stopped).
+    const LIVE: &str = "FROM platform_status s JOIN masternodes m ON m.protx = s.protx
+        WHERE m.removed IS NULL AND m.type = 'Evo' AND (m.pose_ban_height IS NULL OR m.pose_ban_height <= 0)
+          AND s.ts > ?1";
+    let since = db::now() - 86_400;
+    let (checked, p2p_ok, https_ok, healthy, expiring, height, ts): (i64, i64, i64, i64, i64, Option<i64>, Option<i64>) =
+        c.query_row(
+            &format!(
+                "SELECT count(*), coalesce(sum(s.p2p_error IS NULL), 0), coalesce(sum(s.https_error IS NULL), 0),
+                    coalesce(sum(s.p2p_error IS NULL AND s.https_error IS NULL AND (s.node_protx IS NULL OR s.node_protx = s.protx)), 0),
+                    coalesce(sum(s.cert_expires IS NOT NULL AND s.cert_expires < ?2), 0), max(s.height), max(s.ts) {LIVE}"
+            ),
+            params![since, db::now() + 3 * 86_400],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?)),
+        )?;
+    let dist = |col: &str| -> Result<Value> {
+        let rows: Vec<(String, i64)> = query_all(
+            c,
+            &format!("SELECT coalesce(s.{col}, 'Unknown'), count(*) {LIVE} GROUP BY 1 ORDER BY 2 DESC"),
+            [since],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+        Ok(json!(rows))
+    };
+    Ok(json!({
+        "checked": checked, "p2p_ok": p2p_ok, "https_ok": https_ok, "healthy": healthy,
+        "cert_expiring_3d": expiring, "max_height": height, "updated": ts,
+        "drive": dist("drive")?, "tenderdash": dist("tenderdash")?, "dapi": dist("dapi")?,
+    }))
+}
+
+fn change_json(r: &rusqlite::Row) -> rusqlite::Result<Value> {
+    Ok(json!({
+        "ts": r.get::<_, i64>("ts")?, "height": r.get::<_, Option<i64>>("height")?, "field": r.get::<_, String>("field")?,
+        "old": r.get::<_, Option<String>>("old")?, "new": r.get::<_, Option<String>>("new")?,
+    }))
+}
+
+/// Recent registration changes across the network, newest first: registrations, removals, PoSe bans
+/// and revivals, and changed addresses or keys (see collector.rs).
+async fn changes(State(nets): State<Nets>, UrlPath(net): UrlPath<String>) -> ApiResult {
+    let ctx = net_ctx(&nets, &net)?;
+    let body = ctx
+        .db
+        .read(|c| {
+            let changes: Vec<Value> = query_all(
+                c,
+                "SELECT ch.ts, ch.height, ch.field, ch.old, ch.new, ch.protx, m.type
+                 FROM mn_changes ch LEFT JOIN masternodes m ON m.protx = ch.protx
+                 ORDER BY ch.id DESC LIMIT 300",
+                [],
+                |r| {
+                    let mut v = change_json(r)?;
+                    v["protx"] = json!(r.get::<_, String>("protx")?);
+                    v["type"] = json!(r.get::<_, Option<String>>("type")?);
+                    Ok(v)
+                },
+            )?;
+            Ok(json!({"changes": changes}))
+        })
+        .await?;
+    Ok(Json(body))
 }
 
 /// Where the latest crawl's reachable nodes are, by city coordinates, without their addresses.

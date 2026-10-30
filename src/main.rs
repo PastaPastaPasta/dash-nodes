@@ -7,6 +7,7 @@ mod db;
 mod geo;
 mod network;
 mod p2p;
+mod platform;
 mod reference;
 mod rpc;
 mod snapshot;
@@ -53,6 +54,13 @@ enum Cmd {
         getaddr: bool,
         #[command(flatten)]
         transport: TransportArgs,
+    },
+    /// Check one evonode's Platform endpoints as the crawler does (see platform.rs) and print the result.
+    PlatformCheck {
+        /// Platform P2P (Tenderdash) address, host:port.
+        p2p: String,
+        /// Platform HTTPS (DAPI) address, host:port.
+        https: String,
     },
     /// Speed-test masternodes (headers, ping, masternode list) and publish the results. Needs no
     /// dashd: targets and reference hashes come from SOURCE. See bench/mod.rs.
@@ -182,6 +190,10 @@ async fn main() -> Result<()> {
         Cmd::Serve(args) => serve(*args).await,
         Cmd::Probe { addr, network, getaddr, transport } => probe(&addr, &network, getaddr, &transport).await,
         Cmd::Bench(args) => bench::main(*args).await,
+        Cmd::PlatformCheck { p2p, https } => {
+            println!("{:#?}", platform::check_once(&p2p, &https).await);
+            Ok(())
+        }
     }
 }
 
@@ -284,6 +296,7 @@ async fn serve(args: ServeArgs) -> Result<()> {
         supervise("backfill", &ctx, move |c| collector::backfill(c, floor));
         supervise("crawler", &ctx, crawler::run);
         supervise("reference", &ctx, reference::run);
+        supervise("platform", &ctx, platform::run);
         tracing::info!("{}: dashd at {url}", net.name());
         nets.insert(net, ctx);
     }

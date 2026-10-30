@@ -19,7 +19,7 @@ test("shards spread the first byte over 64 documents", () => {
 });
 
 test("ingest keys are an allow-list", () => {
-  for (const k of ["v1/status.json", "v1/mainnet/summary.json", "v1/testnet/mn/3f.json", "v1/mainnet/history/totals.json",
+  for (const k of ["v1/status.json", "v1/mainnet/summary.json", "v1/testnet/changes.json", "v1/testnet/mn/3f.json", "v1/mainnet/history/totals.json",
     "v1/mainnet/history/mn/version.json", `v1/mainnet/payments/${"a".repeat(64)}.json`,
     `v1/mainnet/payments/${"a".repeat(64)}/25.json`]) assert.ok(KEY.test(k), k);
   for (const k of ["v1/devnet/summary.json", "v1/mainnet/../x.json", "v1/mainnet/history/mn/totals.json", "v1/mainnet/mn/3F.json",

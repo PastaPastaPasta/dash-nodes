@@ -26,6 +26,8 @@ tokio = { version = "1", features = ["full"] }
 tower-http = { version = "0.6", features = ["fs", "compression-gzip", "compression-br", "set-header"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# Issuer and expiry of evonodes' Platform TLS certificates (platform.rs).
+x509-parser = "0.17"
 
 [profile.release]
 lto = "thin"

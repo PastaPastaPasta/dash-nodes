@@ -116,6 +116,50 @@ CREATE TABLE IF NOT EXISTS mn_daily (
     PRIMARY KEY (protx, day)
 ) WITHOUT ROWID;
 
+-- One row per change to a masternode's registration, as the list sync sees it: `field` is the
+-- column that changed (service, payout_address, …), `pose` (enabled/banned), `registered` or
+-- `removed`; old and new are its values as text.
+CREATE TABLE IF NOT EXISTS mn_changes (
+    id     INTEGER PRIMARY KEY,
+    ts     INTEGER NOT NULL,
+    height INTEGER,
+    protx  TEXT NOT NULL,
+    field  TEXT NOT NULL,
+    old    TEXT,
+    new    TEXT
+);
+CREATE INDEX IF NOT EXISTS mn_changes_protx ON mn_changes(protx, ts);
+CREATE INDEX IF NOT EXISTS mn_changes_ts ON mn_changes(ts);
+
+-- Evonode Platform health (platform.rs): the latest check of each evonode, and daily counts of
+-- checks where both endpoints answered as that evonode.
+CREATE TABLE IF NOT EXISTS platform_status (
+    protx                  TEXT PRIMARY KEY,
+    ts                     INTEGER NOT NULL,
+    p2p_ms                 INTEGER,
+    p2p_error              TEXT,
+    https_ms               INTEGER,
+    https_error            TEXT,
+    cert_issuer            TEXT,
+    cert_expires           INTEGER,
+    dapi                   TEXT,
+    drive                  TEXT,
+    tenderdash             TEXT,
+    drive_protocol_latest  INTEGER,
+    drive_protocol_current INTEGER,
+    height                 INTEGER,
+    catching_up            INTEGER,
+    peers                  INTEGER,
+    node_protx             TEXT
+) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS platform_daily (
+    protx    TEXT NOT NULL,
+    day      TEXT NOT NULL,
+    attempts INTEGER NOT NULL,
+    ok       INTEGER NOT NULL,
+    PRIMARY KEY (protx, day)
+) WITHOUT ROWID;
+
 -- One row each time a masternode's announced user agent or protocol changes.
 CREATE TABLE IF NOT EXISTS mn_versions (
     protx      TEXT NOT NULL,
@@ -140,6 +184,8 @@ CREATE TABLE IF NOT EXISTS payments (
     PRIMARY KEY (height, protx)
 ) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS payments_protx ON payments(protx, height);
+-- Time to height (realized returns turn "the last 90 days" into a height range).
+CREATE INDEX IF NOT EXISTS blocks_time ON blocks(time);
 "#;
 
 const READERS: usize = 8;

@@ -331,6 +331,43 @@ async function renderSpeed() {
   }));
 }
 
+/** A stat tile without a link: label, value, an optional note and an optional tone (stat-good, stat-warning). */
+const plainStat = (label, value, note, tone) =>
+  el("div", { class: tone ? `stat-${tone}` : null }, el("dt", { text: label }), el("dd", { class: "num" }, value, note ? el("small", { text: note }) : null));
+
+/** Realized returns (summary.returns): the median yield over the last 90 days, by type. */
+function renderEarn() {
+  const r = summary.returns;
+  const reg = r?.regular?.median_annual_yield, evo = r?.evo?.median_annual_yield;
+  $("earn-section").hidden = reg == null && evo == null;
+  if ($("earn-section").hidden) return;
+  $("earn-lede").textContent = `What masternodes were actually paid over the last ${r.window_days} days, against their collateral, ` +
+    "counting every enabled masternode registered for at least that long. Each masternode's page shows its own.";
+  $("earn-stats").replaceChildren(
+    plainStat("Regular masternodes", reg != null ? `${pct(reg)} a year` : "–", `median of ${fmt(r.regular.masternodes)}, on 1,000 DASH`),
+    plainStat("Evonodes", evo != null ? `${pct(evo)} a year` : "–", `median of ${fmt(r.evo.masternodes)}, on 4,000 DASH; core-chain payments only, Platform rewards aren't counted`));
+}
+
+/** Evonode Platform health (summary.platform): the latest check of every evonode's Platform endpoints. */
+function renderPlatform() {
+  const p = summary.platform;
+  $("platform-section").hidden = !p?.checked;
+  if (!p?.checked) return;
+  $("platform-lede").textContent = `${pct(p.healthy / p.checked)} of ${fmt(p.checked)} enabled evonodes passed our latest Platform check: ` +
+    `their Tenderdash P2P port was open and their DAPI answered over valid TLS, as themselves. Checked every 15 minutes, last ${ago(p.updated)}.`;
+  $("platform-stats").replaceChildren(
+    plainStat("Healthy", `${fmt(p.healthy)} of ${fmt(p.checked)}`, null, p.healthy / p.checked >= 0.95 ? "good" : "warning"),
+    plainStat("DAPI answered", fmt(p.https_ok)),
+    plainStat("Tenderdash P2P open", fmt(p.p2p_ok)),
+    plainStat("Certificates expiring", fmt(p.cert_expiring_3d), "within 3 days", p.cert_expiring_3d ? "warning" : null),
+    plainStat("Platform height", p.max_height != null ? fmt(p.max_height) : "–", "highest seen"));
+  for (const [bar, legend, rows] of [["drive-bar", "drive-legend", p.drive], ["td-bar", "td-legend", p.tenderdash]]) {
+    const palette = new Palette();
+    palette.assign(rows.map(([k]) => k));
+    shareBar($(bar), $(legend), rows, { color: (k) => (k === "Unknown" ? "var(--axis)" : palette.color(k)), label: (k) => (k === "Unknown" ? "No answer" : k) });
+  }
+}
+
 function renderSections() {
   renderSoftware();
   renderWhere();
@@ -361,6 +398,8 @@ async function main() {
   heroPoints().then((points) => worldMap($("hero-map"), points)).catch(() => {});
   renderControls();
   renderSections();
+  renderEarn();
+  renderPlatform();
   renderSpeed();
   await loadHistorySafely();
 }

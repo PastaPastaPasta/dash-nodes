@@ -3,7 +3,7 @@
 
 export const NETWORKS = ["mainnet", "testnet"];
 /** Per-network documents served as published. `reference` holds the block hashes speed tests check against. */
-export const DOCS = ["summary", "geo", "masternodes", "reference"];
+export const DOCS = ["summary", "geo", "masternodes", "reference", "changes"];
 /** A speed-test vantage point's id (e.g. home, nyc, ams, sgp). */
 export const VANTAGE = "[a-z0-9-]{2,16}";
 export const SCOPES = ["all", "mn", "evo", "nonmn"];

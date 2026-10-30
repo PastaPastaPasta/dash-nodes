@@ -255,7 +255,7 @@ export function chrome(page, { footer = true } = {}) {
   const net = currentNet();
   document.title = `${document.title}${net === "testnet" ? " · testnet" : ""}`;
   const nav = el("nav", { class: "main" },
-    ...[["overview", "/", "Overview"], ["masternodes", "/masternodes", "Masternodes"], ["map", "/map", "Map"], ["api", "/api", "API"]].map(([id, path, label]) =>
+    ...[["overview", "/", "Overview"], ["masternodes", "/masternodes", "Masternodes"], ["changes", "/changes", "Changes"], ["map", "/map", "Map"], ["api", "/api", "API"]].map(([id, path, label]) =>
       el("a", { href: href(path), "aria-current": id === page ? "page" : null, text: label })));
   const seg = el("div", { class: "seg net", role: "group", "aria-label": "Network" },
     ...NETWORKS.map((n) => el("button", {
@@ -350,4 +350,46 @@ export function segmented(options, value, onChange, label) {
   }
   paint(value);
   return root;
+}
+
+// ---- registration changes (collector.rs records them; the masternode page and /changes show them) ----
+
+const CHANGE_LABELS = {
+  registered: "Registered", removed: "Left the list", returned: "Back in the list", service: "Core P2P address", platform_p2p: "Platform P2P address",
+  platform_https: "Platform HTTPS address", platform_node_id: "Platform node ID", payout_address: "Payout address",
+  operator_payout_address: "Operator payout address", owner_address: "Owner address", voting_address: "Voting address",
+  pubkey_operator: "Operator key", operator_reward: "Operator reward", pose: "PoSe status",
+};
+
+/** Kinds of change, for filtering the feed. */
+export const CHANGE_KINDS = [
+  ["joins", "Registrations and removals", (f) => f === "registered" || f === "removed" || f === "returned"],
+  ["pose", "PoSe bans and revivals", (f) => f === "pose"],
+  ["address", "Address changes", (f) => ["service", "platform_p2p", "platform_https"].includes(f)],
+  ["keys", "Payout and key changes", (f) => ["payout_address", "operator_payout_address", "owner_address", "voting_address", "pubkey_operator", "platform_node_id", "operator_reward"].includes(f)],
+];
+
+/** A stored value as people read it. */
+function changeValue(field, v) {
+  if (v == null || v === "") return "–";
+  if (field === "pose") return v === "enabled" ? "Enabled" : v.replace(/^banned at (\d+)$/, (_, h) => `Banned at block ${fmt(Number(h))}`);
+  if (field === "operator_reward") return `${v}%`;
+  if (field === "pubkey_operator" || field === "platform_node_id") return shortHash(v, 10);
+  return v;
+}
+
+/** "Payout address: Xa… → Xb…", or "Registered (1.2.3.4:9999)" for joins and leaves. */
+export function changeText(c) {
+  const label = CHANGE_LABELS[c.field] || c.field;
+  if (c.field === "registered" || c.field === "returned") return c.new ? `${label} at ${c.new}` : label;
+  if (c.field === "removed") return c.old ? `${label} (was at ${c.old})` : label;
+  return `${label}: ${changeValue(c.field, c.old)} → ${changeValue(c.field, c.new)}`;
+}
+
+/** Badge kind for a change: bans stand out, revivals and joins read as good news. */
+export function changeKind(c) {
+  if (c.field === "pose") return c.new === "enabled" ? "good" : "serious";
+  if (c.field === "registered" || c.field === "returned") return "good";
+  if (c.field === "removed") return "critical";
+  return "none";
 }

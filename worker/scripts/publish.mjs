@@ -50,7 +50,7 @@ async function fetchRetry(url, init, tries, pause, permanent = () => false) {
 async function get(path) {
   // 404 for an endpoint this build doesn't have, 400 for a parameter it doesn't know; anything else is worth a retry.
   const r = await fetchRetry(`${SOURCE}/api/v1/${path}`, undefined, 3, 1000, (status) => status === 404 || status === 400);
-  if (!r.ok) throw new Error(`${path}: ${r.status}`);
+  if (!r.ok) throw Object.assign(new Error(`${path}: ${r.status}`), { status: r.status });
   return r.json();
 }
 
@@ -96,7 +96,8 @@ async function put(key, doc) {
 
 /** Uploads a document an older crawler may not have yet (its endpoint answers 400/404); skips it if so. */
 async function putIfServed(key, load) {
-  const doc = await load().catch(() => undefined);
+  // Only "this build doesn't have it" is skipped; any other failure fails the pass, which is retried.
+  const doc = await load().catch((e) => { if (e.status === 404 || e.status === 400) return undefined; throw e; });
   if (doc !== undefined) await put(key, doc);
 }
 
@@ -138,7 +139,9 @@ async function publishNetwork(net) {
   const list = await get(`${net}/masternodes`);
   // Removed masternodes drop off the list but keep their page, so their details stay published.
   const seen = known.get(net) || new Set();
-  const ids = [...new Set([...list.masternodes.map((m) => m.protx), ...seen])];
+  // Masternodes named in the changes feed keep their page too, even across a publisher restart.
+  const changes = await get(`${net}/changes`).catch((e) => { if (e.status === 404 || e.status === 400) return null; throw e; });
+  const ids = [...new Set([...list.masternodes.map((m) => m.protx), ...seen, ...(changes?.changes || []).map((c) => c.protx)])];
   // Every shard goes up, empty ones too, so an unknown ProTx is a 404 rather than "not published".
   const shards = new Map(Array.from({ length: SHARDS }, (_, i) =>
     [shardKey(net, ((i * 256) / SHARDS).toString(16).padStart(2, "0")), {}]));
@@ -158,6 +161,8 @@ async function publishNetwork(net) {
   await put(`v1/${net}/masternodes.json`, list);
   await put(`v1/${net}/summary.json`, await get(`${net}/summary`));
   await putIfServed(`v1/${net}/geo.json`, () => get(`${net}/geo`));
+  // The latest registration changes (see the crawler's collector.rs).
+  if (changes) await put(`v1/${net}/changes.json`, changes);
   // Block hashes speed-test vantages check downloaded headers against.
   await putIfServed(`v1/${net}/reference.json`, () => get(`${net}/reference`));
   await put(`v1/${net}/history/totals.json`, await historyDoc(net, "all", "totals"));
