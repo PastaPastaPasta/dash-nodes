@@ -24,7 +24,9 @@ export function href(path) {
 }
 
 export async function api(path) {
-  const r = await fetch(`/api/v1/${path}`);
+  // Always ask the server (a cheap 304 when nothing changed): data changes every crawl, and a cached
+  // copy would outlive it.
+  const r = await fetch(`/api/v1/${path}`, { cache: "no-cache" });
   if (!r.ok) {
     let msg = `HTTP ${r.status}`;
     try { msg = (await r.json()).error || msg; } catch { /* not json */ }

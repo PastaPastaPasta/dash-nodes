@@ -44,7 +44,9 @@ async function answer(env, path, query) {
   }
   try {
     const vantages = (env.BENCH_VANTAGES || "home").split(",").map((v) => v.trim()).filter((v) => new RegExp(`^${VANTAGE}$`).test(v));
-    return json(200, await route(path.split("/"), query, (key) => getJson(env, key), vantages), "public, max-age=60");
+    const body = JSON.stringify(await route(path.split("/"), query, (key) => getJson(env, key), vantages));
+    const etag = `"${hex(await digest(body)).slice(0, 32)}"`;
+    return new Response(body, { headers: { ...API_HEADERS, "cache-control": "public, max-age=60", etag } });
   } catch (e) {
     if (e instanceof ApiError) return fail(e.status, e.message);
     console.error(e);
@@ -62,7 +64,26 @@ async function api(request, env, ctx, url) {
     response = await answer(env, path, key.searchParams);
     if (response.ok) ctx.waitUntil(cache.put(key.toString(), response.clone()));
   }
-  return request.method === "HEAD" ? new Response(null, response) : response;
+  return forBrowser(request, response);
+}
+
+const bareTag = (t) => t.trim().replace(/^W\//, "");
+
+/**
+ * The edge copy (kept here for 60 s) as browsers get it: `no-cache`, so they revalidate on every load
+ * and a reload always shows the latest crawl, with a 304 when nothing changed. A max-age would be
+ * raised to hours by the zone's Browser Cache TTL, and normal reloads then reused hours-old data.
+ */
+function forBrowser(request, response) {
+  if (!response.ok) return request.method === "HEAD" ? new Response(null, response) : response;
+  const headers = new Headers(response.headers);
+  headers.set("cache-control", "no-cache");
+  const etag = headers.get("etag");
+  const asked = request.headers.get("if-none-match");
+  if (etag && asked && asked.split(",").some((t) => bareTag(t) === bareTag(etag))) {
+    return new Response(null, { status: 304, headers });
+  }
+  return new Response(request.method === "HEAD" ? null : response.body, { status: response.status, headers });
 }
 
 /** Reads a body, failing once it passes `limit` bytes instead of buffering whatever arrives. */
