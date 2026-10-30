@@ -257,6 +257,10 @@ from its `deploy/` directory.
   `secrets/bench_token` (created empty by `init.sh`) holds the Worker's bench ingest token, and
   re-reads it every minute. Write the token into the existing file (`cat > secrets/bench_token`): the
   secret is a bind mount, so a file replaced by a new one needs `docker compose up -d bench`.
+- **DNS seeds:** dashd finds its first peers through DNS seeds (`dnsseed.dash.org` on mainnet).
+  Some cloud providers' resolvers answer SERVFAIL for it (seen on DigitalOcean, 2026-10-30), which
+  leaves a fresh mainnet node with no peers. Give Docker public resolvers in
+  `/etc/docker/daemon.json`: `{"dns": ["1.1.1.1", "8.8.8.8", "2606:4700:4700::1111"]}`.
 - **Data:** SQLite in the `dash-nodes_app-data` volume (`mainnet.sqlite`, `testnet.sqlite`,
   `geo/`). Deleting a file rebuilds that network from scratch (history is lost).
 
