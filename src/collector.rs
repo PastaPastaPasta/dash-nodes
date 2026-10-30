@@ -3,7 +3,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Result, anyhow};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -12,9 +12,9 @@ use crate::addr::PeerAddr;
 use crate::db::{self, get_meta, set_meta};
 use crate::state::NetCtx;
 
-/// Blocks per `masternode payments` call. Each block costs dashd a txindex lookup per input
-/// (it recomputes fees), so keep calls short enough not to hog its RPC threads.
-const PAYMENT_CHUNK: u32 = 100;
+/// Blocks per payments batch. Each block costs a `getblock` and a full `protx list` at its height
+/// (a few MB on mainnet), so batches stay small.
+const PAYMENT_CHUNK: u32 = 10;
 /// Forward indexing work per tick, so a long gap doesn't delay the masternode list refresh.
 const FORWARD_PER_TICK: u32 = 2_000;
 const REORG_SEARCH: u32 = 200;
@@ -317,49 +317,116 @@ async fn unwind_reorg(ctx: &NetCtx, lo: u32, hi: u32, tip: u32) -> Result<u32> {
     Ok(h)
 }
 
+/// One block's masternode payments.
+#[derive(Debug, PartialEq)]
+struct Block {
+    height: i64,
+    hash: String,
+    prev: String,
+    time: i64,
+    /// Everything the block paid masternodes, duffs.
+    amount: i64,
+    payees: Vec<(String, i64)>,
+}
+
+fn duffs(v: &Value) -> Option<i64> {
+    v["valueSat"].as_i64().or_else(|| v["value"].as_f64().map(|d| (d * 1e8).round() as i64))
+}
+
+/// The masternodes `block` paid: those whose `lastPaidHeight` became its height, from `protx listdiff`
+/// between its parent and it (an evonode paid several blocks in a row moves it every time).
+fn paid_in(height: i64, listdiff: &Value) -> Vec<String> {
+    listdiff["updatedMNs"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_object)
+        .flatten()
+        .filter(|(_, diff)| diff["lastPaidHeight"].as_i64() == Some(height))
+        .map(|(protx, _)| protx.clone())
+        .collect()
+}
+
+/// Every address a masternode's rewards go to, from its `protx info` / `protx list` entry: the
+/// payout address (v24: `payouts[].address`, shared masternodes `shares[].rewardAddress`) and the
+/// operator's.
+fn payout_addresses(entry: &Value) -> Vec<String> {
+    let st = &entry["state"];
+    let mut out: Vec<String> = st["payoutAddress"].as_str().map(str::to_owned).into_iter().collect();
+    for (list, key) in [("payouts", "address"), ("shares", "rewardAddress")] {
+        out.extend(st[list].as_array().into_iter().flatten().filter_map(|p| p[key].as_str().map(str::to_owned)));
+    }
+    out.extend(st["operatorPayoutAddress"].as_str().map(str::to_owned));
+    out.retain(|a| !a.is_empty());
+    out
+}
+
+/// What `block` (`getblock` verbosity 2) paid each of `payees` (ProTx hash, reward addresses as of
+/// its parent), as `masternode payments` counts it, but without the txindex that RPC needs: the
+/// coinbase outputs to the payee's addresses, plus the platform share (the OP_RETURN output into
+/// the credit pool), which that RPC also counts as the payee's.
+fn block_payments(block: &Value, payees: &[(String, Vec<String>)]) -> Result<Block> {
+    let height = block["height"].as_i64().ok_or_else(|| anyhow!("getblock: no height"))?;
+    let outputs = block["tx"][0]["vout"].as_array().ok_or_else(|| anyhow!("getblock {height}: no coinbase"))?;
+    let platform: i64 =
+        outputs.iter().filter(|o| o["scriptPubKey"]["type"].as_str() == Some("nulldata")).filter_map(duffs).sum();
+    let payees: Vec<(String, i64)> = payees
+        .iter()
+        .enumerate()
+        .map(|(i, (protx, addrs))| {
+            let paid: i64 = outputs
+                .iter()
+                .filter(|o| o["scriptPubKey"]["address"].as_str().is_some_and(|a| addrs.iter().any(|x| x == a)))
+                .filter_map(duffs)
+                .sum();
+            (protx.clone(), paid + if i == 0 { platform } else { 0 })
+        })
+        .collect();
+    Ok(Block {
+        height,
+        hash: block["hash"].as_str().unwrap_or_default().to_owned(),
+        prev: block["previousblockhash"].as_str().unwrap_or_default().to_owned(),
+        time: block["time"].as_i64().unwrap_or(0),
+        amount: payees.iter().map(|(_, a)| a).sum(),
+        payees,
+    })
+}
+
+/// Reward addresses of `protx` as of block `at`. `protx info` at a past block looks the collateral
+/// up by txindex once it's spent, so for such masternodes fall back to the (much bigger) full list.
+async fn rewards_at(ctx: &NetCtx, protx: &str, at: &str, height: i64) -> Result<Vec<String>> {
+    if let Ok(info) = ctx.rpc.call::<Value>("protx", json!(["info", protx, at])).await {
+        return Ok(payout_addresses(&info));
+    }
+    let list: Value = ctx.rpc.call("protx", json!(["list", "registered", true, height])).await?;
+    let entry = list
+        .as_array()
+        .and_then(|l| l.iter().find(|m| m["proTxHash"].as_str() == Some(protx)))
+        .ok_or_else(|| anyhow!("{protx} isn't in the masternode list at {height}"))?;
+    Ok(payout_addresses(entry))
+}
+
 /// Fetches payments for heights [from, to] (inclusive), checks the batch is a chain that links onto
 /// whatever is stored at from-1 and to+1, and stores it together with the new range bound.
 async fn index_blocks(ctx: &NetCtx, from: u32, to: u32, extend: Extend) -> Result<()> {
-    let top: String = ctx.rpc.call("getblockhash", json!([to])).await?;
-    let count = i64::from(to - from + 1);
-    let blocks: Vec<Value> = ctx.rpc.call("masternode", json!(["payments", top, -count])).await?;
-    if blocks.len() != count as usize {
-        bail!("masternode payments returned {} blocks, expected {count}", blocks.len());
-    }
-    let calls: Vec<(&str, Value)> =
-        blocks.iter().map(|b| ("getblockheader", json!([b["blockhash"].clone(), true]))).collect();
-    let headers = ctx.rpc.batch(&calls).await?;
-
-    struct Block {
-        height: i64,
-        hash: String,
-        prev: String,
-        time: i64,
-        amount: i64,
-        payees: Vec<(String, i64)>,
-    }
-    let mut rows: Vec<Block> = Vec::with_capacity(blocks.len());
-    for (b, h) in blocks.iter().zip(&headers) {
-        let payees = b["masternodes"]
-            .as_array()
-            .map(|mns| {
-                mns.iter()
-                    .filter_map(|m| {
-                        let protx =
-                            m["proTxHash"].as_str().filter(|p| !p.is_empty() && !p.bytes().all(|c| c == b'0'))?;
-                        Some((protx.to_owned(), m["amount"].as_i64()?))
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-        let block = Block {
-            height: b["height"].as_i64().ok_or_else(|| anyhow!("payments: no height"))?,
-            hash: b["blockhash"].as_str().unwrap_or_default().to_owned(),
-            prev: h["previousblockhash"].as_str().unwrap_or_default().to_owned(),
-            time: h["time"].as_i64().unwrap_or(0),
-            amount: b["amount"].as_i64().unwrap_or(0),
-            payees,
-        };
+    let calls: Vec<(&str, Value)> = (from.saturating_sub(1)..=to).map(|h| ("getblockhash", json!([h]))).collect();
+    let hashes = ctx.rpc.batch(&calls).await?;
+    let mut rows: Vec<Block> = Vec::with_capacity(hashes.len());
+    // Everything by hash, so a reorg in between can't mix two chains into one block's answer.
+    for pair in hashes.windows(2) {
+        let (parent, hash) = (&pair[0], &pair[1]);
+        let got =
+            ctx.rpc.batch(&[("getblock", json!([hash, 2])), ("protx", json!(["listdiff", parent, hash]))]).await?;
+        let height = got[0]["height"].as_i64().ok_or_else(|| anyhow!("getblock: no height"))?;
+        let mut payees = Vec::new();
+        for protx in paid_in(height, &got[1]) {
+            let addrs = rewards_at(ctx, &protx, parent.as_str().unwrap_or_default(), height - 1).await?;
+            payees.push((protx, addrs));
+        }
+        let block = block_payments(&got[0], &payees)?;
+        if block.amount == 0 {
+            tracing::warn!(net = ctx.net.name(), "block {height}: no masternode payment found");
+        }
         if let Some(below) = rows.last()
             && (block.prev != below.hash || block.height != below.height + 1)
         {
@@ -440,6 +507,11 @@ pub async fn backfill(ctx: Arc<NetCtx>, floor: u32) {
                 return;
             }
             Ok(false) => {}
+            // A pruned node has no older blocks: that's as far as this node can go.
+            Err(e) if format!("{e:#}").contains("pruned") => {
+                tracing::info!(net = ctx.net.name(), "payments backfill stops here: older blocks are pruned");
+                return;
+            }
             Err(e) => {
                 tracing::warn!(net = ctx.net.name(), "backfill: {e:#}");
                 tokio::time::sleep(Duration::from_secs(60)).await;
@@ -453,6 +525,38 @@ pub async fn backfill(ctx: Arc<NetCtx>, floor: u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn payments_from_listdiff_and_coinbase() {
+        let diff = json!({"updatedMNs": [
+            {"aa": {"lastPaidHeight": 100, "PoSePenalty": 0}},
+            {"bb": {"PoSePenalty": 10}},
+            {"cc": {"lastPaidHeight": 99}}
+        ]});
+        assert_eq!(paid_in(100, &diff), vec!["aa".to_owned()]);
+
+        let v23 = json!({"state": {"payoutAddress": "Xpay", "operatorPayoutAddress": "Xop"}});
+        let v24 = json!({"state": {"payouts": [{"address": "Xa"}, {"address": "Xb"}]}});
+        let shared = json!({"state": {"shares": [{"rewardAddress": "Xs1"}, {"rewardAddress": "Xs2"}]}});
+        assert_eq!(payout_addresses(&v23), ["Xpay", "Xop"]);
+        assert_eq!(payout_addresses(&v24), ["Xa", "Xb"]);
+        assert_eq!(payout_addresses(&shared), ["Xs1", "Xs2"]);
+
+        let block = json!({
+            "height": 100, "hash": "h100", "previousblockhash": "h99", "time": 5,
+            "tx": [{"vout": [
+                {"valueSat": 59_526_072, "scriptPubKey": {"type": "pubkeyhash", "address": "Xminer"}},
+                {"valueSat": 66_966_830, "scriptPubKey": {"type": "nulldata"}},
+                {"valueSat": 100_000_000, "scriptPubKey": {"type": "pubkeyhash", "address": "Xpay"}},
+                {"valueSat": 11_611_384, "scriptPubKey": {"type": "scripthash", "address": "Xop"}}
+            ]}]
+        });
+        // The payee gets its outputs plus the platform share, whatever its type (as the RPC counts it).
+        let b = block_payments(&block, &[("aa".to_owned(), payout_addresses(&v23))]).unwrap();
+        assert_eq!(b.payees, vec![("aa".to_owned(), 100_000_000 + 11_611_384 + 66_966_830)]);
+        assert_eq!((b.amount, b.prev.as_str(), b.time), (178_578_214, "h99", 5));
+        assert!(block_payments(&block, &[]).unwrap().payees.is_empty());
+    }
 
     #[test]
     fn parses_v23_entry() {

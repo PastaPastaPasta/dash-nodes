@@ -110,11 +110,15 @@ const hex = (bytes) => [...bytes].map((b) => b.toString(16).padStart(2, "0")).jo
  * Comparisons are on digests, in constant time.
  */
 async function authorized(request, env, key) {
+  return authorizedFor(request, env, /^v1\/[a-z]+\/bench\/([^/]+)\//.exec(key)?.[1]);
+}
+
+/** The INGEST_TOKEN, `extra` (another secret's value) if given, or the token of `vantage` (if given). */
+async function authorizedFor(request, env, vantage, extra) {
   const got = (request.headers.get("authorization") || "").replace(/^Bearer /, "");
   if (!got) return false;
   const mine = await digest(got);
-  if (env.INGEST_TOKEN && crypto.subtle.timingSafeEqual(mine, await digest(env.INGEST_TOKEN))) return true;
-  const vantage = /^v1\/[a-z]+\/bench\/([^/]+)\//.exec(key)?.[1];
+  for (const t of [env.INGEST_TOKEN, extra]) if (t && crypto.subtle.timingSafeEqual(mine, await digest(t))) return true;
   let tokens;
   try { tokens = JSON.parse(env.BENCH_TOKENS || "{}"); } catch { return false; }
   if (!tokens || typeof tokens !== "object" || !vantage || !Object.hasOwn(tokens, vantage)) return false;
@@ -143,11 +147,72 @@ async function ingest(request, env, url) {
   return new Response(null, { status: 204 });
 }
 
+/**
+ * Snapshot keys in the private STATE bucket: `<name>/latest.json` (the manifest), `<name>/previous.json`
+ * (the one before, read-only) and `<name>/<stamp>/<nnn>` (parts). `app-<network>` is the crawler's
+ * database (STATE_TOKEN), `bench-<vantage>` a vantage's results (its own token); INGEST_TOKEN both.
+ */
+const STATE_KEY = new RegExp(`^(app-(?:${NETWORKS.join("|")})|bench-(${VANTAGE}))/(latest\\.json|previous\\.json|\\d{10}/\\d{3})$`);
+/** Largest snapshot part (the client sends 64 MiB; Workers take request bodies up to 100 MB). */
+const MAX_PART = 96 << 20;
+
+/** GET/PUT /_state/<key>: the hosts' snapshots of state they can't rebuild (see src/snapshot.rs). */
+async function state(request, env, url) {
+  const key = url.pathname.slice("/_state/".length);
+  const m = STATE_KEY.exec(key);
+  if (!m) return fail(400, "key not allowed");
+  const [, name, vantage, file] = m;
+  if (!(await authorizedFor(request, env, vantage, vantage ? null : env.STATE_TOKEN))) return fail(401, "unauthorized");
+  if (request.method === "GET") {
+    const obj = await env.STATE.get(key);
+    if (obj) return new Response(obj.body, { headers: { "cache-control": "no-store" } });
+    // Marked, so a client can tell "there is no snapshot" from a 404 by anything else on the way.
+    const r = fail(404, "no such snapshot");
+    r.headers.set("x-state", "none");
+    return r;
+  }
+  if (request.method !== "PUT") return fail(405, "method not allowed");
+  const length = Number(request.headers.get("content-length") || 0);
+  if (!request.body || !length || length > MAX_PART) return fail(413, "missing length, or too large");
+  if (file === "previous.json") return fail(400, "key not allowed");
+  if (file !== "latest.json") {
+    await env.STATE.put(key, request.body);
+    return new Response(null, { status: 204 });
+  }
+  // A manifest. It becomes the latest only if every part it names is stored and it descends from
+  // the current latest (`parent`), so a host that started from an empty database, or a second
+  // host, can't replace the history; the swap itself is conditional on the latest not changing.
+  // The latest it replaces becomes the previous, and anything older (or left over from an upload
+  // that never finished) goes.
+  let manifest;
+  try { manifest = JSON.parse(await request.text()); } catch { return fail(400, "manifest is not JSON"); }
+  const { stamp, parts, parent = null } = manifest || {};
+  if (!Number.isInteger(stamp) || !Number.isInteger(parts) || parts < 1 || parts > 999) return fail(400, "bad manifest");
+  const partKey = (s, i) => `${name}/${s}/${String(i).padStart(3, "0")}`;
+  for (let i = 0; i < parts; i++) {
+    if (!(await env.STATE.head(partKey(stamp, i)))) return fail(409, `part ${i} is missing`);
+  }
+  const current = await env.STATE.get(`${name}/latest.json`);
+  const old = current ? await current.json().catch(() => null) : null;
+  if (old?.stamp === stamp) return new Response(null, { status: 204 }); // a retry of the same upload
+  if (old && old.stamp !== parent) return fail(409, `snapshot ${stamp} descends from ${parent}, but the latest is ${old.stamp}`);
+  const swapped = await env.STATE.put(`${name}/latest.json`, JSON.stringify(manifest),
+    current ? { onlyIf: { etagMatches: current.etag } } : undefined);
+  if (!swapped) return fail(409, "the latest snapshot changed meanwhile");
+  if (old) await env.STATE.put(`${name}/previous.json`, JSON.stringify(old));
+  const keep = new Set([stamp, old?.stamp].filter(Boolean).map(String));
+  const listed = await env.STATE.list({ prefix: `${name}/` });
+  const stale = listed.objects.map((o) => o.key).filter((k) => /\/\d{10}\//.test(k) && !keep.has(k.split("/")[1]));
+  if (stale.length) await env.STATE.delete(stale);
+  return new Response(null, { status: 204 });
+}
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
     if (url.pathname.startsWith("/api/v1/")) return api(request, env, ctx, url);
     if (url.pathname.startsWith("/_ingest/")) return ingest(request, env, url);
+    if (url.pathname.startsWith("/_state/")) return state(request, env, url);
     // Masternode pages share one HTML file; the script reads the ProTx from the path.
     if (/^\/mn\/[0-9a-fA-F]{64}\/?$/.test(url.pathname)) return env.ASSETS.fetch(new Request(new URL("/mn", url), request));
     return env.ASSETS.fetch(request);

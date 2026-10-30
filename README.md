@@ -13,8 +13,8 @@ mnowatch.org/user-agents and the old dashninja.pl:
   IPv6 internet, natively or through NAT66 (or through a SOCKS5 proxy). A network without a route is still counted as *known*,
   just not crawled; each address counts as one node, so a node on IPv4 and Tor counts twice.
 - **Masternode list:** the deterministic list from dashd, a live port check per masternode, version
-  history, daily port-check uptime, and every payment back to DIP3 enforcement (`masternode payments`,
-  backfilled newest first).
+  history, daily port-check uptime, and every payment back to DIP3 enforcement (from each block's
+  coinbase and the masternode list at its height, backfilled newest first).
 - **Map:** every masternode (or every reachable node, counted per city) placed by the city its IP
   geolocates to (DB-IP City Lite), clustered, colored by port-check status, version or type, with the
   list's filters. It replaces the old map.dashhq.org / map.thepasta.org (`PastaPastaPasta/dash-mn-map`).
@@ -74,9 +74,11 @@ cd deploy
 docker compose up -d --build      # dashd mainnet + testnet, the app on :8080
 ```
 
-dashd needs `txindex=1` (`masternode payments` recomputes fees), which `deploy/dashd/dash.conf` sets.
-A cold mainnet sync takes many hours; seeding the datadirs from another synced node with the same
-dashd version and txindex is much faster (see Deploy notes).
+dashd runs pruned (`deploy/dashd/dash.conf`): the app needs the chain state, the masternode list and
+recent blocks, not the whole chain or a txindex. A pruned node can only backfill payments as far as
+its oldest block, so the full history comes from a snapshot (below) or from a run against an
+unpruned node. A cold mainnet sync takes many hours; seeding the datadirs from another node with the
+same dashd version is much faster (see Deploy notes).
 
 Put the Worker's ingest token in `secrets/ingest_token` and the `publisher` service starts pushing to
 `PUBLISH_TARGET`; until then it idles.
@@ -235,16 +237,16 @@ SOURCE=http://127.0.0.1:8080 VANTAGE=dev STATE_DIR=/tmp/b cargo run --release --
 
 ## Deploy notes
 
-The stack runs on any Docker host (Docker Engine 28+, Compose 2.33+); 8 cores, 12 GB RAM and about
-150 GB of disk are comfortable for both networks with `txindex`. Unpack the source somewhere such as
+The stack runs on any Docker host (Docker Engine 28+, Compose 2.33+); 2 cores, 4 GB RAM and 80 GB
+of disk are enough for both networks pruned. Unpack the source somewhere such as
 `/opt/dash-nodes` (keeping the deployed commit in a `DEPLOYED_COMMIT` file helps) and run the stack
 from its `deploy/` directory.
 
 - **Redeploy:** `git archive` or tar the tree (without `target/`, `deploy/secrets`, `deploy/.env`),
   unpack it over the old one, then `docker compose build app && docker compose up -d app`.
   Restarting the app abandons a crawl in progress; the next one starts right away.
-- **Seeding dashd:** a cold sync takes many hours. Copying `blocks chainstate indexes evodb llmq`
-  from another synced node with the same dashd version and `txindex=1` into the
+- **Seeding dashd:** a cold sync takes many hours. Copying `blocks chainstate evodb llmq` (and
+  `indexes` without `txindex`) from another synced node with the same dashd version into the
   `dash-nodes_dashd-{mainnet,testnet}` volumes (owned by the container's uid 1000, as mapped on
   your host) is much faster. Keep `DASHD_TAG` at or above the version that wrote them.
 - **Public access:** the `dash-nodes` Worker serves the site from R2; the host only connects out to
@@ -265,8 +267,15 @@ from its `deploy/` directory.
   Some cloud providers' resolvers answer SERVFAIL for it (seen on DigitalOcean, 2026-10-30), which
   leaves a fresh mainnet node with no peers. Give Docker public resolvers in
   `/etc/docker/daemon.json`: `{"dns": ["1.1.1.1", "8.8.8.8", "2606:4700:4700::1111"]}`.
+- **Snapshots: the host holds nothing that can't be rebuilt.** The app snapshots its databases to
+  the Worker's private `dash-nodes-state` bucket (`/_state/`, the STATE_TOKEN secret in `secrets/state_token`; every
+  `STATE_INTERVAL`, 6 h, and 10 minutes after a start), and the bench its results (its own token,
+  every 3 h). On a new host they restore themselves before anything else runs: a database file that
+  doesn't exist yet is fetched from the latest snapshot. If one exists but can't be fetched, they
+  stop rather than start empty. Everything else (dashd, Tor and I2P state, the publisher's record of
+  what it uploaded) is re-derived.
 - **Data:** SQLite in the `dash-nodes_app-data` volume (`mainnet.sqlite`, `testnet.sqlite`,
-  `geo/`). Deleting a file rebuilds that network from scratch (history is lost).
+  `geo/`). Deleting a file brings it back from the latest snapshot (see Snapshots); without snapshots it rebuilds that network from scratch (history is lost).
 
 ## License
 

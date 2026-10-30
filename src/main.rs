@@ -9,6 +9,7 @@ mod network;
 mod p2p;
 mod reference;
 mod rpc;
+mod snapshot;
 mod socks5;
 mod state;
 mod transport;
@@ -133,6 +134,26 @@ struct ServeArgs {
     /// Pause between backfill batches, to leave dashd room for everything else.
     #[arg(long, env = "BACKFILL_PAUSE_MS", default_value_t = 200)]
     backfill_pause_ms: u64,
+    /// The Worker keeping snapshots of the databases (see snapshot.rs); unset: none are kept.
+    #[arg(long, env = "STATE_TARGET")]
+    state_target: Option<String>,
+    /// File holding the token for STATE_TARGET (the Worker's STATE_TOKEN).
+    #[arg(long, env = "STATE_TOKEN_FILE")]
+    state_token_file: Option<PathBuf>,
+    /// Seconds between snapshots.
+    #[arg(long, env = "STATE_INTERVAL", default_value_t = 6 * 3600)]
+    state_interval: u64,
+}
+
+/// The snapshot store, if STATE_TARGET and a non-empty STATE_TOKEN_FILE are set.
+fn state_remote(target: &Option<String>, token_file: &Option<PathBuf>) -> Result<Option<snapshot::Remote>> {
+    let (Some(target), Some(file)) = (target, token_file) else { return Ok(None) };
+    let token = std::fs::read_to_string(file).with_context(|| format!("read {}", file.display()))?.trim().to_owned();
+    // Starting without it would mean starting empty on a new host, and history that is never saved.
+    if token.is_empty() {
+        bail!("{} is empty: put the Worker's state token there, or unset STATE_TARGET", file.display());
+    }
+    Ok(Some(snapshot::Remote::new(target, token)?))
 }
 
 /// Runs a background task for a network, restarting it if it panics. A task that returns is done.
@@ -223,13 +244,25 @@ async fn serve(args: ServeArgs) -> Result<()> {
             None => tracing::info!("{net}: not crawled ({})", r.reason.as_deref().unwrap_or("")),
         }
     }
+    let remote = state_remote(&args.state_target, &args.state_token_file)?;
     let mut nets = HashMap::new();
+    let mut snapshots = Vec::new();
     for (net, url, floor) in [
         (Network::Mainnet, &args.mainnet_rpc, args.payments_floor_mainnet),
         (Network::Testnet, &args.testnet_rpc, args.payments_floor_testnet),
     ] {
         let Some(url) = url else { continue };
-        let db = db::Db::open(&args.data_dir.join(format!("{}.sqlite", net.name())))?;
+        let path = args.data_dir.join(format!("{}.sqlite", net.name()));
+        let name = format!("app-{}", net.name());
+        // A new host: bring back the history before anything writes a fresh database.
+        if let Some(r) = &remote
+            && !path.exists()
+            && !r.restore(&name, &path).await.with_context(|| format!("restore {name}"))?
+        {
+            tracing::info!("{name}: no snapshot yet; starting a new database");
+        }
+        snapshots.push((name, path.clone()));
+        let db = db::Db::open(&path)?;
         let ctx = Arc::new(NetCtx {
             net,
             db,
@@ -253,6 +286,21 @@ async fn serve(args: ServeArgs) -> Result<()> {
     }
     if nets.is_empty() {
         bail!("no network configured: set MAINNET_RPC and/or TESTNET_RPC");
+    }
+    if let Some(remote) = remote {
+        let every = Duration::from_secs(args.state_interval.max(600));
+        tokio::spawn(async move {
+            // The first one soon after a start, so a new host has a fresh snapshot early.
+            tokio::time::sleep(Duration::from_secs(600)).await;
+            loop {
+                for (name, path) in &snapshots {
+                    if let Err(e) = remote.save(name, path).await {
+                        tracing::warn!("snapshot {name}: {e:#}");
+                    }
+                }
+                tokio::time::sleep(every).await;
+            }
+        });
     }
     let app = api::router(Arc::new(nets), &args.web_dir);
     let listener = tokio::net::TcpListener::bind(&args.listen).await?;

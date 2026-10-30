@@ -59,7 +59,7 @@ services:
     <<: *dashd
     environment:
       DASH_NETWORK: mainnet
-      DASHD_DBCACHE_MB: ${MAINNET_DBCACHE_MB:-1536}
+      DASHD_DBCACHE_MB: ${MAINNET_DBCACHE_MB:-450}
       DASHD_EXTRA_ARGS: ${MAINNET_DASHD_ARGS:-}
       DASHD_ONION: 172.30.88.10:9050
       DASHD_I2PSAM: 172.30.88.11:7656
@@ -80,7 +80,7 @@ services:
     <<: *dashd
     environment:
       DASH_NETWORK: testnet
-      DASHD_DBCACHE_MB: ${TESTNET_DBCACHE_MB:-512}
+      DASHD_DBCACHE_MB: ${TESTNET_DBCACHE_MB:-200}
       DASHD_EXTRA_ARGS: ${TESTNET_DASHD_ARGS:-}
       DASHD_ONION: 172.30.88.10:9050
       DASHD_I2PSAM: 172.30.88.11:7656
@@ -124,9 +124,13 @@ services:
       IPV6_PROXY: ${IPV6_PROXY:-}
       # Through the cjdns container's NAT, which the app can't detect by itself: say so.
       CJDNS: ${CJDNS:-auto}
+      # Snapshots of the databases in the Worker's private state store; a new host restores them.
+      STATE_TARGET: ${PUBLISH_TARGET:-https://nodes.dashhq.org}
+      STATE_TOKEN_FILE: /run/secrets/state_token
       RUST_LOG: ${RUST_LOG:-info}
     secrets:
       - rpc_password
+      - state_token
     volumes:
       - app-data:/data
     ports:
@@ -323,3 +327,6 @@ secrets:
     file: ./secrets/ingest_token
   bench_token:
     file: ./secrets/bench_token
+  # The Worker's STATE_TOKEN: the app's database snapshots (only those; see src/snapshot.rs).
+  state_token:
+    file: ./secrets/state_token

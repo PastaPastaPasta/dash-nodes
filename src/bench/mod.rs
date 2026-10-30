@@ -108,6 +108,8 @@ pub struct BenchArgs {
 const REFRESH_EVERY: Duration = Duration::from_secs(600);
 /// Everything is uploaded again this often, whether it changed or not.
 const FULL_PUBLISH_EVERY: Duration = Duration::from_secs(24 * 3600);
+/// How often the results are snapshotted to the Worker's state store.
+const SNAPSHOT_EVERY: Duration = Duration::from_secs(3 * 3600);
 /// Results older than this many cycles are dropped (masternodes that left the list).
 const KEEP_CYCLES: i64 = 6;
 /// The vantage check (see `Bench::online`): how many known-good masternodes it tries, how long each
@@ -171,6 +173,19 @@ pub async fn main(args: BenchArgs) -> Result<()> {
             tokio::time::sleep(Duration::from_secs(60)).await;
         }
     }
+    // Results live in the Worker's state store too (see snapshot.rs): a new host picks them up.
+    let snapshots = match (&args.target, uploader.as_ref().and_then(Uploader::token)) {
+        (Some(t), Some(token)) => Some(crate::snapshot::Remote::new(t, token)?),
+        _ => None,
+    };
+    let snapshot_name = format!("bench-{vantage}");
+    let db_path = args.state_dir.join("bench.sqlite");
+    if let Some(r) = &snapshots
+        && !db_path.exists()
+    {
+        std::fs::create_dir_all(&args.state_dir)?;
+        r.restore(&snapshot_name, &db_path).await.with_context(|| format!("restore {snapshot_name}"))?;
+    }
     let store = Store::open(&args.state_dir)?;
     let history = store.load()?;
     tracing::info!(
@@ -184,6 +199,7 @@ pub async fn main(args: BenchArgs) -> Result<()> {
         nets: nets.into_iter().map(|n| (n, NetState::default())).collect(),
         source,
         uploader,
+        snapshots: snapshots.map(|r| (r, snapshot_name, db_path)),
         params,
         vantage,
         meter: Meter::default(),
@@ -266,6 +282,8 @@ struct Bench {
     nets: Vec<(Network, NetState)>,
     source: Source,
     uploader: Option<Uploader>,
+    /// Where results are snapshotted: the store, the snapshot's name and the database file.
+    snapshots: Option<(crate::snapshot::Remote, String, PathBuf)>,
     params: Params,
     vantage: String,
     meter: Meter,
@@ -386,6 +404,8 @@ impl Bench {
         let mut next_publish = Instant::now() + Duration::from_secs(60);
         // Per network: when everything was last uploaded regardless of changes.
         let mut full_publish: HashMap<Network, Instant> = HashMap::new();
+        // The first one soon after a start, so a vantage that restarts often still gets saved.
+        let mut next_snapshot = Instant::now() + Duration::from_secs(600);
         // Jittered first start, so restarts of several vantages don't line up.
         let mut next_start = if sweep { Instant::now() } else { Instant::now() + jittered(Duration::from_secs(30)) };
         let mut pace = Duration::ZERO;
@@ -413,6 +433,10 @@ impl Bench {
             if !sweep && now >= next_publish {
                 self.publish(&mut full_publish).await;
                 next_publish = Instant::now() + Duration::from_secs(self.args.publish_interval.max(60));
+            }
+            if !sweep && now >= next_snapshot {
+                self.snapshot().await;
+                next_snapshot = Instant::now() + SNAPSHOT_EVERY;
             }
             let bps = rate.sample(now, self.meter.load(Ordering::Relaxed));
             let limit_reached = self.args.limit.is_some_and(|l| started >= l);
@@ -479,6 +503,7 @@ impl Bench {
         if let Some(u) = &self.uploader {
             if u.token().is_some() {
                 self.publish(&mut HashMap::new()).await;
+                self.snapshot().await;
             } else {
                 tracing::warn!("no bench token: results kept in {}, not published", self.args.state_dir.display());
             }
@@ -574,6 +599,14 @@ impl Bench {
                     return;
                 }
             }
+        }
+    }
+
+    async fn snapshot(&self) {
+        if let Some((remote, name, path)) = &self.snapshots
+            && let Err(e) = remote.save(name, path).await
+        {
+            tracing::warn!("snapshot {name}: {e:#}");
         }
     }
 

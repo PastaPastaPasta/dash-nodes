@@ -13,8 +13,11 @@ fi
 [ -e secrets/ingest_token ] || : > secrets/ingest_token
 # The bench's token for the Worker's ingest; the bench idles until it's filled in.
 [ -e secrets/bench_token ] || : > secrets/bench_token
+# The Worker's STATE_TOKEN, for the app's database snapshots; the app won't start without it
+# (unset STATE_TARGET in docker-compose.yml to run without snapshots).
+[ -e secrets/state_token ] || : > secrets/state_token
 chown 1000:1000 secrets/* 2>/dev/null || true
 chmod 0400 secrets/rpc_password
-chmod 0400 secrets/ingest_token secrets/bench_token
+chmod 0400 secrets/ingest_token secrets/bench_token secrets/state_token
 [ -e .env ] || cp .env.example .env
 echo "ok: edit .env if needed, then: docker compose up -d --build"

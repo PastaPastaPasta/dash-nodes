@@ -9,9 +9,13 @@
     "not_found_handling": "404-page",
     "html_handling": "auto-trailing-slash",
     // Everything else is served straight from the asset store without running the Worker.
-    "run_worker_first": ["/api/*", "/_ingest/*", "/mn/*"]
+    "run_worker_first": ["/api/*", "/_ingest/*", "/_state/*", "/mn/*"]
   },
-  "r2_buckets": [{ "binding": "DATA", "bucket_name": "dash-nodes-data" }],
+  // DATA: the published documents. STATE: private snapshots of the hosts' databases (never served).
+  "r2_buckets": [
+    { "binding": "DATA", "bucket_name": "dash-nodes-data" },
+    { "binding": "STATE", "bucket_name": "dash-nodes-state" }
+  ],
   // Speed-test vantage points whose results are combined (each writes with its own BENCH_TOKENS entry).
   "vars": { "BENCH_VANTAGES": "us-east,eu-west,ap-southeast" },
   "routes": [{ "pattern": "nodes.dashhq.org", "custom_domain": true }],
