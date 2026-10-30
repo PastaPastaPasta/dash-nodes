@@ -184,6 +184,8 @@ CREATE TABLE IF NOT EXISTS payments (
     PRIMARY KEY (height, protx)
 ) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS payments_protx ON payments(protx, height);
+-- Time to height (realized returns turn "the last 90 days" into a height range).
+CREATE INDEX IF NOT EXISTS blocks_time ON blocks(time);
 "#;
 
 const READERS: usize = 8;

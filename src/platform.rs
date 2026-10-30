@@ -24,6 +24,8 @@ use crate::state::NetCtx;
 const PLATFORM_INTERVAL: Duration = Duration::from_secs(15 * 60);
 const CONCURRENCY: usize = 32;
 const TIMEOUT: Duration = Duration::from_secs(10);
+/// Largest answer read: a real one is under 1 KB.
+const MAX_ANSWER: usize = 64 * 1024;
 
 /// What one check found. Errors say which step failed.
 #[derive(Debug, Default, PartialEq)]
@@ -52,9 +54,13 @@ pub struct Status {
 }
 
 fn client() -> reqwest::Client {
+    // The other side is whoever registered the evonode: no redirects (they could point us anywhere and
+    // have the answer published) and no compression (a small answer could inflate without bound).
     reqwest::Client::builder()
         .timeout(TIMEOUT)
         .connect_timeout(TIMEOUT)
+        .redirect(reqwest::redirect::Policy::none())
+        .no_gzip()
         .tls_info(true)
         .user_agent(crate::p2p::user_agent())
         .build()
@@ -211,7 +217,17 @@ async fn get_status(client: &reqwest::Client, addr: &str) -> Result<(Status, Opt
         bail!("HTTP {}", resp.status());
     }
     let grpc_message = resp.headers().get("grpc-message").and_then(|v| v.to_str().ok()).map(str::to_owned);
-    let bytes = resp.bytes().await.map_err(|e| anyhow!(describe(&e)))?;
+    if resp.content_length().is_some_and(|n| n > MAX_ANSWER as u64) {
+        bail!("answer too large");
+    }
+    let mut resp = resp;
+    let mut bytes = Vec::new();
+    while let Some(chunk) = resp.chunk().await.map_err(|e| anyhow!(describe(&e)))? {
+        if bytes.len() + chunk.len() > MAX_ANSWER {
+            bail!("answer too large");
+        }
+        bytes.extend_from_slice(&chunk);
+    }
     let msg = first_data_frame(&bytes)
         .ok_or_else(|| anyhow!("no answer ({})", grpc_message.as_deref().unwrap_or("empty")))?;
     Ok((parse_status(msg)?, cert))

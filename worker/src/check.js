@@ -86,6 +86,7 @@ export class Messages {
 
 /** The node's version message: protocol, services (hex), user agent, start height. */
 export function parseVersion(p) {
+  if (p.length < 81) throw new Error("bad version message");
   const dv = new DataView(p.buffer, p.byteOffset, p.byteLength);
   let at = 80;
   let n = p[at++];

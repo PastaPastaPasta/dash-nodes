@@ -26,6 +26,7 @@ test("a version message round-trips through the stream splitter", async () => {
   assert.equal(v.protocol, 70242);
   assert.equal(v.user_agent, "/dash-nodes:check(nodes.dashhq.org)/");
   assert.equal(v.height, 0);
+  assert.throws(() => parseVersion(new Uint8Array(40)), /bad version message/);
   const testnet = new Messages("testnet");
   testnet.push(msg);
   assert.throws(() => testnet.next(), /wrong network magic/);

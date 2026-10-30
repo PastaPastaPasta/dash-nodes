@@ -597,17 +597,32 @@ fn collateral_duffs(evo: bool) -> f64 {
     if evo { 4_000.0 * COIN } else { 1_000.0 * COIN }
 }
 
-/// Paid in the last 30, 90 and 365 days, and the annualized yield over the last 90 (or since
-/// registration, if later; none before two weeks, which is too few payments to say).
+/// The first indexed block at or after `ts` (None: nothing indexed that late).
+fn height_at(c: &Connection, ts: i64) -> Result<Option<i64>> {
+    Ok(c.query_row("SELECT min(height) FROM blocks WHERE time >= ?1", [ts], |r| r.get(0))?)
+}
+
+/// When the payments index starts (the time of its lowest block), if it has any.
+fn index_start(c: &Connection) -> Result<Option<i64>> {
+    Ok(c.query_row("SELECT time FROM blocks ORDER BY height LIMIT 1", [], |r| r.get(0)).optional()?)
+}
+
+/// What `protx` was paid from height `from` on.
+fn paid_since(c: &Connection, protx: &str, from: Option<i64>) -> Result<i64> {
+    let Some(from) = from else { return Ok(0) };
+    Ok(c.query_row(
+        "SELECT coalesce(sum(amount), 0) FROM payments WHERE protx = ?1 AND height >= ?2",
+        params![protx, from],
+        |r| r.get(0),
+    )?)
+}
+
+/// Paid in the last 30, 90 and 365 days (as far as the payments index goes back), and the annualized
+/// yield over the last 90 days, or since registration or the start of the index if later (none under
+/// two weeks: too few payments to say).
 fn mn_returns(c: &Connection, protx: &str, evo: bool) -> Result<Value> {
     let now = db::now();
-    let (d30, d90, d365): (Option<i64>, Option<i64>, Option<i64>) = c.query_row(
-        "SELECT sum(CASE WHEN b.time >= ?2 THEN p.amount END), sum(CASE WHEN b.time >= ?3 THEN p.amount END),
-                sum(p.amount)
-         FROM payments p JOIN blocks b ON b.height = p.height WHERE p.protx = ?1 AND b.time >= ?4",
-        params![protx, now - 30 * DAY, now - RETURN_WINDOW * DAY, now - 365 * DAY],
-        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
-    )?;
+    let paid = |days: i64| -> Result<i64> { paid_since(c, protx, height_at(c, now - days * DAY)?) };
     let registered: Option<i64> = c
         .query_row(
             "SELECT b.time FROM masternodes m JOIN blocks b ON b.height = m.registered_height WHERE m.protx = ?1",
@@ -615,21 +630,16 @@ fn mn_returns(c: &Connection, protx: &str, evo: bool) -> Result<Value> {
             |r| r.get(0),
         )
         .optional()?;
-    let window = registered.map_or(RETURN_WINDOW, |t| ((now - t) / DAY).min(RETURN_WINDOW));
-    let window_paid = if window < RETURN_WINDOW {
-        c.query_row(
-            "SELECT sum(p.amount) FROM payments p JOIN blocks b ON b.height = p.height WHERE p.protx = ?1 AND b.time >= ?2",
-            params![protx, now - window * DAY],
-            |r| r.get::<_, Option<i64>>(0),
-        )?
-    } else {
-        d90
-    };
-    let annual_yield =
-        (window >= 14).then(|| window_paid.unwrap_or(0) as f64 / window as f64 * 365.0 / collateral_duffs(evo));
+    let from =
+        [Some(now - RETURN_WINDOW * DAY), registered, index_start(c)?].into_iter().flatten().max().unwrap_or(now);
+    let window = (now - from) / DAY;
+    let annual_yield = (window >= 14)
+        .then(|| paid_since(c, protx, height_at(c, from).ok().flatten()))
+        .transpose()?
+        .map(|p| round4(p as f64 / window as f64 * 365.0 / collateral_duffs(evo)));
     Ok(json!({
-        "paid_30d": d30.unwrap_or(0), "paid_90d": d90.unwrap_or(0), "paid_365d": d365.unwrap_or(0),
-        "window_days": window, "annual_yield": annual_yield.map(round4),
+        "paid_30d": paid(30)?, "paid_90d": paid(RETURN_WINDOW)?, "paid_365d": paid(365)?,
+        "window_days": window, "annual_yield": annual_yield, "indexed_since": index_start(c)?,
     }))
 }
 
@@ -637,22 +647,25 @@ fn round4(x: f64) -> f64 {
     (x * 1e4).round() / 1e4
 }
 
-/// The median annualized yield of enabled masternodes registered for the whole window, by type,
-/// and how many that is.
+/// The median annualized yield of enabled masternodes registered for the whole window, by type, and
+/// how many that is. None until the payments index covers the window.
 fn network_returns(c: &Connection) -> Result<Value> {
-    let now = db::now();
-    let since = now - RETURN_WINDOW * DAY;
-    let rows: Vec<(String, i64)> = query_all(
-        c,
-        "SELECT m.type, coalesce((SELECT sum(p.amount) FROM payments p JOIN blocks b ON b.height = p.height
-                                  WHERE p.protx = m.protx AND b.time >= ?1), 0)
-         -- No block time for the registration: it predates the payments index, so it's old enough.
-         FROM masternodes m LEFT JOIN blocks rb ON rb.height = m.registered_height
-         WHERE m.removed IS NULL AND (m.pose_ban_height IS NULL OR m.pose_ban_height <= 0)
-           AND (rb.time IS NULL OR rb.time < ?1)",
-        [since],
-        |r| Ok((r.get(0)?, r.get(1)?)),
-    )?;
+    let since = db::now() - RETURN_WINDOW * DAY;
+    let covered = index_start(c)?.is_some_and(|t| t <= since);
+    let from = if covered { height_at(c, since)? } else { None };
+    let rows: Vec<(String, i64)> = match from {
+        None => Vec::new(),
+        Some(from) => query_all(
+            c,
+            // A registration with no indexed block predates the index (and so the window).
+            "SELECT m.type, coalesce((SELECT sum(p.amount) FROM payments p WHERE p.protx = m.protx AND p.height >= ?2), 0)
+             FROM masternodes m LEFT JOIN blocks rb ON rb.height = m.registered_height
+             WHERE m.removed IS NULL AND (m.pose_ban_height IS NULL OR m.pose_ban_height <= 0)
+               AND (rb.time < ?1 OR (rb.time IS NULL AND m.registered_height < (SELECT min(height) FROM blocks)))",
+            params![since, from],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?,
+    };
     let median_yield = |evo: bool| {
         let mut ys: Vec<f64> = rows
             .iter()

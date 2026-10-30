@@ -247,7 +247,8 @@ fn stored_rows(c: &Connection) -> Result<HashMap<String, MnRow>> {
 }
 
 async fn sync_masternodes(ctx: &NetCtx, height: i64) -> Result<()> {
-    let list: Vec<Value> = ctx.rpc.call("protx", json!(["list", "registered", true])).await?;
+    // The list at exactly this height, so the changes it shows are stamped with the right block.
+    let list: Vec<Value> = ctx.rpc.call("protx", json!(["list", "registered", true, height])).await?;
     let rows: Vec<MnRow> = list.iter().map(parse_mn).collect::<Result<_>>()?;
     let n = rows.len();
     ctx.db
@@ -263,6 +264,9 @@ async fn sync_masternodes(ctx: &NetCtx, height: i64) -> Result<()> {
             let tx = conn.transaction()?;
             // Changes since the last sync. A first sync (nothing stored yet) has nothing to compare with.
             let stored = stored_rows(&tx)?;
+            // Marked removed when the list once looked short (see trust_removals); one coming back isn't new.
+            let was_removed: HashSet<String> =
+                db::query_all(&tx, "SELECT protx FROM masternodes WHERE removed IS NOT NULL", [], |r| r.get(0))?;
             {
                 let mut log = tx.prepare_cached(
                     "INSERT INTO mn_changes (ts, height, protx, field, old, new) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
@@ -270,6 +274,7 @@ async fn sync_masternodes(ctx: &NetCtx, height: i64) -> Result<()> {
                 if !stored.is_empty() {
                     for r in &rows {
                         match stored.get(&r.protx) {
+                            None if was_removed.contains(&r.protx) => {}
                             None => {
                                 log.execute(params![now, height, r.protx, "registered", None::<String>, r.service])?;
                             }

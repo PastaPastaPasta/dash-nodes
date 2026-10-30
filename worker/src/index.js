@@ -2,7 +2,7 @@
 // authenticated ingest the crawler pushes documents to. The crawler's host takes no inbound traffic.
 import { connect } from "cloudflare:sockets";
 import { route, ApiError, KEY, NETWORKS, DOCS, PARAMS, VANTAGE, shardKey } from "./api.js";
-import { checkNode } from "./check.js";
+import { checkNode, parseAddress } from "./check.js";
 
 const API_HEADERS = {
   "content-type": "application/json; charset=utf-8",
@@ -221,16 +221,23 @@ const CHECK_REUSE = 60;
  */
 async function check(request, env, ctx, url, net, protx) {
   if (request.method !== "POST") return fail(405, "use POST");
-  if (env.CHECK_LIMIT) {
-    const { success } = await env.CHECK_LIMIT.limit({ key: request.headers.get("cf-connecting-ip") || "unknown" });
-    if (!success) return fail(429, "too many checks from here; try again in a minute");
-  }
+  // Limited per client (an IPv6 client by its /64, the block it can pick addresses from), and every check
+  // that opens a connection per masternode too; a recent result is reused first.
+  const limited = async (key) => env.CHECK_LIMIT && !(await env.CHECK_LIMIT.limit({ key })).success;
+  const ip = request.headers.get("cf-connecting-ip") || "unknown";
+  const v6 = ip.includes(":") ? parseAddress(`[${ip}]:0`)?.ip16 : null;
+  const client = v6 ? [...v6.subarray(0, 8)].map((b) => b.toString(16).padStart(2, "0")).join("") : ip;
+  if (await limited(client)) return fail(429, "too many checks from here; try again in a minute");
   const cacheKey = `${url.origin}/_check/${net}/${protx}`;
   const recent = await caches.default.match(cacheKey);
   if (recent) return json(200, { ...(await recent.json()), cached: true }, "no-store");
+  if (await limited(`${net}:${protx}`)) return fail(429, "this masternode was just checked; try again in a minute");
   const mn = (await getJson(env, shardKey(net, protx)))?.[protx];
   if (!mn || mn.removed) return fail(404, "not a registered masternode");
   if (!mn.service) return fail(400, "this masternode has no core P2P address registered");
+  // Mainnet's consensus rules pin masternodes to port 9999; testnet's don't, so only its default port is
+  // checked (otherwise a free testnet registration could point the check at any host and port).
+  if (net === "testnet" && !mn.service.endsWith(":19999")) return fail(400, "on testnet only the default port (19999) is checked");
   const result = await checkNode(connect, net, mn.service);
   const body = JSON.stringify({ ...result, address: mn.service, from: request.cf?.colo ? `Cloudflare ${request.cf.colo}` : "Cloudflare",
     checked: Math.floor(Date.now() / 1000) });
