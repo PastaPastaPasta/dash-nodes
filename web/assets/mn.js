@@ -139,6 +139,16 @@ async function main() {
     paymentsSection(m)));
 }
 
+/** Gives each cell its column's name, which stacked tables show as the row label on phones. */
+function labelled(heads, tr) {
+  let i = 0;
+  for (const td of tr.children) {
+    td.dataset.label = heads[i];
+    i += Number(td.getAttribute("colspan") || 1);
+  }
+  return tr;
+}
+
 const GRADE_KIND = { A: "good", B: "good", C: "warning", D: "serious", F: "critical" };
 const ms = (v) => (v == null ? "–" : `${fmt(v)} ms`);
 const secs = (v) => (v == null ? "–" : `${v < 10 ? v.toFixed(1) : fmt(v)} s`);
@@ -163,10 +173,11 @@ function speedSection(box, b) {
         c && c.vantages > 1 ? ` (average of ${c.vantages} locations)` : ""),
       rank != null ? el("p", { class: "sub", text: `Better than ${pct(rank, 0)} of masternodes tested from the same location${ranks.length > 1 ? "s" : ""}.` }) : null));
   const latest = (v) => v.results.find((r) => r.ok) || v.results[0];
+  const HEADS = ["Location", "Tested", "Ping", "Connect", "50k headers", "Headers/s", "MN list", "Grade"];
   const rows = tested.map((v) => {
     const r = latest(v);
     const g = r.grade;
-    return el("tr", {},
+    return labelled(HEADS, el("tr", {},
       el("td", { title: v.location || "" }, v.location || v.vantage),
       el("td", { title: dateTime(r.ts), text: ago(r.ts) }),
       r.ok
@@ -177,7 +188,7 @@ function speedSection(box, b) {
           el("td", { class: "r", text: r.headers?.per_sec != null ? fmt(r.headers.per_sec) : "–" }),
           el("td", { class: "r", text: r.mnlistdiff?.ok ? secs(r.mnlistdiff.seconds) : "–" })]
         : el("td", { colspan: 5, class: "muted", text: `Test failed: ${r.error || "no answer"}` }),
-      el("td", { class: "r" }, g ? badge(GRADE_KIND[g.letter], `${g.letter} · ${Math.round(g.score)}`) : "–"));
+      el("td", { class: "r" }, g ? badge(GRADE_KIND[g.letter], `${g.letter} · ${Math.round(g.score)}`) : "–")));
   });
   const first = latest(tested[0]).grade;
   const DIMS = [["completeness", "Served everything asked"], ["throughput", "Header throughput"], ["reliability", "No stalls or bad data"],
@@ -186,8 +197,8 @@ function speedSection(box, b) {
     el("div", {}, el("span", { text: label }), el("span", { class: "track" }, el("span", { style: { width: `${first[k]}%` } })),
       el("span", { class: "num", text: Math.round(first[k]) })))) : null;
   box.replaceChildren(head, el("div", { class: "speed-grid" }, el("div", {}, summary, dims),
-    el("div", { class: "table-wrap" }, el("table", { class: "data" },
-      el("thead", {}, el("tr", {}, ...["Location", "Tested", "Ping", "Connect", "50k headers", "Headers/s", "MN list", "Grade"].map((h, i) =>
+    el("div", { class: "table-wrap" }, el("table", { class: "data stack" },
+      el("thead", {}, el("tr", {}, ...HEADS.map((h, i) =>
         el("th", { class: i > 1 ? "r" : null, text: h })))),
       el("tbody", {}, ...rows)))),
     el("p", { class: "muted small" }, "Each test downloads the latest 50,000 block headers and the masternode list from this node and checks them against our own node. Grades use the scoring of ",

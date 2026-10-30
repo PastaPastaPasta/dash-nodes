@@ -273,8 +273,9 @@ function openCluster(f) {
 
 let popup = null;
 
-function openPopup(m) {
-  popup?.remove();
+const phone = () => matchMedia("(max-width: 900px)").matches;
+
+function nodeCard(m) {
   const paid = !m.last_paid_height ? "never" : tip ? `${fmt(tip - m.last_paid_height)} blocks ago` : `block ${fmt(m.last_paid_height)}`;
   const [k, l] = nodeStatus(m);
   const facts = [
@@ -285,11 +286,30 @@ function openPopup(m) {
     ["Uptime, 7 days", m.uptime_7d != null ? pct(m.uptime_7d) : "–"],
     ["Last paid", paid],
   ];
-  const content = el("div", { class: "pop" },
+  return el("div", { class: "pop" },
     el("div", { class: "pop-head" }, badge(k, l), evoPill(m)),
     el("a", { class: "mono pop-id", href: href(`/mn/${m.protx}`), text: shortHash(m.protx, 12) }),
     el("dl", {}, ...facts.flatMap(([a, b]) => [el("dt", { text: a }), el("dd", {}, b)])),
     el("a", { class: "btn", href: href(`/mn/${m.protx}`), text: "Open masternode" }));
+}
+
+/** A masternode's details: a popup on wide screens, the bottom sheet on phones (a popup would hide under it). */
+function openPopup(m) {
+  popup?.remove();
+  if (phone()) {
+    const back = group ? () => { nodeBox.hidden = true; renderGroup(); select(""); } : () => { setMode("peek"); select(""); };
+    nodeBox.replaceChildren(
+      el("div", { class: "mp-row" }, el("button", { class: "link", type: "button", onclick: back, text: group ? "← Back to the list" : "Close" })),
+      nodeCard(m));
+    nodeBox.hidden = false;
+    groupBox.hidden = true;
+    setMode("detail");
+    select(m.protx);
+    // Keep the node in view above the sheet.
+    map.easeTo({ center: [m.lon, m.lat], zoom: Math.max(map.getZoom(), 5), offset: [0, -panel.offsetHeight / 2], duration: 400 });
+    return;
+  }
+  const content = nodeCard(m);
   const p = new Popup({ offset: 12, maxWidth: "320px", className: "mp-popup", focusAfterOpen: false })
     .setLngLat([m.lon, m.lat]).setDOMContent(content).addTo(map);
   p.on("close", () => { if (popup === p) { popup = null; select(""); } });
@@ -309,19 +329,48 @@ const panel = document.getElementById("panel");
 const head = document.getElementById("panel-head");
 const body = document.getElementById("panel-body");
 const handle = document.getElementById("panel-handle");
-handle.addEventListener("click", () => setOpen(!panel.classList.contains("open")));
+// Phones: the panel is a bottom sheet with three states: "peek" (search and headline), "open" (all the
+// controls) and "detail" (one place or masternode). Tap or drag the handle to move between them.
+let dragged = false;
+handle.addEventListener("click", () => {
+  if (dragged) { dragged = false; return; }
+  setMode(panel.dataset.mode === "peek" ? "open" : "peek");
+});
+handle.addEventListener("pointerdown", (e) => {
+  const y0 = e.clientY;
+  handle.setPointerCapture(e.pointerId);
+  const move = (ev) => {
+    const dy = ev.clientY - y0;
+    if (Math.abs(dy) > 6) dragged = true;
+    panel.style.transform = dy > 0 ? `translateY(${dy}px)` : "";
+  };
+  const up = (ev) => {
+    const dy = ev.clientY - y0;
+    panel.style.transform = "";
+    handle.removeEventListener("pointermove", move);
+    handle.removeEventListener("pointerup", up);
+    handle.removeEventListener("pointercancel", up);
+    if (dy > 50) setMode("peek");
+    else if (dy < -40) setMode("open");
+  };
+  handle.addEventListener("pointermove", move);
+  handle.addEventListener("pointerup", up);
+  handle.addEventListener("pointercancel", up);
+});
 
 // Phones: the map controls sit just above the bottom sheet, whatever its height.
 new ResizeObserver(() => document.documentElement.style.setProperty("--sheet-h", `${panel.offsetHeight}px`)).observe(panel);
 
-function setOpen(open) {
-  panel.classList.toggle("open", open);
-  handle.setAttribute("aria-expanded", String(open));
+function setMode(mode) {
+  panel.dataset.mode = mode;
+  handle.setAttribute("aria-expanded", String(mode !== "peek"));
+  if (mode !== "detail") nodeBox.hidden = true;
 }
 
 const headline = el("p", { class: "mp-headline" });
 const chips = el("div", { class: "chips", role: "group", "aria-label": "Show or hide categories" });
 const groupBox = el("section", { class: "mp-group", hidden: true, "aria-live": "polite" });
+const nodeBox = el("section", { class: "mp-node", hidden: true, "aria-live": "polite" });
 const foot = el("p", { class: "mp-foot" });
 
 function refilter() {
@@ -332,7 +381,8 @@ function refilter() {
 const pick = (name, label, options) => filterSelect(state, name, label, options, refilter, `Any ${label.toLowerCase()}`);
 
 function buildPanel() {
-  head.replaceChildren(searchBox(state, refilter, "Search ProTx, IP, city, hosting", "Search masternodes"), headline);
+  const filtersButton = el("button", { class: "btn mp-filters-button", type: "button", onclick: () => setMode("open"), text: "Filters" });
+  head.replaceChildren(el("div", { class: "mp-search-row" }, searchBox(state, refilter, "Search ProTx, IP, city, hosting", "Search masternodes"), filtersButton), headline);
   const layers = segmented([["mn", "Masternodes"], ["nodes", geo ? "All nodes" : "All nodes (soon)", !geo]], state.layer,
     (v) => { state.layer = v; refilter(); }, "Show");
   const colors = segmented(Object.entries(MODES).map(([k, m]) => [k, m.label]), state.color,
@@ -342,7 +392,7 @@ function buildPanel() {
     el("div", { class: "mp-row mn-only" }, el("span", { class: "mp-label", text: "Color" }), colors),
     chips,
     el("div", { class: "mp-filters mn-only" }, pick("type", "Type", TYPE_OPTIONS), pick("version", "Version", versionOptions(rows)), pick("country", "Country", countryOptions(rows))),
-    groupBox, foot);
+    groupBox, nodeBox, foot);
 }
 
 function renderChips() {
@@ -366,7 +416,7 @@ function renderChips() {
 function showGroup(list) {
   group = list;
   renderGroup();
-  setOpen(true);
+  setMode(phone() ? "detail" : "open");
 }
 
 const groupHead = (title, onClose) =>
@@ -376,9 +426,9 @@ function showCity(p) {
   group = null;
   groupBox.hidden = false;
   groupBox.replaceChildren(
-    groupHead((!p.cluster && place(geo.points[p.i])) || "This area", () => { groupBox.hidden = true; }),
+    groupHead((!p.cluster && place(geo.points[p.i])) || "This area", () => { groupBox.hidden = true; if (phone()) setMode("peek"); }),
     el("p", { class: "sub", text: `${fmt(p.nodes)} reachable nodes: ${fmt(p.masternodes)} masternodes and ${fmt(p.nodes - p.masternodes)} other full nodes.` }));
-  setOpen(true);
+  setMode(phone() ? "detail" : "open");
 }
 
 function renderGroup() {
@@ -391,7 +441,7 @@ function renderGroup() {
   const title = places.size === 1 ? place(group[0]) || "Same location" : `${places.size} places nearby`;
   const reach = group.filter((m) => nodeStatus(m)[1] === "Reachable").length;
   groupBox.replaceChildren(
-    groupHead(title, () => { group = null; renderGroup(); }),
+    groupHead(title, () => { group = null; renderGroup(); if (phone()) setMode("peek"); }),
     el("p", { class: "sub", text: `${fmt(group.length)} masternodes, ${fmt(reach)} reachable.` }),
     el("ul", { class: "mn-list" }, ...sorted.map((m) => {
       const [k, l] = nodeStatus(m);

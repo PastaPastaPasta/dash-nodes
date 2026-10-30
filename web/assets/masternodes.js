@@ -71,7 +71,10 @@ function render() {
     onclick: () => sortBy(c.key), onkeydown: (e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), sortBy(c.key)),
     text: c.label,
   })));
-  const body = list.slice(state.page * PAGE, (state.page + 1) * PAGE).map((m) => el("tr", {}, ...COLUMNS.map((c) => c.cell(m))));
+  const pageRows = list.slice(state.page * PAGE, (state.page + 1) * PAGE);
+  const body = pageRows.map((m) => el("tr", {}, ...COLUMNS.map((c) => c.cell(m))));
+  document.getElementById("cards").replaceChildren(...(pageRows.length ? pageRows.map(cardFor)
+    : [el("li", { class: "empty", text: rows.length ? "No masternode matches these filters." : "No masternode list yet." })]));
   const table = document.getElementById("table");
   table.replaceChildren(el("thead", {}, head), el("tbody", {}, ...(body.length ? body : [el("tr", {}, el("td", { colspan: COLUMNS.length, class: "empty", text: rows.length ? "No masternode matches these filters." : "No masternode list yet." }))])));
   document.getElementById("pager").replaceChildren(
@@ -79,7 +82,22 @@ function render() {
     el("button", { class: "btn", type: "button", disabled: state.page === 0, onclick: () => { state.page--; render(); }, text: "Previous" }),
     el("span", { text: `Page ${state.page + 1} of ${pages}` }),
     el("button", { class: "btn", type: "button", disabled: state.page >= pages - 1, onclick: () => { state.page++; render(); }, text: "Next" }));
+  const active = ["q", "type", "status", "version", "country"].filter((k) => state[k]).length;
+  document.getElementById("filters-toggle").textContent = active ? `Filters and sort (${active} on)` : "Filters and sort";
   remember();
+}
+
+/** Phones: one card per masternode with what matters most; the whole card opens it. */
+function cardFor(m) {
+  const [k, l] = nodeStatus(m);
+  const paid = !m.last_paid_height ? "never paid" : tip ? `paid ${fmt(tip - m.last_paid_height)} blocks ago` : `paid at ${fmt(m.last_paid_height)}`;
+  return el("li", {}, el("a", { class: "mn-card", href: href(`/mn/${m.protx}`) },
+    el("div", { class: "mn-card-top" }, badge(k, l), m.type === "Evo" ? el("span", { class: "pill evo", text: "Evo" }) : null,
+      el("span", { class: "mn-card-version", text: m.version || "–" })),
+    el("div", { class: "mono mn-card-addr", text: m.service || shortHash(m.protx) }),
+    el("div", { class: "mn-card-sub" },
+      [m.country ? `${flag(m.country)} ${m.country}` : null, m.as_org, m.uptime_7d != null ? `${pct(m.uptime_7d, m.uptime_7d >= 0.999 ? 0 : 1)} up 7d` : null, paid]
+        .filter(Boolean).join(" · "))));
 }
 
 function sortBy(key) {
@@ -89,7 +107,17 @@ function sortBy(key) {
 }
 
 function renderFilters() {
-  document.getElementById("filters").replaceChildren(...filterControls(rows, state, () => { state.page = 0; render(); }));
+  // Phones have no column headers to click, so sorting is a select there (hidden on wide screens).
+  const sort = el("select", { "aria-label": "Sort by", onchange: () => {
+    const [key, dir] = sort.value.split(":");
+    state.sort = key; state.dir = Number(dir); state.page = 0; render();
+  } }, ...COLUMNS.flatMap((c) => [[c.key, 1, `${c.label} ↑`], [c.key, -1, `${c.label} ↓`]]).map(([k, d, t]) => el("option", { value: `${k}:${d}`, text: t })));
+  sort.value = `${state.sort}:${state.dir}`;
+  document.getElementById("filters").replaceChildren(...filterControls(rows, state, () => { state.page = 0; render(); }),
+    el("label", { class: "sort-select" }, "Sort", sort));
+  const toggle = document.getElementById("filters-toggle");
+  const box = document.getElementById("filters");
+  toggle.onclick = () => { const open = !box.classList.contains("open"); box.classList.toggle("open", open); toggle.setAttribute("aria-expanded", String(open)); };
 }
 
 function csv() {

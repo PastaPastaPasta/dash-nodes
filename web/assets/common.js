@@ -206,6 +206,7 @@ export function card(title, sub, body) {
 
 const LOGO = `<svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="8" fill="var(--brand)"/><circle cx="10" cy="11" r="2.6" fill="var(--brand-ink)"/><circle cx="22" cy="9" r="2.6" fill="var(--brand-ink)"/><circle cx="16" cy="22" r="2.6" fill="var(--brand-ink)"/><path d="M10 11 22 9 16 22Z" fill="none" stroke="var(--brand-ink)" stroke-width="1.6" stroke-linejoin="round" opacity=".75"/></svg>`;
 const SUN = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>`;
+const MORE = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h10"/></svg>`;
 const MOON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>`;
 
 function applyTheme() {
@@ -245,8 +246,16 @@ export function chrome(page, { footer = true } = {}) {
   const brand = el("a", { class: "brand", href: href("/") });
   brand.innerHTML = LOGO;
   brand.append(el("span", { text: "Dash Nodes" }), el("small", { text: "nodes.dashhq.org" }));
-  const header = el("header", { class: "top" },
-    el("div", { class: "top-inner" }, brand, nav, el("div", { class: "top-right" }, status, seg, theme)));
+  if (net === "testnet") brand.append(el("b", { class: "net-badge", text: "Testnet" }));
+  // Phones: the network switch, theme and status fold into a menu behind one button.
+  const more = el("button", { class: "more-toggle", type: "button", "aria-label": "Network and display settings", "aria-expanded": "false", "aria-controls": "top-right" });
+  more.innerHTML = MORE;
+  const right = el("div", { class: "top-right", id: "top-right" }, status, seg, theme);
+  const header = el("header", { class: "top" }, el("div", { class: "top-inner" }, brand, nav, more, right));
+  const setMenu = (open) => { header.classList.toggle("menu-open", open); more.setAttribute("aria-expanded", String(open)); };
+  more.addEventListener("click", (e) => { e.stopPropagation(); setMenu(!header.classList.contains("menu-open")); });
+  document.addEventListener("click", (e) => { if (!right.contains(e.target)) setMenu(false); });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") setMenu(false); });
   document.body.prepend(header);
 
   matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { if (!localStorage.getItem("theme")) themeChanged(); });
@@ -285,7 +294,7 @@ async function refreshStatus() {
     document.getElementById("stale-bar")?.remove();
     if (stale) {
       const bar = el("div", { class: "stale-bar", id: "stale-bar", role: "status" },
-        `This data is from ${ago(n.crawl.last_finished)}: the crawler hasn't published since. Numbers may be out of date.`);
+        `This data is from ${ago(n.crawl.last_finished)}; the crawler hasn't published since.`);
       // Full-screen pages float it over the map; others get a strip under the header.
       if (document.body.classList.contains("app")) document.querySelector("main").prepend(bar);
       else document.querySelector("header.top").after(bar);
