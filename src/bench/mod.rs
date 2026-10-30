@@ -431,7 +431,12 @@ impl Bench {
                 next_start = if sweep { now } else { now + jittered(pace) };
                 continue;
             }
-            if sweep && tasks.is_empty() && (limit_reached || self.pick(crate::db::now(), &in_flight, &swept).is_none())
+            // A sweep is done once nothing is left to test, but not before the source has served
+            // reference hashes: a sweep started with the app still warming up would end at once.
+            let ready = self.nets.iter().any(|(_, st)| st.reference.is_some());
+            if sweep
+                && tasks.is_empty()
+                && (limit_reached || (ready && self.pick(crate::db::now(), &in_flight, &swept).is_none()))
             {
                 break;
             }
