@@ -144,6 +144,19 @@ struct Session {
 }
 
 impl Session {
+    fn new(stream: TcpStream, net: Network, meter: &Meter, deadline: Instant) -> Session {
+        Session {
+            stream,
+            magic: net.magic(),
+            meter: meter.clone(),
+            buf: Vec::new(),
+            pos: 0,
+            chunk: Box::new([0; READ_CHUNK]),
+            quiet_since: Instant::now(),
+            deadline,
+        }
+    }
+
     async fn send(&mut self, cmd: &str, payload: &[u8]) -> Result<()> {
         let msg = p2p::encode(self.magic, cmd, payload);
         let left = self.deadline.saturating_duration_since(Instant::now());
@@ -304,16 +317,7 @@ async fn run_inner(
     };
     res.connect_ms = Some(ms(started.elapsed()));
     let connected = Instant::now();
-    let mut s = Session {
-        stream,
-        magic: t.net.magic(),
-        meter: meter.clone(),
-        buf: Vec::new(),
-        pos: 0,
-        chunk: Box::new([0; READ_CHUNK]),
-        quiet_since: connected,
-        deadline,
-    };
+    let mut s = Session::new(stream, t.net, meter, deadline);
 
     let version = match handshake(&mut s, t, deadline.min(connected + t.timeouts.handshake)).await {
         Ok(v) => v,
@@ -344,6 +348,14 @@ async fn run_inner(
     if let Some(e) = error {
         errors.push(format!("mnlistdiff: {e}"));
     }
+}
+
+/// Whether `t` completes a version handshake within `limit` (nothing else is asked of it).
+pub async fn handshakes(t: &Target<'_>, limit: Duration) -> bool {
+    let deadline = Instant::now() + limit;
+    let Ok(stream) = transport::connect(t.route, t.addr, limit).await else { return false };
+    let mut s = Session::new(stream, t.net, &Meter::default(), deadline);
+    handshake(&mut s, t, deadline).await.is_ok()
 }
 
 /// version → (their version) → verack → (their verack). Returns once both have arrived.

@@ -34,7 +34,7 @@ use self::publish::{Uploader, Vantage};
 use self::schedule::{RateWindow, due_at, interval, is_late, jittered, subnet_key, tested_since};
 use self::store::{History, Store, remember};
 use crate::TransportArgs;
-use crate::addr::PeerAddr;
+use crate::addr::{AddrNet, PeerAddr};
 use crate::network::Network;
 use crate::reference::{self, Reference};
 use crate::transport::{self, Route, Routes};
@@ -110,6 +110,11 @@ const REFRESH_EVERY: Duration = Duration::from_secs(600);
 const FULL_PUBLISH_EVERY: Duration = Duration::from_secs(24 * 3600);
 /// Results older than this many cycles are dropped (masternodes that left the list).
 const KEEP_CYCLES: i64 = 6;
+/// The vantage check (see `Bench::online`): how many known-good masternodes it tries, how long each
+/// may take, and how long tests wait (and an "offline" answer holds) after it fails.
+const ONLINE_CHECK_NODES: usize = 3;
+const ONLINE_CHECK_LIMIT: Duration = Duration::from_secs(15);
+const OFFLINE_PAUSE: Duration = Duration::from_secs(60);
 
 fn valid_vantage(v: &str) -> bool {
     (2..=16).contains(&v.len()) && v.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
@@ -183,6 +188,8 @@ pub async fn main(args: BenchArgs) -> Result<()> {
         vantage,
         meter: Meter::default(),
         cycle_secs: cycle_secs(args.cycle_days),
+        online_check: HashMap::new(),
+        last_clean: HashMap::new(),
         args,
     }
     .run()
@@ -263,6 +270,10 @@ struct Bench {
     vantage: String,
     meter: Meter,
     cycle_secs: i64,
+    /// Per address network: the last vantage check (when, and whether it passed), and when a test
+    /// last finished without an error.
+    online_check: HashMap<AddrNet, (Instant, bool)>,
+    last_clean: HashMap<AddrNet, Instant>,
 }
 
 /// Masternodes that can be tested: enabled, with a well-formed ProTx hash and a core P2P address
@@ -443,7 +454,18 @@ impl Bench {
                             error: Some(format!("internal error: {e}")),
                             ..Default::default()
                         });
-                        self.record(&node, r);
+                        if r.error.is_some() && !self.online(&node, &in_flight).await {
+                            // The failure is ours, not the node's: drop it, so paced mode tests the node
+                            // again soon (a sweep doesn't, and so still ends).
+                            tracing::warn!(
+                                "{} {}: not recorded, this vantage can't reach known-good masternodes either",
+                                node.net.name(),
+                                node.addr
+                            );
+                            next_start = next_start.max(Instant::now() + OFFLINE_PAUSE);
+                        } else {
+                            self.record(&node, r);
+                        }
                     }
                 }
                 _ = tokio::time::sleep(Duration::from_secs(1)) => {}
@@ -460,8 +482,64 @@ impl Bench {
         Ok(())
     }
 
+    /// Whether this vantage can reach `failed`'s address network: one of a few masternodes there,
+    /// on the same route, that passed their latest test (the most recent first, one per subnet, none
+    /// under test now) still completes a handshake. Asked when a test fails, so an outage here (the
+    /// uplink, a VPN, a proxy) isn't recorded as every masternode failing. An "online" answer is
+    /// reused only while tests keep finishing cleanly after it, so an outage right after a check
+    /// is still caught; "offline" holds for OFFLINE_PAUSE. With no masternode to compare with:
+    /// online.
+    async fn online(&mut self, failed: &Node, in_flight: &HashMap<tokio::task::Id, Node>) -> bool {
+        let net = failed.addr.net();
+        match self.online_check.get(&net) {
+            Some(&(at, true)) if self.last_clean.get(&net).is_some_and(|&c| c > at) => return true,
+            Some(&(at, false)) if at.elapsed() < OFFLINE_PAUSE => return false,
+            _ => {}
+        }
+        let mut good: Vec<(i64, &Node)> = self
+            .testable_now()
+            .filter(|(n, _)| n.addr.net() == net && n.route == failed.route && n.protx != failed.protx)
+            .filter(|(n, _)| !in_flight.values().any(|t| t.protx == n.protx))
+            .filter_map(|(n, h)| h.first().filter(|r| r.ok && r.error.is_none()).map(|r| (r.ts, n)))
+            .collect();
+        good.sort_by_key(|g| std::cmp::Reverse(g.0));
+        let mut subnets = HashSet::new();
+        let mut checks = JoinSet::new();
+        for (_, n) in good.into_iter().filter(|(_, n)| subnets.insert(&n.subnet)).take(ONLINE_CHECK_NODES) {
+            let n = n.clone();
+            checks.spawn(async move {
+                let timeouts = transport::default_timeouts(n.addr.net());
+                let t = probe::Target {
+                    net: n.net,
+                    addr: &n.addr,
+                    route: &n.route,
+                    timeouts: &timeouts,
+                    expected_mns: None,
+                };
+                probe::handshakes(&t, ONLINE_CHECK_LIMIT).await
+            });
+        }
+        let mut ok = checks.is_empty();
+        while let Some(r) = checks.join_next().await {
+            if r.unwrap_or(false) {
+                ok = true;
+                break;
+            }
+        }
+        match (self.online_check.get(&net).is_none_or(|&(_, was)| was), ok) {
+            (true, false) => tracing::warn!("bench: {net:?} seems unreachable from here; failed tests aren't recorded"),
+            (false, true) => tracing::info!("bench: {net:?} is reachable again"),
+            _ => {}
+        }
+        self.online_check.insert(net, (Instant::now(), ok));
+        ok
+    }
+
     fn record(&mut self, node: &Node, r: BenchResult) {
         log_result(node.net, &node.protx, &r);
+        if r.error.is_none() {
+            self.last_clean.insert(node.addr.net(), Instant::now());
+        }
         if let Err(e) = self.store.insert(node.net, &node.protx, &r) {
             tracing::error!("bench state: {e:#}");
         }
@@ -545,7 +623,6 @@ async fn once(args: &BenchArgs, source: &Source, addr: &str, params: &Params, va
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::addr::AddrNet;
 
     #[test]
     fn vantage_ids() {

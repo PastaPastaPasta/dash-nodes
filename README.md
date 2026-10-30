@@ -9,8 +9,8 @@ mnowatch.org/user-agents and the old dashninja.pl:
   city, country and hosting ASN (DB-IP Lite).
 - **Every address network:** IPv4, IPv6, Tor v3 onion services, I2P and CJDNS. The crawler speaks
   `addrv2` (BIP155), so other nodes tell it about all of them; it reaches onion peers through Tor,
-  I2P peers through i2pd, CJDNS through a cjdns node, and IPv6 directly when the host has a global
-  IPv6 route (or through a SOCKS5 proxy). A network without a route is still counted as *known*,
+  I2P peers through i2pd, CJDNS through a cjdns node, and IPv6 directly when the host reaches the
+  IPv6 internet, natively or through NAT66 (or through a SOCKS5 proxy). A network without a route is still counted as *known*,
   just not crawled; each address counts as one node, so a node on IPv4 and Tor counts twice.
 - **Masternode list:** the deterministic list from dashd, a live port check per masternode, version
   history, daily port-check uptime, and every payment back to DIP3 enforcement (`masternode payments`,
@@ -96,7 +96,7 @@ MAINNET_RPC=http://127.0.0.1:9998 RPC_PASSWORD=… cargo run -- serve
 | `DATA_DIR`, `WEB_DIR`, `LISTEN` | `./data`, `./web`, `0.0.0.0:8080` | |
 | `CRAWL_INTERVAL` | `900` | seconds between crawl starts |
 | `CRAWL_CONCURRENCY` | `128` | parallel handshakes per directly reached network (IPv4, IPv6; CJDNS at most 32) |
-| `CRAWL_IPV6` | `auto` | `auto`: crawl IPv6 if the host has a global IPv6 route (checked every crawl) or `IPV6_PROXY` is set; `true`: always; `false`: never |
+| `CRAWL_IPV6` | `auto` | `auto`: crawl IPv6 if it reaches the internet (a global IPv6 address, or a test connection through NAT66; checked every crawl) or `IPV6_PROXY` is set; `true`: always; `false`: never |
 | `IPV6_PROXY` | unset | SOCKS5 proxy (`host:port`) for IPv6 peers, for hosts without IPv6 |
 | `TOR_PROXY` | unset | Tor SOCKS5 proxy (`host:port`); onion peers are crawled only if set |
 | `I2P_PROXY` | unset | I2P SOCKS5 proxy (i2pd's `socksproxy`, `host:port`); I2P peers are crawled only if set |

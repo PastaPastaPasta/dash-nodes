@@ -3,7 +3,8 @@
 //! is picked up without a restart.
 
 use std::net::{IpAddr, Ipv6Addr, SocketAddr, UdpSocket};
-use std::time::Duration;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use anyhow::{Result, anyhow, bail};
 use tokio::net::TcpStream;
@@ -98,8 +99,8 @@ impl TransportConfig {
             (Toggle::Off, _) => NetRoute::off("disabled (CRAWL_IPV6=false)"),
             (_, Some(proxy)) => NetRoute::via(proxy),
             (Toggle::On, None) => NetRoute::via(Route::Direct),
-            (Toggle::Auto, None) if has_global_ipv6_route() => NetRoute::via(Route::Direct),
-            (Toggle::Auto, None) => NetRoute::off("no IPv6 route"),
+            (Toggle::Auto, None) if has_ipv6_internet() => NetRoute::via(Route::Direct),
+            (Toggle::Auto, None) => NetRoute::off("no IPv6 connectivity"),
         };
         let onion = socks(&self.tor_proxy).map_or_else(|| NetRoute::off("no Tor proxy (TOR_PROXY)"), NetRoute::via);
         let i2p = socks(&self.i2p_proxy).map_or_else(|| NetRoute::off("no I2P proxy (I2P_PROXY)"), NetRoute::via);
@@ -124,13 +125,45 @@ fn source_for(dst: Ipv6Addr) -> Option<Ipv6Addr> {
     }
 }
 
-/// A route to the IPv6 internet from a global address. A default route from a ULA address (e.g.
-/// a Docker network with NAT66 and no upstream IPv6) doesn't count: it usually leads nowhere, and
-/// CRAWL_IPV6=true covers the cases where it does.
-fn has_global_ipv6_route() -> bool {
-    // 2001:4860:4860::8888, Google Public DNS: any well-known global address works.
-    source_for(Ipv6Addr::new(0x2001, 0x4860, 0x4860, 0, 0, 0, 0, 0x8888))
-        .is_some_and(|src| (src.segments()[0] & 0xe000) == 0x2000)
+/// How long the answer of `has_ipv6_internet` holds.
+const IPV6_CHECK_TTL: Duration = Duration::from_secs(600);
+
+/// Whether IPv6 reaches the internet: a route from a global address, or from any other address (a
+/// ULA behind NAT66: a Docker network, a VPN gateway) a TCP connection to one of two well-known
+/// IPv6 hosts. The connection test blocks for up to a few seconds (off the async workers, when
+/// called from one) and its answer is kept for IPV6_CHECK_TTL.
+fn has_ipv6_internet() -> bool {
+    // Google and Cloudflare public DNS, both also serving DNS over HTTPS on 443.
+    const PROBES: [Ipv6Addr; 2] = [
+        Ipv6Addr::new(0x2001, 0x4860, 0x4860, 0, 0, 0, 0, 0x8888),
+        Ipv6Addr::new(0x2606, 0x4700, 0x4700, 0, 0, 0, 0, 0x1111),
+    ];
+    static LAST: Mutex<Option<(Instant, bool)>> = Mutex::new(None);
+    match source_for(PROBES[0]) {
+        None => return false,
+        Some(src) if (src.segments()[0] & 0xe000) == 0x2000 => return true,
+        Some(_) => {}
+    }
+    // All of it off the async workers: the test, and a second caller waiting for the first one's.
+    let cached_or_check = || {
+        let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((at, ok)) = *last
+            && at.elapsed() < IPV6_CHECK_TTL
+        {
+            return ok;
+        }
+        let ok = PROBES.iter().any(|ip| {
+            std::net::TcpStream::connect_timeout(&SocketAddr::new(IpAddr::V6(*ip), 443), Duration::from_secs(3)).is_ok()
+        });
+        *last = Some((Instant::now(), ok));
+        ok
+    };
+    match tokio::runtime::Handle::try_current() {
+        Ok(h) if h.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread => {
+            tokio::task::block_in_place(cached_or_check)
+        }
+        _ => cached_or_check(),
+    }
 }
 
 /// A local CJDNS address (fc00::/8) that the kernel would use for fc00::/8 destinations, i.e. a

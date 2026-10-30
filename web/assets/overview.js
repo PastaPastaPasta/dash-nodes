@@ -246,7 +246,8 @@ async function loadHistorySafely() {
   }
 }
 
-const GRADE_TONES = { A: "var(--good)", B: "color-mix(in srgb, var(--good) 60%, var(--surface))", C: "var(--warning)", D: "var(--serious)", F: "var(--critical)" };
+const GRADE_TONES = { A: "var(--good)", B: "color-mix(in srgb, var(--good) 60%, var(--surface))", C: "var(--warning)", D: "var(--serious)", F: "var(--critical)", failed: "var(--axis)" };
+const gradeLabel = (k) => (k === "failed" ? "Didn't answer" : `Grade ${k}`);
 const median = (sorted) => (sorted?.length ? sorted[sorted.length >> 1] : null);
 
 /** Speed tests: one grade bar per test location, from /bench (served by the Worker; absent elsewhere). */
@@ -264,12 +265,13 @@ async function renderSpeed() {
   $("speed-vantages").replaceChildren(...vs.map((v) => {
     const bar = el("div", { class: "sharebar" });
     const legend = el("div", { class: "share-legend" });
-    shareBar(bar, legend, ["A", "B", "C", "D", "F"].map((g) => [g, v.grades?.[g] || 0]).filter(([, n]) => n),
-      { color: (k) => GRADE_TONES[k], label: (k) => `Grade ${k}` });
+    // Same denominator as the lede: every latest test, the ones that never got an answer too.
+    const rows = [...["A", "B", "C", "D", "F"].map((g) => [g, v.grades?.[g] || 0]), ["failed", v.failed || 0]];
+    shareBar(bar, legend, rows.filter(([, n]) => n), { color: (k) => GRADE_TONES[k], label: gradeLabel, limit: rows.length });
     return el("div", { class: "speed-vantage" },
       el("h3", { text: v.location || v.vantage }),
       bar, legend,
-      el("p", { class: "muted small", text: `${fmt(v.tested)} tested this cycle${v.failed ? `, ${fmt(v.failed)} failed` : ""}. ` +
+      el("p", { class: "muted small", text: `${fmt(v.tested)} tested this cycle${v.failed ? `, ${fmt(v.failed)} didn't answer` : ""}. ` +
         `Median ${fmt(median(v.headers_per_sec))} headers/s, ping ${fmt(median(v.ping_ms))} ms. Updated ${ago(v.updated)}.` }));
   }));
 }
