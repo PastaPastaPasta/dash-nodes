@@ -66,7 +66,7 @@ function fmtWhen(t, resolution) {
 /**
  * Time-series chart.
  * data: {t: [unix...], series: [{key, values}], resolution}
- * opts: {stacked, share, palette, label(key), height, valueFmt}
+ * opts: {stacked, share, zero (false: fit the axis to the data), palette, label(key), height, valueFmt}
  * Returns {update(data, opts)}.
  */
 export function timeChart(container, data, opts) {
@@ -112,7 +112,7 @@ export function timeChart(container, data, opts) {
     opts.palette.assign(series.map((s) => s.key));
     // Stacks: lower/upper bounds per series per point.
     const lo = [], hi = [];
-    let max = 0;
+    let max = 0, min = Infinity;
     for (let i = 0; i < t.length; i++) {
       let acc = 0;
       series.forEach((s, j) => {
@@ -120,19 +120,23 @@ export function timeChart(container, data, opts) {
         acc = opts.stacked ? acc + s.values[i] : s.values[i];
         (hi[j] ||= [])[i] = acc;
         max = Math.max(max, acc);
+        min = Math.min(min, acc);
       });
     }
-    const yStep = opts.share ? 25 : niceStep(max);
-    const yMax = opts.share ? 100 : yStep * Math.max(1, Math.ceil((max * 1.02) / yStep));
+    // Shares and stacks start at zero; plain lines may fit the axis to their range (opts.zero === false).
+    const fit = opts.zero === false && !opts.stacked && !opts.share && max > min;
+    const yStep = opts.share ? 25 : niceStep(fit ? (max - min) * 1.3 : max);
+    const yMin = fit ? Math.max(0, Math.floor((min - (max - min) * 0.15) / yStep) * yStep) : 0;
+    const yMax = opts.share ? 100 : fit ? Math.ceil((max + (max - min) * 0.15) / yStep) * yStep : yStep * Math.max(1, Math.ceil((max * 1.02) / yStep));
     const t0 = t[0], t1 = t.length > 1 ? t.at(-1) : t[0] + 1;
     const x = (v) => M.l + ((v - t0) / (t1 - t0)) * pw;
-    const y = (v) => M.t + ph - (v / yMax) * ph;
+    const y = (v) => M.t + ph - ((v - yMin) / (yMax - yMin)) * ph;
 
-    for (let v = 0; v <= yMax + 1e-9; v += yStep) {
+    for (let v = yMin; v <= yMax + 1e-9; v += yStep) {
       const yy = Math.round(y(v)) + 0.5;
       root.append(svg("line", { x1: M.l, x2: W - M.r, y1: yy, y2: yy, class: v === 0 ? "baseline" : "gridline" }));
       const tx = svg("text", { x: M.l - 8, y: yy + 4, "text-anchor": "end", class: "tick" });
-      tx.textContent = opts.share ? `${v}%` : compact(v);
+      tx.textContent = opts.share ? `${v}%` : fit && yStep < 1000 ? fmt(v) : compact(v);
       root.append(tx);
     }
     const { ticks, step } = timeTicks(t0, t1, Math.max(2, Math.floor(pw / 110)));

@@ -1,4 +1,4 @@
-import { api, chrome, currentNet, el, fmt, pct, href, countryName, flag, place, badge, ago, dateTime, dash, nodeStatus, uptimeKind, tile, card } from "./common.js";
+import { api, chrome, currentNet, el, fmt, pct, href, countryName, flag, place, badge, ago, dateTime, dash, nodeStatus, poseBadge, uptimeKind, tile, card } from "./common.js";
 
 chrome("masternodes");
 const net = currentNet();
@@ -18,13 +18,32 @@ function statusOf(m) {
   return m.removed ? ["none", "Unregistered"] : nodeStatus(m, "Not checked yet");
 }
 
+/** Service bits a node advertises (Dash Core's protocol.h), by name. */
+const SERVICES = [[0, "Full blocks"], [2, "Bloom filters"], [6, "Compact block filters"], [10, "Limited (recent blocks)"],
+  [11, "Compressed headers"], [12, "P2P v2 (encrypted)"]];
+function services(bits) {
+  if (bits == null) return null;
+  const named = SERVICES.filter(([b]) => bits & (2 ** b)).map(([, n]) => n);
+  const known = SERVICES.reduce((a, [b]) => a + 2 ** b, 0);
+  const other = bits - (bits & known);
+  return el("span", { title: `0x${bits.toString(16)}` }, [...named, other ? `other bits 0x${other.toString(16)}` : null].filter(Boolean).join(", ") || "none");
+}
+
+const DAY = 86400000;
+/** Days the strip covers: since the first check we have, at least a week, at most 90 days. */
+function stripDays(days) {
+  const first = days.length ? Date.parse(`${days[0].day}T00:00:00Z`) : Date.now();
+  return Math.min(90, Math.max(7, Math.ceil((Date.now() - first) / DAY) + 1));
+}
+
 function uptimeStrip(days) {
   const byDay = new Map(days.map((d) => [d.day, d]));
   const cells = [];
   const now = new Date();
   const today = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
-  for (let i = 89; i >= 0; i--) {
-    const day = new Date(today - i * 86400000).toISOString().slice(0, 10);
+  const span = stripDays(days);
+  for (let i = span - 1; i >= 0; i--) {
+    const day = new Date(today - i * DAY).toISOString().slice(0, 10);
     const d = byDay.get(day);
     let cls = "", title = `${day}: not checked`;
     if (d) {
@@ -35,8 +54,8 @@ function uptimeStrip(days) {
     cells.push(el("div", { class: cls, title, "aria-label": title }));
   }
   return el("div", {},
-    el("div", { class: "strip", role: "img", "aria-label": "Daily port-check results, last 90 days" }, ...cells),
-    el("div", { class: "strip-axis" }, el("span", { text: "90 days ago" }), el("span", { text: "today" })),
+    el("div", { class: "strip", role: "img", "aria-label": `Daily port-check results, last ${span} days`, style: { gridTemplateColumns: `repeat(${span}, 1fr)` } }, ...cells),
+    el("div", { class: "strip-axis" }, el("span", { text: `${span - 1} days ago` }), el("span", { text: "today" })),
     el("div", { class: "legend" },
       el("span", {}, el("i", { style: { background: "var(--good)" } }), "≥ 99% of checks answered"),
       el("span", {}, el("i", { style: { background: "var(--warning)" } }), "90–99%"),
@@ -61,7 +80,8 @@ async function main() {
   }
   document.title = `Dash Nodes: masternode ${protx.slice(0, 8)}${net === "testnet" ? " · testnet" : ""}`;
   const [sk, sl] = statusOf(m);
-  root.querySelector("h1").replaceChildren(m.type === "Evo" ? "Evonode " : "Masternode ", badge(sk, sl));
+  const banned = m.removed ? null : poseBadge(m);
+  root.querySelector("h1").replaceChildren(...[m.type === "Evo" ? "Evonode " : "Masternode ", badge(sk, sl), banned && " ", banned].filter(Boolean));
   document.getElementById("lede").textContent = m.protx;
 
   const ps = m.payments_summary;
@@ -69,7 +89,8 @@ async function main() {
   const up30 = m.uptime_daily.slice(-30);
   const ok30 = up30.reduce((a, d) => a + d.ok, 0), at30 = up30.reduce((a, d) => a + d.attempts, 0);
   root.append(el("div", { class: "tiles" },
-    tile("Status", badge(sk, sl), m.last_seen ? `last answered ${ago(m.last_seen)}` : "never answered our crawler"),
+    tile("Status", el("span", {}, badge(sk, sl), banned ? " " : null, m.removed ? null : poseBadge(m)),
+      m.last_seen ? `last answered ${ago(m.last_seen)}` : "never answered our crawler"),
     tile("Version", m.version || "–", m.protocol ? `protocol ${m.protocol}` : "no handshake yet"),
     tile("Uptime, 30 days", at30 ? pct(ok30 / at30) : "–", at30 ? `${fmt(ok30)} of ${fmt(at30)} port checks` : "no checks yet"),
     tile("Last paid", m.last_paid_height ? (tip ? `${fmt(tip - m.last_paid_height)} blocks ago` : fmt(m.last_paid_height)) : "never",
@@ -77,12 +98,13 @@ async function main() {
     tile("Payments indexed", fmt(ps.count), ps.count ? `${dash(ps.total_duffs)} since block ${fmt(ps.first_height)}` : ""),
   ));
 
-  const services = m.services != null ? `0x${m.services.toString(16)}` : null;
   // Speed tests come from the Worker's API; the crawler's own server doesn't have them, so the card
-  // only appears when there's something to show.
+  // only appears when there's something to show. Their handshakes also feed the latency row.
   const speed = el("section", { class: "card speed", hidden: true, id: "speed" });
   root.append(speed);
-  api(`${net}/masternodes/${protx}/bench`).then((b) => speedSection(speed, b), () => {});
+  const latencyCell = el("span", {}, m.latency_ms != null ? `${fmt(m.latency_ms)} ms from our crawler` : "–");
+  const crawlerAt = api("status").then((s) => s.crawler_location, () => null);
+  api(`${net}/masternodes/${protx}/bench`).then(async (b) => { speedSection(speed, b); bestLatency(latencyCell, m, b, await crawlerAt); }, () => {});
 
   root.append(el("div", { class: "cols-2" },
     card("Registration", "from the deterministic masternode list",
@@ -97,13 +119,14 @@ async function main() {
         ["Payout address", m.payout_address ? el("span", {}, ...m.payout_address.split(",").flatMap((a, i) => [i ? ", " : "", link("address", a)])) : null],
         m.operator_payout_address && ["Operator payout", link("address", m.operator_payout_address)],
         ["Operator reward", m.operator_reward != null ? `${m.operator_reward}%` : null],
-        ["Owner address", el("span", { class: "mono", text: m.owner_address || "–" })],
-        ["Voting address", el("span", { class: "mono", text: m.voting_address || "–" })],
+        ["Owner address", m.owner_address ? el("span", {}, ...m.owner_address.split(",").flatMap((a, i) => [i ? ", " : "", link("address", a)])) : null],
+        ["Voting address", link("address", m.voting_address)],
         ["Operator public key", el("span", { class: "mono", text: m.pubkey_operator || "–" })],
         ["Registered at block", fmt(m.registered_height)],
         ["Last paid at block", m.last_paid_height ? fmt(m.last_paid_height) : "never"],
-        ["PoSe penalty", fmt(m.pose_penalty)],
-        ["PoSe ban height", m.pose_ban_height > 0 ? fmt(m.pose_ban_height) : "not banned"],
+        // Banned says it all; otherwise the penalty is what matters (it's what gets a node banned).
+        ["PoSe", m.pose_ban_height > 0 ? badge("serious", `Banned at block ${fmt(m.pose_ban_height)}`)
+          : m.pose_penalty ? `Penalty ${fmt(m.pose_penalty)}, not banned` : "No penalty"],
         m.pose_revived_height > 0 && ["PoSe revived at", fmt(m.pose_revived_height)],
         m.revocation_reason ? ["Revocation reason", String(m.revocation_reason)] : null,
         m.removed && ["Left the list", dateTime(m.removed)],
@@ -115,17 +138,18 @@ async function main() {
         ["Last answered", m.last_seen ? `${dateTime(m.last_seen)} (${ago(m.last_seen)})` : "never"],
         ["User agent", el("code", { text: m.user_agent || "–" })],
         ["Protocol", m.protocol ?? "–"],
-        ["Services", services],
+        ["Services", services(m.services)],
         ["Height it reported", m.start_height != null ? fmt(m.start_height) : null],
-        ["Handshake time", m.latency_ms != null ? `${fmt(m.latency_ms)} ms` : null],
+        ["Latency", latencyCell],
         ["Location", m.country ? el("span", {}, place(m),
           m.lat != null && !m.removed ? [" · ", el("a", { href: href(`/map?protx=${m.protx}`), text: "show on map" })] : null) : null],
-        ["Hosting network", m.asn ? `AS${m.asn} ${m.as_org || ""}` : null],
+        ["Hosting network", m.asn ? el("a", { href: href(`/masternodes?host=AS${m.asn}`), title: "Masternodes on this network", text: `AS${m.asn} ${m.as_org || ""}` }) : null],
       ])),
   ));
 
   root.append(el("section", { class: "section card" },
-    el("div", { class: "card-head" }, el("h2", { text: "Port-check uptime" }), el("span", { class: "sub", text: "daily, last 90 days (UTC)" })),
+    el("div", { class: "card-head" }, el("h2", { text: "Port-check uptime" }),
+      el("span", { class: "sub", text: `daily, last ${stripDays(m.uptime_daily)} days (UTC)` })),
     uptimeStrip(m.uptime_daily)));
 
   root.append(el("div", { class: "cols-2 section" },
@@ -213,19 +237,50 @@ function speedSection(box, b) {
   box.hidden = false;
 }
 
+/**
+ * The best handshake latency we've measured, and where from: the crawler's latest one and each test
+ * location's latest successful test (a location whose test failed simply doesn't count).
+ */
+function bestLatency(cell, m, b, crawlerAt) {
+  const seen = [];
+  if (m.latency_ms != null) seen.push({ ms: m.latency_ms, from: crawlerAt ? `${crawlerAt}, our crawler` : "our crawler", when: m.last_seen });
+  for (const v of b.vantages) {
+    const r = v.results.find((x) => x.ok && x.connect_ms != null);
+    if (r) seen.push({ ms: r.connect_ms + (r.handshake_ms || 0), from: v.location || v.vantage, when: r.ts });
+  }
+  if (!seen.length) return;
+  seen.sort((a, b) => a.ms - b.ms);
+  const best = seen[0];
+  cell.replaceChildren(`${fmt(best.ms)} ms from ${best.from}`,
+    seen.length > 1 ? el("span", { class: "muted", text: ` · best of ${seen.length}` }) : null);
+  cell.title = seen.map((s) => `${s.from}: ${fmt(s.ms)} ms (${ago(s.when)})`).join("\n");
+}
+
+const PAYMENTS_SHOWN = 10;
+
 function paymentsSection(m) {
-  const tbody = el("tbody", {}, ...paymentRows(m.payments));
+  const tbody = el("tbody", {}, ...paymentRows(m.payments.slice(0, PAYMENTS_SHOWN)));
   const ps = m.payments_summary;
+  // The first page came with the masternode; show part of it, then the rest, then ask for more.
+  let pending = m.payments.slice(PAYMENTS_SHOWN);
   let last = m.payments.at(-1)?.height;
-  const more = el("button", { class: "btn", type: "button", text: "Load more", hidden: m.payments.length < 25 });
+  let exhausted = m.payments.length < 25;
+  const more = el("button", { class: "btn", type: "button", text: "Show more", hidden: !pending.length && exhausted });
   more.addEventListener("click", async () => {
+    if (pending.length) {
+      tbody.append(...paymentRows(pending));
+      pending = [];
+      more.hidden = exhausted;
+      return;
+    }
     more.disabled = true;
     try {
-      const r = await api(`${net}/masternodes/${protx}/payments?before=${last}&limit=100`);
+      const r = await api(`${net}/masternodes/${protx}/payments?before=${last}&limit=50`);
       tbody.append(...paymentRows(r.payments));
       last = r.payments.at(-1)?.height ?? last;
-      more.hidden = r.payments.length < 100;
-      more.textContent = "Load more";
+      exhausted = r.payments.length < 50;
+      more.hidden = exhausted;
+      more.textContent = "Show more";
     } catch (e) {
       more.textContent = `Retry (${e.message})`;
     } finally {
@@ -233,7 +288,14 @@ function paymentsSection(m) {
     }
   });
   const note = ps.indexed ? `indexed blocks ${fmt(ps.indexed.from)}–${fmt(ps.indexed.to)}` : "payment index not started yet";
+  const recent = m.payments.slice(0, 6);
+  // Average spacing of the latest payments: how often this masternode gets paid right now.
+  const every = recent.length > 2 ? (recent[0].time - recent.at(-1).time) / (recent.length - 1) / 86400 : null;
+  const lede = ps.count
+    ? `${fmt(ps.count)} payments, ${dash(ps.total_duffs)} in total${every ? `; lately one every ${every < 2 ? every.toFixed(1) : Math.round(every)} days` : ""}.`
+    : null;
   return el("section", {}, el("div", { class: "card-head" }, el("h2", { text: "Payments" }), el("span", { class: "sub", text: note })),
+    lede ? el("p", { class: "sub", text: lede }) : null,
     el("div", { class: "table-wrap" }, el("table", { class: "data" },
       el("thead", {}, el("tr", {}, el("th", { text: "Block" }), el("th", { text: "Time" }), el("th", { class: "r", text: "Amount" }))),
       m.payments.length ? tbody : el("tbody", {}, el("tr", {}, el("td", { colspan: 3, class: "empty", text: "No payments in the indexed range." }))))),

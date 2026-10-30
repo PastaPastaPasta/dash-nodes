@@ -2,7 +2,8 @@
 // basemap. MapLibre draws it on the GPU so zoom and pan stay smooth; clusters are small DOM donuts.
 import { Map as GLMap, Marker, Popup, NavigationControl, AttributionControl, LngLatBounds } from "/assets/vendor/maplibre-gl.mjs";
 import { api, chrome, currentNet, el, fmt, pct, compact, href, place, shortHash, badge, nodeStatus, evoPill, mnFilters, mnMatches,
-  rememberParams, filterQuery, countBy, segmented, filterSelect, searchBox, STATUSES, TYPE_OPTIONS, versionOptions, countryOptions } from "./common.js";
+  rememberParams, filterQuery, countBy, segmented, filterSelect, searchBox, REACH, REGISTRATION, registration, poseBadge, TYPE_OPTIONS, versionOptions,
+  countryOptions, hostOptions } from "./common.js";
 
 chrome("map", { footer: false });
 const net = currentNet();
@@ -11,7 +12,7 @@ const params = new URLSearchParams(location.search);
 const state = {
   ...mnFilters(params),
   layer: params.get("layer") === "nodes" ? "nodes" : "mn",
-  color: params.get("color") || "status",
+  color: params.get("color") || "reach",
   hidden: new Set((params.get("hide") || "").split(",").filter(Boolean)),
   protx: params.get("protx") || "",
 };
@@ -24,19 +25,22 @@ let group = null; // masternodes at one place, listed in the panel
 // ---- color modes ----
 // A mode maps a masternode to a legend category and a category to a tone. Tones are CSS color roles,
 // so markers, donuts and chips agree in both themes.
-const STATUS_TONES = { Reachable: "good", Unreachable: "critical", "PoSe-banned": "serious", "Not checked": "axis" };
+const REACH_TONES = { Reachable: "good", Unreachable: "critical", "Not checked": "axis" };
 const MODES = {
-  status: { label: "Status", key: (m) => nodeStatus(m)[1], order: STATUSES, tone: (k) => STATUS_TONES[k] },
+  reach: { label: "Reachability", key: (m) => nodeStatus(m)[1], order: REACH, tone: (k) => REACH_TONES[k] },
+  pose: { label: "PoSe", key: registration, order: REGISTRATION, tone: (k) => (k === "PoSe-banned" ? "serious" : "s1") },
   version: { label: "Version" }, // filled in from the data by assignVersionTones()
-  type: { label: "Type", key: (m) => m.type, order: ["Regular", "Evo"], tone: (k) => (k === "Evo" ? "s2" : "s1") },
+  type: { label: "Type", key: (m) => m.type, order: ["Regular", "Evo"], tone: (k) => (k === "Evo" ? "s3" : "s1") },
 };
 const TONES = ["good", "critical", "serious", "axis", "s1", "s2", "s3", "s4", "s5", "other"];
-if (!Object.hasOwn(MODES, state.color)) state.color = "status";
-// The list links here with ?status=…; on the map that's the status chips.
-if (state.status) {
-  state.color = "status";
-  state.hidden = new Set(STATUSES.filter((s) => s !== state.status));
-  state.status = "";
+if (state.color === "status") state.color = "reach"; // the old name
+if (!Object.hasOwn(MODES, state.color)) state.color = "reach";
+// The list links here with ?reach=… or ?status=…; on the map those are the chips of that mode.
+for (const [param, mode] of [["reach", "reach"], ["status", "pose"]]) {
+  if (!state[param]) continue;
+  state.color = mode;
+  state.hidden = new Set(MODES[mode].order.filter((k) => k !== state[param]));
+  state[param] = "";
 }
 
 /** The five most common versions keep their own colors whatever the filters; the rest share one. */
@@ -286,7 +290,7 @@ function nodeCard(m) {
     ["Last paid", paid],
   ];
   return el("div", { class: "pop" },
-    el("div", { class: "pop-head" }, badge(k, l), evoPill(m)),
+    el("div", { class: "pop-head" }, badge(k, l), poseBadge(m), evoPill(m)),
     el("a", { class: "mono pop-id", href: href(`/mn/${m.protx}`), text: shortHash(m.protx, 12) }),
     el("dl", {}, ...facts.flatMap(([a, b]) => [el("dt", { text: a }), el("dd", {}, b)])),
     el("a", { class: "btn", href: href(`/mn/${m.protx}`), text: "Open masternode" }));
@@ -404,7 +408,8 @@ function buildPanel() {
     el("div", { class: "mp-row" }, el("span", { class: "mp-label", text: "Show" }), layers),
     el("div", { class: "mp-row mn-only" }, el("span", { class: "mp-label", text: "Color" }), colors),
     chips,
-    el("div", { class: "mp-filters mn-only" }, pick("type", "Type", TYPE_OPTIONS), pick("version", "Version", versionOptions(rows)), pick("country", "Country", countryOptions(rows))),
+    el("div", { class: "mp-filters mn-only" }, pick("type", "Type", TYPE_OPTIONS), pick("version", "Version", versionOptions(rows)),
+      pick("country", "Country", countryOptions(rows)), pick("host", "Hosting", hostOptions(rows, state.host))),
     groupBox, nodeBox, foot);
 }
 
@@ -448,7 +453,7 @@ function renderGroup() {
   if (state.layer === "nodes") return;
   groupBox.hidden = !group;
   if (!group) return;
-  const rank = (m) => STATUSES.indexOf(nodeStatus(m)[1]);
+  const rank = (m) => REACH.indexOf(nodeStatus(m)[1]);
   const sorted = [...group].sort((a, b) => rank(a) - rank(b) || (a.service || "").localeCompare(b.service || ""));
   const places = new Set(group.map(place));
   const title = places.size === 1 ? place(group[0]) || "Same location" : `${places.size} places nearby`;
@@ -462,6 +467,7 @@ function renderGroup() {
         el("span", { class: `badge ${k}`, title: l, "aria-label": l }, el("i")),
         el("span", { class: "mono", text: m.service || shortHash(m.protx) }),
         evoPill(m),
+        m.status === "pose_banned" ? el("span", { class: "pill banned", text: "PoSe-banned" }) : null,
         el("span", { class: "muted", text: m.version || "–" })));
     })));
 }
@@ -482,9 +488,12 @@ function renderHeadline() {
   headline.replaceChildren(el("b", { class: "num", text: fmt(reach) }), ` of ${fmt(enabled.length)} enabled masternodes answered the latest crawl`,
     banned ? `; ${fmt(banned)} more are PoSe-banned.` : ".");
   const missing = list.filter((m) => m.lat == null).length;
-  // On the list, one visible status chip is its status filter.
-  const statuses = state.color === "status" ? STATUSES.filter((k) => !state.hidden.has(k)) : [];
-  const query = filterQuery({ ...state, status: statuses.length === 1 ? statuses[0] : "" });
+  // On the list, one visible chip of the reachability or PoSe mode is that filter.
+  const only = (mode) => {
+    const shown = state.color === mode ? MODES[mode].order.filter((k) => !state.hidden.has(k)) : [];
+    return shown.length === 1 ? shown[0] : "";
+  };
+  const query = filterQuery({ ...state, reach: only("reach"), status: only("pose") });
   foot.replaceChildren(
     missing ? `${fmt(missing)} aren't on the map: no address registered, or not crawled yet. ` : "",
     el("a", { href: href(`/masternodes${query}`), text: "Open these as a list" }));
@@ -493,7 +502,7 @@ function renderHeadline() {
 function remember() {
   rememberParams(state, {
     layer: state.layer === "mn" ? "" : state.layer,
-    color: state.color === "status" ? "" : state.color,
+    color: state.color === "reach" ? "" : state.color,
     hide: [...state.hidden].join(","),
     protx: state.protx,
   });

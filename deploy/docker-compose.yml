@@ -127,6 +127,8 @@ services:
       # Snapshots of the databases in the Worker's private state store; a new host restores them.
       STATE_TARGET: ${PUBLISH_TARGET:-https://nodes.dashhq.org}
       STATE_TOKEN_FILE: /run/secrets/state_token
+      # Shown with the crawler's measurements; the crawler and the bench share the host.
+      CRAWLER_LOCATION: ${BENCH_LOCATION:-}
       RUST_LOG: ${RUST_LOG:-info}
     secrets:
       - rpc_password

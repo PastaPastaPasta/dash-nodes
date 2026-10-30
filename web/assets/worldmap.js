@@ -45,7 +45,8 @@ async function landPath() {
  * like a crawl sweeping the globe; skipped when the reader prefers reduced motion.
  */
 export async function worldMap(root, points) {
-  root.setAttribute("viewBox", "0 40 1000 400");
+  // The whole land outline: Greenland and northern Scandinavia reach the top of the projection.
+  root.setAttribute("viewBox", "0 0 1000 440");
   root.setAttribute("preserveAspectRatio", "xMidYMid meet");
   root.replaceChildren(svg("path", { class: "wm-land", d: await landPath() }));
   const dots = svg("g", { class: "wm-dots" });

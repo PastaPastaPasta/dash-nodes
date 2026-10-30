@@ -1,5 +1,5 @@
 import { api, chrome, currentNet, el, fmt, pct, href, countryName, flag, ago, segmented } from "./common.js";
-import { Palette, timeChart } from "./charts.js";
+import { Palette, timeChart, svg } from "./charts.js";
 import { worldMap } from "./worldmap.js";
 
 chrome("overview");
@@ -56,7 +56,45 @@ function shareBar(bar, legend, rows, { color, label = (k) => k, limit = 5 }) {
     el("b", { class: "num", text: pct(p.n / sum) }))));
 }
 
-/** Ranked rows with a share bar each, dotted with the same colors as the share bar above. */
+/**
+ * A donut of the largest groups (color(key, rank)) and the rest, with `center` ([value, caption]) in
+ * the hole. Each slice names itself on hover; the ranked list beside it carries the numbers.
+ */
+function donut(root, rows, { color, label = (k) => k, limit = 5, center }) {
+  const sum = total(rows) || 1;
+  const top = rows.slice(0, limit);
+  const rest = sum - total(top);
+  const parts = [...top.map(([k, n], i) => ({ n, c: color(k, i), l: label(k) })), ...(rest > 0 ? [{ n: rest, c: "var(--other)", l: "Everything else" }] : [])];
+  const R = 74, r = 50, C = 80;
+  const at = (a, rad) => `${(C + rad * Math.sin(a)).toFixed(2)} ${(C - rad * Math.cos(a)).toFixed(2)}`;
+  root.setAttribute("viewBox", "0 0 160 160");
+  root.setAttribute("role", "img");
+  root.setAttribute("aria-label", parts.map((p) => `${typeof p.l === "string" ? p.l : p.l.textContent} ${pct(p.n / sum)}`).join(", "));
+  root.replaceChildren();
+  let a0 = 0;
+  for (const p of parts) {
+    const a1 = a0 + (p.n / sum) * 2 * Math.PI;
+    // A full circle can't be one arc: draw it as two halves.
+    const d = p.n >= sum
+      ? `M${at(0, R)}A${R} ${R} 0 1 1 ${at(Math.PI, R)}A${R} ${R} 0 1 1 ${at(0, R)}M${at(0, r)}A${r} ${r} 0 1 0 ${at(Math.PI, r)}A${r} ${r} 0 1 0 ${at(0, r)}Z`
+      : `M${at(a0, R)}A${R} ${R} 0 ${a1 - a0 > Math.PI ? 1 : 0} 1 ${at(a1, R)}L${at(a1, r)}A${r} ${r} 0 ${a1 - a0 > Math.PI ? 1 : 0} 0 ${at(a0, r)}Z`;
+    const slice = svg("path", { d, fill: p.c, stroke: "var(--surface)", "stroke-width": 2, "fill-rule": "evenodd" });
+    const t = svg("title");
+    t.textContent = `${typeof p.l === "string" ? p.l : p.l.textContent}: ${fmt(p.n)} (${pct(p.n / sum)})`;
+    slice.append(t);
+    root.append(slice);
+    a0 = a1;
+  }
+  if (center) {
+    const v = svg("text", { x: C, y: C + 4, "text-anchor": "middle", class: "donut-value" });
+    v.textContent = center[0];
+    const c = svg("text", { x: C, y: C + 22, "text-anchor": "middle", class: "donut-caption" });
+    c.textContent = center[1];
+    root.append(v, c);
+  }
+}
+
+/** Ranked rows with a share bar each, dotted with the same colors as the chart beside them. */
 function ranked(box, rows, { label = (k) => k, title, color, limit = 8 }) {
   const sum = total(rows);
   let expanded = false;
@@ -93,13 +131,21 @@ function renderHero() {
   $("hero-sub").textContent = `Among them ${fmt(c.mn_reachable)} of the ${fmt(c.mn_total)} enabled masternodes. ` +
     (diff ? `That's ${fmt(Math.abs(diff))} ${diff > 0 ? "more" : "fewer"} nodes than a day ago. ` : "") +
     `Crawled ${ago(c.finished)}, at block ${fmt(c.tip_height)}.`;
-  const stat = (value, label, note) => el("div", {}, el("dt", { text: label }), el("dd", { class: "num" }, value, note ? el("small", { text: note }) : null));
+  // Every stat leads somewhere: the list it counts, or the section that explains it.
+  const stat = (value, label, note, to, tone) => el("div", { class: tone ? `stat-${tone}` : null },
+    el("dt", { text: label }),
+    el("dd", { class: "num" }, el("a", { href: to, class: "stat-link" }, value), note ? el("small", { text: note }) : null));
+  const reach = Object.fromEntries(mn.reachable || []);
+  const answered = reach.yes || 0, silent = reach.no || 0;
+  const share = answered + silent ? answered / (answered + silent) : null;
   $("hero-stats").replaceChildren(
-    stat(fmt(c.mn_total), "Enabled masternodes", type.Evo ? `${fmt(type.Evo)} of them evonodes` : null),
-    stat(fmt(status.pose_banned || 0), "PoSe-banned"),
-    stat(fmt((all.country || []).filter(([k]) => k !== "Unknown").length), "Countries"),
-    stat(fmt(byOrg(all.asn || []).filter(([k]) => k !== "Unknown").length), "Hosting providers"),
-    stat(fmt(c.tried), "Addresses tried"),
+    stat(pct(share), "Masternodes reachable", silent ? `${fmt(silent)} didn't answer` : "all answered",
+      href(silent ? "/masternodes?reach=Unreachable" : "/masternodes"), share == null ? null : share >= 0.98 ? "good" : share >= 0.9 ? "warning" : "critical"),
+    stat(fmt(c.mn_total), "Enabled masternodes", type.Evo ? `${fmt(type.Evo)} of them evonodes` : null, href("/masternodes?status=Enabled")),
+    stat(fmt(status.pose_banned || 0), "PoSe-banned", null, href("/masternodes?status=PoSe-banned")),
+    stat(fmt((all.country || []).filter(([k]) => k !== "Unknown").length), "Countries", null, "#where"),
+    stat(fmt(byOrg(all.asn || []).filter(([k]) => k !== "Unknown").length), "Hosting providers", null, "#where"),
+    stat(fmt(c.tried), "Addresses tried", null, "#reach"),
   );
   $("to-map").href = href("/map");
   $("to-list").href = href("/masternodes");
@@ -160,13 +206,18 @@ function renderWhere() {
   const orgs = byOrg(d.asn || []);
   const countries = d.country || [];
   const sumO = total(orgs), sumC = total(countries);
-  shareBar($("host-bar"), null, orgs, { color: rankColor });
-  ranked($("host-list"), orgs, { color: rankColor, title: (r) => r[2].join(", ") });
-  const cLabel = (k) => (k === "Unknown" ? "Unknown" : `${flag(k)} ${countryName(k)}`);
-  shareBar($("country-bar"), null, countries, { color: rankColor, label: cLabel });
-  ranked($("country-list"), countries, { color: rankColor, label: cLabel });
-  // Lead with real providers and countries; "Unknown" (not geolocated yet) only counts in the totals.
   const known = (rows) => rows.filter(([k]) => k !== "Unknown");
+  // Masternode scopes link each row to the list filtered to it.
+  const listed = scope === "mn" || scope === "evo";
+  const toList = (param, value, text) => (listed && value !== "Unknown"
+    ? el("a", { class: "quiet", href: href(`/masternodes?${param}=${encodeURIComponent(value)}${scope === "evo" ? "&type=Evo" : ""}`), text })
+    : text);
+  donut($("host-donut"), orgs, { color: rankColor, center: [fmt(known(orgs).length), "providers"] });
+  ranked($("host-list"), orgs, { color: rankColor, title: (r) => r[2].join(", "), label: (k) => toList("host", k, k) });
+  const cName = (k) => (k === "Unknown" ? "Unknown" : `${flag(k)} ${countryName(k)}`);
+  donut($("country-donut"), countries, { color: rankColor, label: cName, center: [fmt(known(countries).length), "countries"] });
+  ranked($("country-list"), countries, { color: rankColor, label: (k) => toList("country", k, cName(k)) });
+  // Lead with real providers and countries; "Unknown" (not geolocated yet) only counts in the totals.
   const [o0] = known(orgs), [c0] = known(countries);
   if (!o0) { $("where-lede").textContent = ""; return; }
   $("where-lede").textContent = `${o0[0]} hosts ${pct(o0[1] / sumO)} of ${noun()}, and the three largest providers host ${pct(total(known(orgs).slice(0, 3)) / sumO)}.` +
@@ -195,7 +246,7 @@ function renderReach() {
       : "";
   }
   if (no && scope !== "all") {
-    lede.append(" ", el("a", { href: href(`/masternodes?status=Unreachable${scope === "evo" ? "&type=Evo" : ""}`), text: "See which" }));
+    lede.append(" ", el("a", { href: href(`/masternodes?reach=Unreachable${scope === "evo" ? "&type=Evo" : ""}`), text: "See which" }));
   }
   renderNetworks();
 }
@@ -231,7 +282,8 @@ async function loadHistory() {
   if (mine !== historyRequest) return; // a newer scope or range was picked meanwhile
   const labels = { reachable_nodes: "Reachable nodes", masternodes: "Enabled masternodes", masternodes_reachable: "Masternodes reachable" };
   const vopts = { stacked: true, share: true, palette: versionPalette, label: (k) => (k === "Unknown" ? "No answer this week" : k), title: "Version share over time", height: 240 };
-  const sopts = { stacked: false, palette: sizePalette, label: (k) => labels[k] || k, title: "Network size", height: 220 };
+  // The three counts sit close together far from zero: an axis that starts at zero flattens them.
+  const sopts = { stacked: false, zero: false, palette: sizePalette, label: (k) => labels[k] || k, title: "Network size", height: 220 };
   if (versionsChart) versionsChart.update(v, vopts);
   else versionsChart = timeChart($("versions-chart"), v, vopts);
   if (sizeChart) sizeChart.update(s, sopts);

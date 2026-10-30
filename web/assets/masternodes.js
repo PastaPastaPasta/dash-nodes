@@ -1,4 +1,4 @@
-import { api, chrome, currentNet, el, fmt, pct, href, countryName, flag, shortHash, badge, ago, nodeStatus, uptimeKind, evoPill,
+import { api, chrome, currentNet, el, fmt, pct, href, countryName, flag, shortHash, badge, ago, nodeStatus, registration, poseBadge, uptimeKind, evoPill,
   MN_FILTERS, mnFilters, mnMatches, rememberParams, filterQuery, filterControls } from "./common.js";
 
 chrome("masternodes");
@@ -30,12 +30,13 @@ const COLUMNS = [
   { key: "country", label: "Country", get: (m) => countryName(m.country),
     cell: (m) => el("td", { title: countryName(m.country), text: m.country ? `${flag(m.country)} ${m.country}` : "–" }) },
   { key: "as_org", label: "Hosting", get: (m) => m.as_org || "",
-    cell: (m) => el("td", { title: m.asn ? `AS${m.asn} ${m.as_org || ""}` : "", style: { maxWidth: "180px", overflow: "hidden", textOverflow: "ellipsis" }, text: m.as_org || "–" }) },
+    cell: (m) => el("td", { title: m.asn ? `AS${m.asn} ${m.as_org || ""}` : "", style: { maxWidth: "180px", overflow: "hidden", textOverflow: "ellipsis" } },
+      m.as_org ? el("a", { class: "quiet", href: href(`/masternodes?host=${encodeURIComponent(m.as_org)}`), text: m.as_org }) : "–") },
   { key: "version", label: "Version", get: (m) => m.version || "",
     cell: (m) => el("td", { title: m.user_agent || "", text: m.version || "–" }) },
   { key: "protocol", label: "Protocol", r: true, get: (m) => m.protocol ?? -1, cell: (m) => el("td", { class: "r", text: m.protocol ?? "–" }) },
-  { key: "state", label: "Status", get: (m) => nodeStatus(m)[1],
-    cell: (m) => { const [k, l] = nodeStatus(m); return el("td", { title: m.last_error || (m.last_seen ? `last answered ${ago(m.last_seen)}` : "") }, badge(k, l)); } },
+  { key: "state", label: "Status", get: (m) => `${nodeStatus(m)[1]} ${registration(m)}`,
+    cell: (m) => { const [k, l] = nodeStatus(m); return el("td", { title: m.last_error || (m.last_seen ? `last answered ${ago(m.last_seen)}` : "") }, badge(k, l), " ", poseBadge(m)); } },
   { key: "uptime_7d", label: "Uptime 7d", r: true, get: (m) => m.uptime_7d ?? -1, cell: (m) => el("td", { class: "r" }, uptimeBadge(m.uptime_7d)) },
   { key: "uptime_30d", label: "30d", r: true, get: (m) => m.uptime_30d ?? -1, cell: (m) => el("td", { class: "r" }, uptimeBadge(m.uptime_30d)) },
   { key: "last_paid_height", label: "Last paid", r: true, get: (m) => m.last_paid_height || 0,
@@ -94,7 +95,7 @@ function cardFor(m) {
   const [k, l] = nodeStatus(m);
   const paid = !m.last_paid_height ? "never paid" : tip ? `paid ${fmt(tip - m.last_paid_height)} blocks ago` : `paid at ${fmt(m.last_paid_height)}`;
   return el("li", {}, el("a", { class: "mn-card", href: href(`/mn/${m.protx}`) },
-    el("div", { class: "mn-card-top" }, badge(k, l), m.type === "Evo" ? el("span", { class: "pill evo", text: "Evo" }) : null,
+    el("div", { class: "mn-card-top" }, badge(k, l), poseBadge(m), m.type === "Evo" ? el("span", { class: "pill evo", text: "Evo" }) : null,
       el("span", { class: "mn-card-version", text: m.version || "–" })),
     el("div", { class: "mono mn-card-addr", text: m.service || shortHash(m.protx) }),
     el("div", { class: "mn-card-sub" },

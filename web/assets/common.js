@@ -103,26 +103,43 @@ export function badge(kind, label) {
   return el("span", { class: `badge ${kind}` }, el("i"), label);
 }
 
-export const STATUSES = ["Reachable", "Unreachable", "PoSe-banned", "Not checked"];
+// Two separate questions about a masternode: does it answer our port check (reachability), and is it
+// in good standing on the network (registration: enabled or PoSe-banned)? A banned masternode can still
+// answer, and an enabled one can be down.
+export const REACH = ["Reachable", "Unreachable", "Not checked"];
+export const REGISTRATION = ["Enabled", "PoSe-banned"];
 
-/** One status per masternode, one of STATUSES; PoSe ban outranks the port check. Returns [badge kind, label]. */
+/** Reachability as [badge kind, label], one of REACH (`unchecked` renames the last). */
 export function nodeStatus(m, unchecked = "Not checked") {
-  if (m.status === "pose_banned") return ["serious", "PoSe-banned"];
   if (m.reachable === true) return ["good", "Reachable"];
   if (m.reachable === false) return ["critical", "Unreachable"];
   return ["none", unchecked];
 }
 
+export const registration = (m) => (m.status === "pose_banned" ? "PoSe-banned" : "Enabled");
+export const poseBadge = (m) => (m.status === "pose_banned" ? badge("serious", "PoSe-banned") : null);
+
 /** Masternode filters shared by the list and the map, so either page can link to the other. */
-export const MN_FILTERS = ["q", "type", "status", "version", "country"];
+export const MN_FILTERS = ["q", "type", "reach", "status", "version", "country", "host"];
 
 export function mnFilters(params) {
-  return Object.fromEntries(MN_FILTERS.map((k) => [k, params.get(k) || ""]));
+  const f = Object.fromEntries(MN_FILTERS.map((k) => [k, params.get(k) || ""]));
+  // Links from before reachability and registration were separate: ?status=Unreachable and the like.
+  if (REACH.includes(f.status)) [f.reach, f.status] = [f.reach || f.status, ""];
+  return f;
+}
+
+/** Hosting filter: "AS24940" for one network, or a provider's name for all of its networks. */
+function hostMatches(m, host) {
+  const asn = /^AS(\d+)$/.exec(host);
+  return asn ? String(m.asn) === asn[1] : (m.as_org || "Unknown") === host;
 }
 
 export function mnMatches(m, f) {
   if (f.type && m.type !== f.type) return false;
-  if (f.status && nodeStatus(m)[1] !== f.status) return false;
+  if (f.reach && nodeStatus(m)[1] !== f.reach) return false;
+  if (f.status && registration(m) !== f.status) return false;
+  if (f.host && !hostMatches(m, f.host)) return false;
   if (f.version && (m.version || "Unknown") !== f.version) return false;
   if (f.country && (m.country || "Unknown") !== f.country) return false;
   const q = f.q.trim().toLowerCase();
@@ -175,6 +192,15 @@ export function searchBox(f, onChange, placeholder, label) {
 export const TYPE_OPTIONS = [["Regular", "Regular"], ["Evo", "Evo"]];
 export const versionOptions = (rows) => countBy(rows, (r) => r.version || "Unknown").map(([v, n]) => [v, `${v} (${fmt(n)})`]);
 export const countryOptions = (rows) => countBy(rows, (r) => r.country || "Unknown").map(([c, n]) => [c, `${flag(c)} ${countryName(c)} (${fmt(n)})`]);
+/** Hosting providers by name, plus the one network (AS…) a link may have picked. */
+export function hostOptions(rows, current) {
+  const opts = countBy(rows, (r) => r.as_org || "Unknown").map(([o, n]) => [o, `${o} (${fmt(n)})`]);
+  if (/^AS\d+$/.test(current || "")) {
+    const of = rows.filter((r) => hostMatches(r, current));
+    opts.unshift([current, `${current}${of[0]?.as_org ? ` ${of[0].as_org}` : ""} (${fmt(of.length)})`]);
+  }
+  return opts;
+}
 
 /**
  * Search box and selects for the shared masternode filters. They edit `f` in place and call
@@ -185,9 +211,11 @@ export function filterControls(rows, f, onChange) {
   return [
     searchBox(f, onChange, "ProTx, IP, payout address, hosting…", "Search"),
     select("type", "Type", TYPE_OPTIONS),
-    select("status", "Status", STATUSES.map((s) => [s, s])),
+    select("reach", "Reachability", REACH.map((s) => [s, s])),
+    select("status", "Registration", REGISTRATION.map((s) => [s, s])),
     select("version", "Version", versionOptions(rows)),
     select("country", "Country", countryOptions(rows)),
+    select("host", "Hosting", hostOptions(rows, f.host)),
   ];
 }
 

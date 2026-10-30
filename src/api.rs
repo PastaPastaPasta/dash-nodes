@@ -167,7 +167,12 @@ async fn status(State(nets): State<Nets>) -> ApiResult {
             }),
         );
     }
-    Ok(Json(json!({"networks": out, "snapshots": crate::snapshot::status(), "version": env!("CARGO_PKG_VERSION")})))
+    // Where the crawler runs, for people ("United States (New York)"); from the deployment.
+    let location = std::env::var("CRAWLER_LOCATION").ok().filter(|l| !l.is_empty());
+    Ok(Json(json!({
+        "networks": out, "snapshots": crate::snapshot::status(), "crawler_location": location,
+        "version": env!("CARGO_PKG_VERSION"),
+    })))
 }
 
 fn crawl_json(r: &Row) -> rusqlite::Result<Value> {
