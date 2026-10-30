@@ -86,4 +86,9 @@ test("health fails when a network's crawl or chain data is stale, or dashd errs"
     await assert.rejects(route(["health"], new URLSearchParams(), at(networks), [], now), (e) => e.status === 503);
   }
   await assert.rejects(route(["health"], new URLSearchParams(), async () => null, [], now), (e) => e.status === 503);
+  const withSnapshots = (snapshots) => async (k) => (k === "v1/status.json" ? { networks: { mainnet: net(60, 60), testnet: net(60, 60) }, snapshots } : null);
+  const h = (snapshots) => route(["health"], new URLSearchParams(), withSnapshots(snapshots), [], now);
+  assert.equal((await h({ "app-mainnet": { saved: now - 3600, error: null }, "app-testnet": { saved: null, error: null } })).ok, true);
+  await assert.rejects(h({ "app-mainnet": { saved: now - 3600, error: "not saved: the latest snapshot is 2" } }), (e) => e.status === 503);
+  await assert.rejects(h({ "app-mainnet": { saved: now - 20 * 3600, error: null } }), (e) => e.status === 503);
 });

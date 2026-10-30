@@ -20,6 +20,8 @@ export const PARAMS = { history: ["scope", "dim", "days", "top"], payments: ["be
 
 /** Data older than this (three missed crawls, as the site's stale bar) makes /health fail. */
 export const STALE_AFTER = 45 * 60;
+/** A snapshot older than this (two 6-hour rounds missed) makes /health fail. */
+export const SNAPSHOT_STALE_AFTER = 13 * 3600;
 
 export class ApiError extends Error {
   constructor(status, message) {
@@ -159,6 +161,11 @@ async function health(get, now) {
     if (crawl > STALE_AFTER) problems.push(`${net}: last crawl ${Math.round(crawl / 60)} min ago`);
     if (chain > STALE_AFTER) problems.push(`${net}: chain data ${Math.round(chain / 60)} min old`);
     else if (s?.chain?.error) problems.push(`${net}: dashd: ${s.chain.error}`);
+  }
+  // The databases' snapshots (see src/snapshot.rs): the host's only copy of new history otherwise.
+  for (const [name, s] of Object.entries(status.snapshots || {})) {
+    if (s?.error) problems.push(`snapshot ${name}: ${s.error}`);
+    else if (s?.saved && now - s.saved > SNAPSHOT_STALE_AFTER) problems.push(`snapshot ${name}: last saved ${Math.round((now - s.saved) / 3600)} h ago`);
   }
   if (problems.length) throw new ApiError(503, problems.join("; "));
   return { ok: true, age_secs: ages };

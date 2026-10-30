@@ -11,7 +11,11 @@
 //! The parent rule is what keeps history safe: next to each database, `<db>.snapshot-stamp` names
 //! the snapshot it was restored from or last saved as. A database started empty while snapshots
 //! exist has none, so its uploads are refused instead of replacing the history; so are those of a
-//! second host once the first has moved on.
+//! second host once the first has moved on. A save checks this before uploading anything, and
+//! `<db>.snapshot-pending` names a manifest that may have landed without its answer arriving, so a
+//! host adopts its own upload instead of locking itself out.
+//!
+//! Whether the latest save of each snapshot worked is kept for the API's status (see `status`).
 
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
@@ -40,6 +44,39 @@ struct Manifest {
     #[serde(default)]
     parent: Option<i64>,
 }
+
+/// Per snapshot: when it was last saved, and why the latest attempt failed (if it did).
+type Status = std::collections::BTreeMap<String, (Option<i64>, Option<String>)>;
+static STATUS: std::sync::Mutex<Status> = std::sync::Mutex::new(std::collections::BTreeMap::new());
+
+fn set_status(name: &str, saved: Option<i64>, error: Option<String>) {
+    let mut st = STATUS.lock().unwrap_or_else(|e| e.into_inner());
+    let entry = st.entry(name.to_owned()).or_default();
+    if saved.is_some() {
+        entry.0 = saved;
+    }
+    entry.1 = error;
+}
+
+/// `{name: {"saved": unix time or null, "error": text or null}}` for every snapshot this process
+/// keeps; the Worker's /health fails on an error or an old save.
+pub fn status() -> serde_json::Value {
+    let st = STATUS.lock().unwrap_or_else(|e| e.into_inner());
+    st.iter().map(|(k, (saved, error))| (k.clone(), serde_json::json!({"saved": saved, "error": error}))).collect()
+}
+
+/// A snapshot that can't be used as it is (missing part, wrong checksum, damaged database): the one
+/// before it may still be good. Anything else (the network, the disk) is worth retrying instead.
+#[derive(Debug)]
+struct Damaged(String);
+
+impl std::fmt::Display for Damaged {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for Damaged {}
 
 /// An answer that retrying won't change (a 4xx).
 #[derive(Debug)]
@@ -102,10 +139,44 @@ impl Remote {
         .await
     }
 
-    /// Uploads a snapshot of the SQLite database at `db` as `name`.
+    /// Uploads a snapshot of the SQLite database at `db` as `name`, unless this database doesn't
+    /// descend from the latest one (then nothing is uploaded and the error says why).
     pub async fn save(&self, name: &str, db: &Path) -> Result<()> {
+        let result = self.try_save(name, db).await;
+        set_status(name, result.as_ref().ok().copied(), result.as_ref().err().map(|e| format!("{e:#}")));
+        result.map(|_| ())
+    }
+
+    /// Notes `name` in the status before its first save, so a host that never manages one shows.
+    pub fn track(&self, name: &str) {
+        let mut st = STATUS.lock().unwrap_or_else(|e| e.into_inner());
+        st.entry(name.to_owned()).or_default();
+    }
+
+    async fn try_save(&self, name: &str, db: &Path) -> Result<i64> {
         let started = std::time::Instant::now();
-        let parent = read_stamp(db);
+        let latest = match self.get(&format!("{name}/latest.json")).await? {
+            Some(b) => Some(serde_json::from_slice::<Manifest>(&b).context("snapshot manifest")?.stamp),
+            None => None,
+        };
+        let mut parent = read_stamp(db, "snapshot-stamp");
+        // A manifest of ours that landed without the answer making it back: carry on from it.
+        if let Some(pending) = read_stamp(db, "snapshot-pending")
+            && latest == Some(pending)
+        {
+            write_stamp(db, "snapshot-stamp", pending)?;
+            parent = Some(pending);
+        }
+        let _ = std::fs::remove_file(tmp_path(db, "snapshot-pending"));
+        if let Some(latest) = latest
+            && parent != Some(latest)
+        {
+            bail!(
+                "not saved: the latest snapshot is {latest}, and this database descends from {} (restore it, \
+                 or move the snapshots aside, to take over)",
+                parent.map_or("none".into(), |p| p.to_string())
+            );
+        }
         let (db2, gz) = (db.to_owned(), tmp_path(db, "snapshot.gz"));
         let gz2 = gz.clone();
         let compressed = tokio::task::spawn_blocking(move || compress_copy(&db2, &gz2)).await?;
@@ -124,19 +195,21 @@ impl Remote {
                 parts += 1;
             }
             let manifest = Manifest { stamp, parts, bytes, sha256, parent };
+            write_stamp(db, "snapshot-pending", stamp)?;
             self.put(&format!("{name}/latest.json"), serde_json::to_vec(&manifest)?).await?;
-            write_stamp(db, stamp)?;
-            Ok::<_, anyhow::Error>(bytes)
+            write_stamp(db, "snapshot-stamp", stamp)?;
+            let _ = std::fs::remove_file(tmp_path(db, "snapshot-pending"));
+            Ok::<_, anyhow::Error>((stamp, bytes))
         }
         .await;
         let _ = std::fs::remove_file(&gz);
-        let bytes = result?;
+        let (stamp, bytes) = result?;
         tracing::info!(
             "snapshot {name}: {:.0} MB saved in {:.0} s",
             bytes as f64 / 1e6,
             started.elapsed().as_secs_f64()
         );
-        Ok(())
+        Ok(stamp)
     }
 
     /// Restores the latest snapshot of `name` to `dest` (which must not exist yet), or the one before
@@ -145,9 +218,16 @@ impl Remote {
     pub async fn restore(&self, name: &str, dest: &Path) -> Result<bool> {
         let Some(latest) = self.get(&format!("{name}/latest.json")).await? else { return Ok(false) };
         let latest: Manifest = serde_json::from_slice(&latest).context("snapshot manifest")?;
+        // Written before the database appears: if this process dies in between, the next start finds
+        // no database and restores again. Uploads from here on replace the latest, whichever of the
+        // two below this came from.
+        write_stamp(dest, "snapshot-stamp", latest.stamp)?;
         let first = self.restore_from(name, &latest, dest).await;
         let used = match first {
             Ok(()) => latest.stamp,
+            // Only a damaged snapshot is worth giving up for the older one; the rest is retried by
+            // the caller starting again.
+            Err(e) if !e.chain().any(|c| c.is::<Damaged>()) => return Err(e),
             Err(e) => {
                 tracing::warn!("snapshot {name} ({}): {e:#}; trying the one before", latest.stamp);
                 let prev = self.get(&format!("{name}/previous.json")).await?.ok_or(e)?;
@@ -156,8 +236,6 @@ impl Remote {
                 prev.stamp
             }
         };
-        // Uploads from here on replace the latest, whichever of the two this came from.
-        write_stamp(dest, latest.stamp)?;
         tracing::info!("snapshot {name}: restored the one from {used}");
         Ok(true)
     }
@@ -169,13 +247,13 @@ impl Remote {
             let mut hash = Sha256::new();
             for i in 0..m.parts {
                 let key = format!("{name}/{}/{i:03}", m.stamp);
-                let part = self.get(&key).await?.ok_or_else(|| anyhow!("snapshot part {key} is missing"))?;
+                let part = self.get(&key).await?.ok_or_else(|| Damaged(format!("snapshot part {key} is missing")))?;
                 hash.update(&part);
                 out.write_all(&part)?;
             }
             out.flush()?;
             if hex(&hash.finalize()) != m.sha256 {
-                bail!("snapshot {name} ({}) fails its checksum", m.stamp);
+                return Err(Damaged(format!("snapshot {name} ({}) fails its checksum", m.stamp)).into());
             }
             Ok(())
         }
@@ -214,7 +292,7 @@ fn unpack(gz: &Path, dest: &Path) -> Result<()> {
             |r| r.get(0),
         )?;
         if check != "ok" {
-            bail!("quick_check: {check}");
+            return Err(Damaged(format!("quick_check: {check}")).into());
         }
         for side in ["-wal", "-shm", "-journal"] {
             let _ = std::fs::remove_file(dest.with_file_name(side_name(dest, side)));
@@ -254,16 +332,13 @@ fn compress_copy(db: &Path, gz: &Path) -> Result<(u64, String)> {
     result
 }
 
-fn stamp_path(db: &Path) -> PathBuf {
-    tmp_path(db, "snapshot-stamp")
+/// A stamp kept next to `db` as `<db>.<kind>`.
+fn read_stamp(db: &Path, kind: &str) -> Option<i64> {
+    std::fs::read_to_string(tmp_path(db, kind)).ok()?.trim().parse().ok()
 }
 
-fn read_stamp(db: &Path) -> Option<i64> {
-    std::fs::read_to_string(stamp_path(db)).ok()?.trim().parse().ok()
-}
-
-fn write_stamp(db: &Path, stamp: i64) -> Result<()> {
-    let (path, tmp) = (stamp_path(db), tmp_path(db, "snapshot-stamp.tmp"));
+fn write_stamp(db: &Path, kind: &str, stamp: i64) -> Result<()> {
+    let (path, tmp) = (tmp_path(db, kind), tmp_path(db, &format!("{kind}.tmp")));
     std::fs::write(&tmp, stamp.to_string())?;
     std::fs::rename(&tmp, &path).with_context(|| format!("write {}", path.display()))
 }
@@ -321,8 +396,8 @@ mod tests {
         assert!(!dir.join("y.sqlite-wal").exists());
         let n: i64 = Connection::open(&out).unwrap().query_row("SELECT sum(v) FROM t", [], |r| r.get(0)).unwrap();
         assert_eq!(n, 6);
-        write_stamp(&out, 42).unwrap();
-        assert_eq!(read_stamp(&out), Some(42));
+        write_stamp(&out, "snapshot-stamp", 42).unwrap();
+        assert_eq!(read_stamp(&out, "snapshot-stamp"), Some(42));
         drop(c);
         std::fs::remove_dir_all(&dir).unwrap();
     }

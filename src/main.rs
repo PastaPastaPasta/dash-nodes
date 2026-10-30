@@ -261,6 +261,9 @@ async fn serve(args: ServeArgs) -> Result<()> {
         {
             tracing::info!("{name}: no snapshot yet; starting a new database");
         }
+        if let Some(r) = &remote {
+            r.track(&name);
+        }
         snapshots.push((name, path.clone()));
         let db = db::Db::open(&path)?;
         let ctx = Arc::new(NetCtx {

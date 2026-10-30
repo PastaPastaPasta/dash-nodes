@@ -167,7 +167,7 @@ async fn status(State(nets): State<Nets>) -> ApiResult {
             }),
         );
     }
-    Ok(Json(json!({"networks": out, "version": env!("CARGO_PKG_VERSION")})))
+    Ok(Json(json!({"networks": out, "snapshots": crate::snapshot::status(), "version": env!("CARGO_PKG_VERSION")})))
 }
 
 fn crawl_json(r: &Row) -> rusqlite::Result<Value> {

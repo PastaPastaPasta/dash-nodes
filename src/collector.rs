@@ -12,8 +12,8 @@ use crate::addr::PeerAddr;
 use crate::db::{self, get_meta, set_meta};
 use crate::state::NetCtx;
 
-/// Blocks per payments batch. Each block costs a `getblock` and a full `protx list` at its height
-/// (a few MB on mainnet), so batches stay small.
+/// Blocks per payments batch. Each block costs a `getblock` (up to a few MB), a `protx listdiff`
+/// and a `protx info` per payee.
 const PAYMENT_CHUNK: u32 = 10;
 /// Forward indexing work per tick, so a long gap doesn't delay the masternode list refresh.
 const FORWARD_PER_TICK: u32 = 2_000;
