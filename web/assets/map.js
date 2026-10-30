@@ -35,9 +35,12 @@ const MODES = {
 const TONES = ["good", "critical", "serious", "axis", "s1", "s2", "s3", "s4", "s5", "other"];
 if (state.color === "status") state.color = "reach"; // the old name
 if (!Object.hasOwn(MODES, state.color)) state.color = "reach";
-// The list links here with ?reach=… or ?status=…; on the map those are the chips of that mode.
-for (const [param, mode] of [["reach", "reach"], ["status", "pose"]]) {
-  if (!state[param]) continue;
+// The list links here with ?reach=… or ?status=…; on the map that's the chips of that mode. The map
+// colors by one mode at a time, so with both, reachability becomes the chips and the PoSe filter
+// stays a filter.
+const chipped = [["reach", "reach"], ["status", "pose"]].find(([param]) => state[param]);
+if (chipped) {
+  const [param, mode] = chipped;
   state.color = mode;
   state.hidden = new Set(MODES[mode].order.filter((k) => k !== state[param]));
   state[param] = "";
@@ -493,7 +496,7 @@ function renderHeadline() {
     const shown = state.color === mode ? MODES[mode].order.filter((k) => !state.hidden.has(k)) : [];
     return shown.length === 1 ? shown[0] : "";
   };
-  const query = filterQuery({ ...state, reach: only("reach"), status: only("pose") });
+  const query = filterQuery({ ...state, reach: only("reach") || state.reach, status: only("pose") || state.status });
   foot.replaceChildren(
     missing ? `${fmt(missing)} aren't on the map: no address registered, or not crawled yet. ` : "",
     el("a", { href: href(`/masternodes${query}`), text: "Open these as a list" }));

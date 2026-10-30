@@ -30,10 +30,11 @@ function services(bits) {
 }
 
 const DAY = 86400000;
-/** Days the strip covers: since the first check we have, at least a week, at most 90 days. */
+/** Days the strip covers: since the first check we have (today included), at least a week, at most 90. */
 function stripDays(days) {
-  const first = days.length ? Date.parse(`${days[0].day}T00:00:00Z`) : Date.now();
-  return Math.min(90, Math.max(7, Math.ceil((Date.now() - first) / DAY) + 1));
+  const today = new Date().toISOString().slice(0, 10);
+  const first = days.length ? days[0].day : today;
+  return Math.min(90, Math.max(7, Math.round((Date.parse(`${today}T00:00:00Z`) - Date.parse(`${first}T00:00:00Z`)) / DAY) + 1));
 }
 
 function uptimeStrip(days) {
@@ -245,7 +246,8 @@ function bestLatency(cell, m, b, crawlerAt) {
   const seen = [];
   if (m.latency_ms != null) seen.push({ ms: m.latency_ms, from: crawlerAt ? `${crawlerAt}, our crawler` : "our crawler", when: m.last_seen });
   for (const v of b.vantages) {
-    const r = v.results.find((x) => x.ok && x.connect_ms != null);
+    // Only a location's newest test: one that failed since doesn't count with an older result.
+    const r = v.results[0]?.ok && v.results[0].connect_ms != null ? v.results[0] : null;
     if (r) seen.push({ ms: r.connect_ms + (r.handshake_ms || 0), from: v.location || v.vantage, when: r.ts });
   }
   if (!seen.length) return;
@@ -288,9 +290,10 @@ function paymentsSection(m) {
     }
   });
   const note = ps.indexed ? `indexed blocks ${fmt(ps.indexed.from)}–${fmt(ps.indexed.to)}` : "payment index not started yet";
-  const recent = m.payments.slice(0, 6);
-  // Average spacing of the latest payments: how often this masternode gets paid right now.
-  const every = recent.length > 2 ? (recent[0].time - recent.at(-1).time) / (recent.length - 1) / 86400 : null;
+  // How often it gets paid lately: the spacing of its latest payment rounds. An evonode is paid several
+  // blocks in a row, so a run of consecutive blocks counts as one round.
+  const rounds = m.payments.filter((p, i, all) => i === 0 || all[i - 1].height - p.height > 1).slice(0, 6);
+  const every = rounds.length > 2 ? (rounds[0].time - rounds.at(-1).time) / (rounds.length - 1) / 86400 : null;
   const lede = ps.count
     ? `${fmt(ps.count)} payments, ${dash(ps.total_duffs)} in total${every ? `; lately one every ${every < 2 ? every.toFixed(1) : Math.round(every)} days` : ""}.`
     : null;

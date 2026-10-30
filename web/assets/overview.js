@@ -61,7 +61,9 @@ function shareBar(bar, legend, rows, { color, label = (k) => k, limit = 5 }) {
  * the hole. Each slice names itself on hover; the ranked list beside it carries the numbers.
  */
 function donut(root, rows, { color, label = (k) => k, limit = 5, center }) {
-  const sum = total(rows) || 1;
+  root.hidden = !rows.length;
+  if (!rows.length) return;
+  const sum = total(rows);
   const top = rows.slice(0, limit);
   const rest = sum - total(top);
   const parts = [...top.map(([k, n], i) => ({ n, c: color(k, i), l: label(k) })), ...(rest > 0 ? [{ n: rest, c: "var(--other)", l: "Everything else" }] : [])];
@@ -139,8 +141,9 @@ function renderHero() {
   const answered = reach.yes || 0, silent = reach.no || 0;
   const share = answered + silent ? answered / (answered + silent) : null;
   $("hero-stats").replaceChildren(
-    stat(pct(share), "Masternodes reachable", silent ? `${fmt(silent)} didn't answer` : "all answered",
-      href(silent ? "/masternodes?reach=Unreachable" : "/masternodes"), share == null ? null : share >= 0.98 ? "good" : share >= 0.9 ? "warning" : "critical"),
+    // The counts are of enabled masternodes; so are the lists they link to.
+    stat(pct(share), "Masternodes reachable", silent ? `${fmt(silent)} didn't answer` : share != null ? "all answered" : null,
+      href(silent ? "/masternodes?reach=Unreachable&status=Enabled" : "/masternodes?status=Enabled"), share == null ? null : share >= 0.98 ? "good" : share >= 0.9 ? "warning" : "critical"),
     stat(fmt(c.mn_total), "Enabled masternodes", type.Evo ? `${fmt(type.Evo)} of them evonodes` : null, href("/masternodes?status=Enabled")),
     stat(fmt(status.pose_banned || 0), "PoSe-banned", null, href("/masternodes?status=PoSe-banned")),
     stat(fmt((all.country || []).filter(([k]) => k !== "Unknown").length), "Countries", null, "#where"),
@@ -210,7 +213,7 @@ function renderWhere() {
   // Masternode scopes link each row to the list filtered to it.
   const listed = scope === "mn" || scope === "evo";
   const toList = (param, value, text) => (listed && value !== "Unknown"
-    ? el("a", { class: "quiet", href: href(`/masternodes?${param}=${encodeURIComponent(value)}${scope === "evo" ? "&type=Evo" : ""}`), text })
+    ? el("a", { class: "quiet", href: href(`/masternodes?${param}=${encodeURIComponent(value)}&status=Enabled${scope === "evo" ? "&type=Evo" : ""}`), text })
     : text);
   donut($("host-donut"), orgs, { color: rankColor, center: [fmt(known(orgs).length), "providers"] });
   ranked($("host-list"), orgs, { color: rankColor, title: (r) => r[2].join(", "), label: (k) => toList("host", k, k) });
@@ -246,7 +249,7 @@ function renderReach() {
       : "";
   }
   if (no && scope !== "all") {
-    lede.append(" ", el("a", { href: href(`/masternodes?reach=Unreachable${scope === "evo" ? "&type=Evo" : ""}`), text: "See which" }));
+    lede.append(" ", el("a", { href: href(`/masternodes?reach=Unreachable&status=Enabled${scope === "evo" ? "&type=Evo" : ""}`), text: "See which" }));
   }
   renderNetworks();
 }
