@@ -1,4 +1,5 @@
-import { api, chrome, currentNet, el, fmt, pct, href, countryName, flag, place, badge, ago, dateTime, dash, nodeStatus, poseBadge, uptimeKind, tile, card } from "./common.js";
+import { api, chrome, currentNet, el, fmt, pct, href, countryName, flag, place, badge, ago, dateTime, dash, nodeStatus, poseBadge, uptimeKind, tile, card,
+  changeText, changeKind } from "./common.js";
 
 chrome("masternodes");
 const net = currentNet();
@@ -96,7 +97,7 @@ async function main() {
     tile("Uptime, 30 days", at30 ? pct(ok30 / at30) : "–", at30 ? `${fmt(ok30)} of ${fmt(at30)} port checks` : "no checks yet"),
     tile("Last paid", m.last_paid_height ? (tip ? `${fmt(tip - m.last_paid_height)} blocks ago` : fmt(m.last_paid_height)) : "never",
       m.last_paid_height ? `block ${fmt(m.last_paid_height)}` : ""),
-    tile("Payments indexed", fmt(ps.count), ps.count ? `${dash(ps.total_duffs)} since block ${fmt(ps.first_height)}` : ""),
+    earnedTile(m),
   ));
 
   // Speed tests come from the Worker's API; the crawler's own server doesn't have them, so the card
@@ -142,16 +143,21 @@ async function main() {
         ["Services", services(m.services)],
         ["Height it reported", m.start_height != null ? fmt(m.start_height) : null],
         ["Latency", latencyCell],
+        !m.removed && m.service ? ["Check now", checkNow(m)] : null,
         ["Location", m.country ? el("span", {}, place(m),
           m.lat != null && !m.removed ? [" · ", el("a", { href: href(`/map?protx=${m.protx}`), text: "show on map" })] : null) : null],
         ["Hosting network", m.asn ? el("a", { href: href(`/masternodes?host=AS${m.asn}`), title: "Masternodes on this network", text: `AS${m.asn} ${m.as_org || ""}` }) : null],
       ])),
   ));
 
+  if (m.platform) root.append(platformSection(m));
+
   root.append(el("section", { class: "section card" },
     el("div", { class: "card-head" }, el("h2", { text: "Port-check uptime" }),
       el("span", { class: "sub", text: `daily, last ${stripDays(m.uptime_daily)} days (UTC)` })),
     uptimeStrip(m.uptime_daily)));
+
+  root.append(changesSection(m));
 
   root.append(el("div", { class: "cols-2 section" },
     el("section", {}, el("h2", { text: "Version history", style: { marginBottom: "10px" } }),
@@ -161,6 +167,92 @@ async function main() {
           el("td", { text: dateTime(v.ts) }), el("td", {}, el("code", { text: v.user_agent })), el("td", { class: "r", text: v.protocol }))))
           : [el("tr", {}, el("td", { colspan: 3, class: "empty", text: "No handshake recorded yet." }))]))))),
     paymentsSection(m)));
+}
+
+/** What it earned over the last year, and the yield on its collateral that works out to. */
+function earnedTile(m) {
+  const r = m.returns;
+  if (!r) return tile("Earned, last 365 days", "–", "");
+  const y = r.annual_yield != null ? `≈ ${pct(r.annual_yield)} a year on its ${m.type === "Evo" ? "4,000" : "1,000"} DASH (last ${r.window_days} days)` : "too new to tell its yield";
+  return tile("Earned, last 365 days", dash(r.paid_365d), y);
+}
+
+/** Registration changes we've recorded, newest first. */
+function changesSection(m) {
+  const rows = (m.changes || []).map((c) => labelled(["When", "Block", "Change"], el("tr", {},
+    el("td", { title: dateTime(c.ts), text: dateTime(c.ts) }),
+    el("td", { class: "r", text: c.height != null ? fmt(c.height) : "–" }),
+    el("td", {}, badge(changeKind(c), changeText(c))))));
+  return el("section", { class: "section card" },
+    el("div", { class: "card-head" }, el("h2", { text: "Registration changes" }),
+      el("span", { class: "sub", text: "addresses, keys, PoSe status; recorded since 30 Oct 2026" })),
+    el("div", { class: "table-wrap" }, el("table", { class: "data stack" },
+      el("thead", {}, el("tr", {}, el("th", { text: "When" }), el("th", { class: "r", text: "Block" }), el("th", { text: "Change" }))),
+      el("tbody", {}, ...(rows.length ? rows : [el("tr", {}, el("td", { colspan: 3, class: "empty", text: "No changes since we started recording them." }))])))));
+}
+
+/** A button that asks the Worker to handshake with this masternode now, from Cloudflare's edge. */
+function checkNow(m) {
+  const out = el("span", { class: "muted" });
+  const btn = el("button", { class: "btn", type: "button", text: "Check now" });
+  btn.addEventListener("click", async () => {
+    btn.disabled = true;
+    out.replaceChildren(" checking…");
+    try {
+      const r = await fetch(`/api/v1/${net}/masternodes/${protx}/check`, { method: "POST" });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      out.replaceChildren(" ", j.ok
+        ? badge("good", `Answered in ${fmt(j.connect_ms + j.handshake_ms)} ms`)
+        : badge("critical", `No answer: ${j.error}`),
+      ` from ${j.from}${j.ok ? ` · ${j.user_agent} · height ${fmt(j.height)}` : ""}${j.cached ? ` (checked ${ago(j.checked)})` : ""}`);
+    } catch (e) {
+      out.replaceChildren(` ${e.message}`);
+    } finally {
+      btn.disabled = false;
+    }
+  });
+  return el("span", {}, btn, out);
+}
+
+/** An evonode's Platform endpoints as our latest check found them, and the last 30 days of checks. */
+function platformSection(m) {
+  const s = m.platform.latest;
+  const box = el("section", { class: "section card" },
+    el("div", { class: "card-head" }, el("h2", { text: "Platform" }),
+      el("span", { class: "sub", text: s ? `checked ${ago(s.ts)}, every 15 minutes` : "not checked yet" })));
+  if (!s) return box;
+  const endpoint = (e, okText) => (e.error ? badge("critical", e.error) : badge("good", `${okText} in ${fmt(e.ms)} ms`));
+  const days = s.cert.expires != null ? (s.cert.expires - Date.now() / 1000) / 86400 : null;
+  const cert = days == null ? null : el("span", {},
+    badge(days < 0 ? "critical" : days < 3 ? "warning" : "good", days < 0 ? "Expired" : `Expires in ${days < 2 ? `${Math.max(0, Math.round(days * 24))} h` : `${Math.round(days)} days`}`),
+    s.cert.issuer ? ` · ${s.cert.issuer}` : "");
+  const wrongNode = s.node_protx && s.node_protx !== m.protx;
+  const heightCell = el("span", {}, s.height != null ? fmt(s.height) : "–", s.catching_up ? el("span", { class: "muted", text: " · catching up" }) : null);
+  api(`${net}/summary`).then((sum) => {
+    const top = sum.platform?.max_height;
+    if (top && s.height != null && top - s.height > 2) heightCell.append(el("span", { class: "muted", text: ` · ${fmt(top - s.height)} behind the highest we've seen` }));
+  }, () => {});
+  box.append(el("div", { class: "cols-2" },
+    kv([
+      ["Tenderdash P2P", endpoint(s.p2p, "Open")],
+      ["DAPI (HTTPS)", wrongNode ? badge("critical", "Answers as a different evonode") : endpoint(s.https, "Answered")],
+      ["TLS certificate", cert],
+      ["Platform height", heightCell],
+    ]),
+    kv([
+      ["Drive", s.software.drive || "–"],
+      ["Tenderdash", s.software.tenderdash || "–"],
+      ["DAPI", s.software.dapi || "–"],
+      ["Drive protocol", s.drive_protocol.current != null ? `${s.drive_protocol.current} (supports ${s.drive_protocol.latest})` : "–"],
+      ["Platform peers", s.peers != null ? fmt(s.peers) : "–"],
+    ])));
+  const daily = m.platform.daily || [];
+  if (daily.length) {
+    const at = daily.reduce((a, d) => a + d.attempts, 0), ok = daily.reduce((a, d) => a + d.ok, 0);
+    box.append(el("p", { class: "muted small", text: `Healthy in ${pct(ok / at)} of ${fmt(at)} checks over the last ${daily.length} days (both endpoints answered, as this evonode).` }));
+  }
+  return box;
 }
 
 /** Gives each cell its column's name, which stacked tables show as the row label on phones. */

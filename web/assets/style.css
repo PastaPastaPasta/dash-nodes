@@ -557,3 +557,12 @@ button.link { font: inherit; font-size: 13px; background: none; border: 0; paddi
   .donut-row { grid-template-columns: 1fr; }
   .donut { max-width: 168px; margin: 0 auto; }
 }
+
+/* ---- stat rows (overview: earnings, Platform) ---- */
+.stat-row { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 18px 24px; margin: 18px 0 22px; }
+.stat-row div { border-left: 2px solid var(--grid); padding-left: 12px; }
+.stat-row dt { color: var(--muted); font-size: 13px; }
+.stat-row dd { margin: 2px 0 0; font-size: 22px; font-weight: 650; font-stretch: 110%; line-height: 1.2; }
+.stat-row small { display: block; font-size: 12.5px; font-weight: 450; font-stretch: 100%; color: var(--muted); margin-top: 3px; }
+.stat-row .stat-good { border-left: 4px solid var(--good); }
+.stat-row .stat-warning { border-left: 4px solid var(--warning); }

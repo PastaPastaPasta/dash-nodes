@@ -1,6 +1,8 @@
 // nodes.dashhq.org: the static site (Workers static assets), the public API answered from R2, and an
 // authenticated ingest the crawler pushes documents to. The crawler's host takes no inbound traffic.
-import { route, ApiError, KEY, NETWORKS, DOCS, PARAMS, VANTAGE } from "./api.js";
+import { connect } from "cloudflare:sockets";
+import { route, ApiError, KEY, NETWORKS, DOCS, PARAMS, VANTAGE, shardKey } from "./api.js";
+import { checkNode } from "./check.js";
 
 const API_HEADERS = {
   "content-type": "application/json; charset=utf-8",
@@ -207,9 +209,40 @@ async function state(request, env, url) {
   return new Response(null, { status: 204 });
 }
 
+const CHECK_PATH = new RegExp(`^/api/v1/(${NETWORKS.join("|")})/masternodes/([0-9a-fA-F]{64})/check$`);
+/** One check of a masternode serves everyone who asks within this many seconds. */
+const CHECK_REUSE = 60;
+
+/**
+ * POST /api/v1/<net>/masternodes/<protx>/check: a P2P handshake with the masternode's registered core
+ * address, from this Cloudflare location (see check.js). Only registered masternodes, never an address
+ * the caller picks, so this isn't a port scanner. CHECK_LIMIT (a rate limit binding) caps each client;
+ * a masternode checked in the last minute gets that result again.
+ */
+async function check(request, env, ctx, url, net, protx) {
+  if (request.method !== "POST") return fail(405, "use POST");
+  if (env.CHECK_LIMIT) {
+    const { success } = await env.CHECK_LIMIT.limit({ key: request.headers.get("cf-connecting-ip") || "unknown" });
+    if (!success) return fail(429, "too many checks from here; try again in a minute");
+  }
+  const cacheKey = `${url.origin}/_check/${net}/${protx}`;
+  const recent = await caches.default.match(cacheKey);
+  if (recent) return new Response(recent.body, { headers: { ...API_HEADERS, "cache-control": "no-store" } });
+  const mn = (await getJson(env, shardKey(net, protx)))?.[protx];
+  if (!mn || mn.removed) return fail(404, "not a registered masternode");
+  if (!mn.service) return fail(400, "this masternode has no core P2P address registered");
+  const result = await checkNode(connect, net, mn.service);
+  const body = JSON.stringify({ ...result, address: mn.service, from: request.cf?.colo ? `Cloudflare ${request.cf.colo}` : "Cloudflare",
+    checked: Math.floor(Date.now() / 1000) });
+  ctx.waitUntil(caches.default.put(cacheKey, new Response(body, { headers: { "cache-control": `public, max-age=${CHECK_REUSE}` } })));
+  return new Response(body, { headers: { ...API_HEADERS, "cache-control": "no-store" } });
+}
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
+    const checking = CHECK_PATH.exec(url.pathname);
+    if (checking) return check(request, env, ctx, url, checking[1], checking[2].toLowerCase());
     if (url.pathname.startsWith("/api/v1/")) return api(request, env, ctx, url);
     if (url.pathname.startsWith("/_ingest/")) return ingest(request, env, url);
     if (url.pathname.startsWith("/_state/")) return state(request, env, url);

@@ -158,6 +158,8 @@ async function publishNetwork(net) {
   await put(`v1/${net}/masternodes.json`, list);
   await put(`v1/${net}/summary.json`, await get(`${net}/summary`));
   await putIfServed(`v1/${net}/geo.json`, () => get(`${net}/geo`));
+  // The latest registration changes (see the crawler's collector.rs).
+  await putIfServed(`v1/${net}/changes.json`, () => get(`${net}/changes`));
   // Block hashes speed-test vantages check downloaded headers against.
   await putIfServed(`v1/${net}/reference.json`, () => get(`${net}/reference`));
   await put(`v1/${net}/history/totals.json`, await historyDoc(net, "all", "totals"));

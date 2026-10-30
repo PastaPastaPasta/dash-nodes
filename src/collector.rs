@@ -1,5 +1,6 @@
 //! Follows dashd: chain status, the deterministic masternode list and per-block masternode payments.
 
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -65,7 +66,7 @@ async fn tick(ctx: &NetCtx, mn_tip: &mut i64) -> Result<()> {
         return Ok(());
     }
     if blocks != *mn_tip {
-        sync_masternodes(ctx).await.context("masternode list")?;
+        sync_masternodes(ctx, blocks).await.context("masternode list")?;
         *mn_tip = blocks;
         ctx.mn_loaded.store(true, std::sync::atomic::Ordering::Release);
     }
@@ -73,7 +74,7 @@ async fn tick(ctx: &NetCtx, mn_tip: &mut i64) -> Result<()> {
     Ok(())
 }
 
-#[derive(Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct MnRow {
     pub protx: String,
     pub mn_type: String,
@@ -171,7 +172,81 @@ fn is_null_service(a: &str) -> bool {
     a.ends_with(":0") || a.starts_with("[::]") || a.starts_with("0.0.0.0")
 }
 
-async fn sync_masternodes(ctx: &NetCtx) -> Result<()> {
+/// Registration fields whose changes are recorded (`mn_changes`), as stored text. PoSe penalty and
+/// last payment change all the time and are left out; a ban and a revival are one field, `pose`.
+const TRACKED: [&str; 11] = [
+    "service",
+    "platform_p2p",
+    "platform_https",
+    "platform_node_id",
+    "payout_address",
+    "operator_payout_address",
+    "owner_address",
+    "voting_address",
+    "pubkey_operator",
+    "operator_reward",
+    "pose",
+];
+
+fn tracked(r: &MnRow) -> [Option<String>; 11] {
+    let pose = match r.pose_ban_height {
+        Some(h) if h > 0 => format!("banned at {h}"),
+        _ => "enabled".to_owned(),
+    };
+    [
+        r.service.clone(),
+        r.platform_p2p.clone(),
+        r.platform_https.clone(),
+        r.platform_node_id.clone(),
+        r.payout_address.clone(),
+        r.operator_payout_address.clone(),
+        r.owner_address.clone(),
+        r.voting_address.clone(),
+        r.pubkey_operator.clone(),
+        r.operator_reward.map(|x| format!("{x}")),
+        Some(pose),
+    ]
+}
+
+/// What changed between a masternode's stored registration and the one just read: (field, old, new).
+fn diff(old: &MnRow, new: &MnRow) -> Vec<(&'static str, Option<String>, Option<String>)> {
+    TRACKED
+        .iter()
+        .zip(tracked(old))
+        .zip(tracked(new))
+        .filter(|((_, a), b)| a != b)
+        .map(|((f, a), b)| (*f, a, b))
+        .collect()
+}
+
+/// The stored registrations of every masternode still in the list, keyed by ProTx hash.
+fn stored_rows(c: &Connection) -> Result<HashMap<String, MnRow>> {
+    let mut st = c.prepare(
+        "SELECT protx, service, platform_p2p, platform_https, platform_node_id, payout_address, operator_payout_address,
+            owner_address, voting_address, pubkey_operator, operator_reward, pose_ban_height
+         FROM masternodes WHERE removed IS NULL",
+    )?;
+    let rows = st.query_map([], |r| {
+        Ok(MnRow {
+            protx: r.get(0)?,
+            service: r.get(1)?,
+            platform_p2p: r.get(2)?,
+            platform_https: r.get(3)?,
+            platform_node_id: r.get(4)?,
+            payout_address: r.get(5)?,
+            operator_payout_address: r.get(6)?,
+            owner_address: r.get(7)?,
+            voting_address: r.get(8)?,
+            pubkey_operator: r.get(9)?,
+            operator_reward: r.get(10)?,
+            pose_ban_height: r.get(11)?,
+            ..Default::default()
+        })
+    })?;
+    Ok(rows.map(|r| r.map(|m| (m.protx.clone(), m))).collect::<rusqlite::Result<_>>()?)
+}
+
+async fn sync_masternodes(ctx: &NetCtx, height: i64) -> Result<()> {
     let list: Vec<Value> = ctx.rpc.call("protx", json!(["list", "registered", true])).await?;
     let rows: Vec<MnRow> = list.iter().map(parse_mn).collect::<Result<_>>()?;
     let n = rows.len();
@@ -186,6 +261,35 @@ async fn sync_masternodes(ctx: &NetCtx) -> Result<()> {
                 tracing::warn!("masternode list shrank from {active} to {n}; not marking removals this round");
             }
             let tx = conn.transaction()?;
+            // Changes since the last sync. A first sync (nothing stored yet) has nothing to compare with.
+            let stored = stored_rows(&tx)?;
+            {
+                let mut log = tx.prepare_cached(
+                    "INSERT INTO mn_changes (ts, height, protx, field, old, new) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                )?;
+                if !stored.is_empty() {
+                    for r in &rows {
+                        match stored.get(&r.protx) {
+                            None => {
+                                log.execute(params![now, height, r.protx, "registered", None::<String>, r.service])?;
+                            }
+                            Some(old) => {
+                                for (field, a, b) in diff(old, r) {
+                                    log.execute(params![now, height, r.protx, field, a, b])?;
+                                }
+                            }
+                        }
+                    }
+                    if trust_removals {
+                        let listed: HashSet<&str> = rows.iter().map(|r| r.protx.as_str()).collect();
+                        for (protx, old) in &stored {
+                            if !listed.contains(protx.as_str()) {
+                                log.execute(params![now, height, protx, "removed", old.service, None::<String>])?;
+                            }
+                        }
+                    }
+                }
+            }
             {
                 let mut up = tx.prepare_cached(
                     "INSERT INTO masternodes (protx, type, collateral, collateral_address, operator_reward, service,
@@ -525,6 +629,30 @@ pub async fn backfill(ctx: Arc<NetCtx>, floor: u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn registration_changes() {
+        let old = MnRow {
+            protx: "aa".into(),
+            service: Some("1.2.3.4:9999".into()),
+            payout_address: Some("Xa".into()),
+            ..Default::default()
+        };
+        // Unchanged, and fields that aren't tracked (penalty, last payment), make no change.
+        let same = MnRow { pose_penalty: Some(66), last_paid_height: Some(9), ..old.clone() };
+        assert!(diff(&old, &same).is_empty());
+        let moved = MnRow { service: Some("5.6.7.8:9999".into()), pose_ban_height: Some(100), ..old.clone() };
+        assert_eq!(
+            diff(&old, &moved),
+            vec![
+                ("service", Some("1.2.3.4:9999".into()), Some("5.6.7.8:9999".into())),
+                ("pose", Some("enabled".into()), Some("banned at 100".into())),
+            ]
+        );
+        // A revival: the ban height goes back to -1.
+        let revived = MnRow { pose_ban_height: Some(-1), ..moved.clone() };
+        assert_eq!(diff(&moved, &revived), vec![("pose", Some("banned at 100".into()), Some("enabled".into()))]);
+    }
 
     #[test]
     fn payments_from_listdiff_and_coinbase() {
