@@ -1,10 +1,11 @@
-# dash-nodes: dashd (mainnet + testnet) + the crawler/monitor/web app (+ optional cloudflared).
+# dash-nodes: dashd (mainnet + testnet), the crawler/monitor app, and the publisher that pushes the
+# app's API documents to the Cloudflare Worker serving nodes.dashhq.org.
 #
 #   scripts/init.sh                  once: generates secrets/rpc_password and .env
 #   docker compose up -d --build     everything
-#   COMPOSE_PROFILES=tunnel          also run cloudflared (needs secrets/cloudflare_tunnel_token)
 #
-# dashd RPC is reachable on the compose network only; the app's HTTP port is the only thing published.
+# Nothing here takes inbound traffic from the internet: the publisher only connects out to the Worker.
+# dashd RPC is reachable on the compose network only; the app's HTTP port is for the LAN.
 
 name: dash-nodes
 
@@ -85,20 +86,24 @@ services:
       - core
       - edge
 
-  cloudflared:
-    image: cloudflare/cloudflared:${CLOUDFLARED_TAG:-2026.10.3}
-    profiles: ["tunnel"]
+  publisher:
+    image: node:${NODE_TAG:-24-alpine}
     restart: unless-stopped
     logging: *default-logging
     user: "1000:1000"
     depends_on:
       - app
-    # Route nodes.<zone> -> http://app:8080 in the tunnel's public hostnames.
-    command: ["tunnel", "--no-autoupdate", "--loglevel", "warn", "--metrics", "127.0.0.1:20241", "run"]
+    working_dir: /publisher
+    command: ["node", "scripts/publish.mjs"]
     environment:
-      TUNNEL_TOKEN_FILE: /run/secrets/cloudflare_tunnel_token
+      SOURCE: http://app:8080
+      TARGET: ${PUBLISH_TARGET:-https://nodes.dashhq.org}
+      INGEST_TOKEN_FILE: /run/secrets/ingest_token
     secrets:
-      - cloudflare_tunnel_token
+      - ingest_token
+    volumes:
+      - ../worker/src:/publisher/src:ro
+      - ../worker/scripts:/publisher/scripts:ro
     networks:
       - edge
 
@@ -117,5 +122,5 @@ volumes:
 secrets:
   rpc_password:
     file: ./secrets/rpc_password
-  cloudflare_tunnel_token:
-    file: ./secrets/cloudflare_tunnel_token
+  ingest_token:
+    file: ./secrets/ingest_token

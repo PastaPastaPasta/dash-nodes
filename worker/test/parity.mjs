@@ -1,4 +1,5 @@
-// Compares Worker answers with the Rust API they were published from: node test/parity.mjs <api> <worker>
+// Compares Worker answers with the Rust API they were published from (scripts/publish.mjs --once):
+//   node test/parity.mjs <api> <worker>
 import assert from "node:assert/strict";
 const [a, b] = process.argv.slice(2);
 const both = async (path) => {
