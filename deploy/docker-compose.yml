@@ -1,10 +1,13 @@
-# dash-nodes: dashd (mainnet + testnet) + the crawler/monitor/web app (+ optional cloudflared).
+# dash-nodes: dashd (mainnet + testnet) + the crawler/monitor/web app, with Tor and I2P clients so
+# both can reach onion and I2P peers (+ optional cjdns and cloudflared).
 #
 #   scripts/init.sh                  once: generates secrets/rpc_password and .env
 #   docker compose up -d --build     everything
 #   COMPOSE_PROFILES=tunnel          also run cloudflared (needs secrets/cloudflare_tunnel_token)
+#   COMPOSE_PROFILES=cjdns, CJDNS=true   also run a cjdns node (needs /dev/net/tun, see README)
 #
-# dashd RPC is reachable on the compose network only; the app's HTTP port is the only thing published.
+# dashd RPC, Tor's SOCKS port and i2pd's SOCKS/SAM ports are reachable on the compose networks
+# only; the app's HTTP port is the only thing published.
 
 name: dash-nodes
 
@@ -24,8 +27,10 @@ x-dashd: &dashd
   entrypoint: ["/bin/sh", "/opt/dash-nodes/dashd-entrypoint.sh"]
   secrets:
     - rpc_password
+  # cjdns: IPv6 to the cjdns node (only used when CJDNS=true and the cjdns profile runs).
   networks:
     - core
+    - cjdns
   healthcheck:
     # Passes once RPC is out of warm-up, not when synced.
     test: ["CMD", "dash-cli", "-conf=/tmp/dash.conf", "getblockcount"]
@@ -41,6 +46,9 @@ services:
       DASH_NETWORK: mainnet
       DASHD_DBCACHE_MB: ${MAINNET_DBCACHE_MB:-1536}
       DASHD_EXTRA_ARGS: ${MAINNET_DASHD_ARGS:-}
+      DASHD_ONION: 172.30.86.250:9050
+      DASHD_I2PSAM: 172.30.86.251:7656
+      DASHD_CJDNSREACHABLE: ${CJDNS:-false}
     volumes:
       - dashd-mainnet:/home/dash
       - ./dashd/dash.conf:/etc/dash-nodes/dash.conf:ro
@@ -52,6 +60,9 @@ services:
       DASH_NETWORK: testnet
       DASHD_DBCACHE_MB: ${TESTNET_DBCACHE_MB:-512}
       DASHD_EXTRA_ARGS: ${TESTNET_DASHD_ARGS:-}
+      DASHD_ONION: 172.30.86.250:9050
+      DASHD_I2PSAM: 172.30.86.251:7656
+      DASHD_CJDNSREACHABLE: ${CJDNS:-false}
     volumes:
       - dashd-testnet:/home/dash
       - ./dashd/dash.conf:/etc/dash-nodes/dash.conf:ro
@@ -66,6 +77,8 @@ services:
     depends_on:
       - dashd-mainnet
       - dashd-testnet
+      - tor
+      - i2pd
     environment:
       MAINNET_RPC: http://dashd-mainnet:9998
       TESTNET_RPC: http://dashd-testnet:19998
@@ -74,6 +87,14 @@ services:
       DATA_DIR: /data
       CRAWL_INTERVAL: ${CRAWL_INTERVAL:-900}
       CRAWL_CONCURRENCY: ${CRAWL_CONCURRENCY:-128}
+      TOR_CONCURRENCY: ${TOR_CONCURRENCY:-16}
+      I2P_CONCURRENCY: ${I2P_CONCURRENCY:-8}
+      TOR_PROXY: 172.30.86.250:9050
+      I2P_PROXY: 172.30.86.251:4447
+      CRAWL_IPV6: ${CRAWL_IPV6:-auto}
+      IPV6_PROXY: ${IPV6_PROXY:-}
+      # Through the cjdns container's NAT, which the app can't detect by itself: say so.
+      CJDNS: ${CJDNS:-auto}
       RUST_LOG: ${RUST_LOG:-info}
     secrets:
       - rpc_password
@@ -84,6 +105,78 @@ services:
     networks:
       - core
       - edge
+      - cjdns
+
+  # Tor client: SOCKS for .onion peers (the app's TOR_PROXY, dashd's -onion). No relay, no exit.
+  tor:
+    build: ./tor
+    image: dash-nodes-tor:${APP_TAG:-local}
+    restart: unless-stopped
+    logging: *default-logging
+    volumes:
+      - tor-data:/var/lib/tor
+    networks:
+      core:
+        ipv4_address: 172.30.86.250
+
+  # i2pd: SOCKS for the app (I2P_PROXY), SAM for dashd (-i2psam). Firewalled, low bandwidth, no
+  # web console (see i2pd/i2pd.conf).
+  i2pd:
+    image: purplei2p/i2pd:${I2PD_TAG:-release-3.0.0.1}
+    restart: unless-stopped
+    logging: *default-logging
+    command: ["--conf=/etc/i2pd/i2pd.conf"]
+    volumes:
+      - i2pd-data:/home/i2pd/data
+      - ./i2pd/i2pd.conf:/etc/i2pd/i2pd.conf:ro
+    networks:
+      core:
+        ipv4_address: 172.30.86.251
+
+  # cjdns node with a TUN device (needs /dev/net/tun and NET_ADMIN). It peers outbound over UDP from
+  # its own network namespace, so nothing is exposed outside the host, and NATs fc00::/8 traffic
+  # from the `cjdns` network out of cjdns0.
+  cjdns:
+    build: ./cjdns
+    image: dash-nodes-cjdns:${APP_TAG:-local}
+    profiles: ["cjdns"]
+    restart: unless-stopped
+    logging: *default-logging
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    sysctls:
+      net.ipv6.conf.all.forwarding: "1"
+    environment:
+      CJDNS_NAT: "1"
+    volumes:
+      - cjdns-data:/etc/cjdns
+      - ./cjdns/peers.json:/etc/cjdns-peers/peers.json:ro
+    networks:
+      core: {}
+      cjdns:
+        ipv6_address: fd86:d4a5:1c3e:186::fe
+
+  # Docker can't give containers a static route, so this sets one on the host instead: fc00::/8
+  # via the cjdns container. Containers on the `cjdns` network send IPv6 to the host (their
+  # gateway), which forwards CJDNS traffic to cjdns. Re-applied every 30 s, so it survives network
+  # re-creation. Anything else IPv6 still has no route and fails at once.
+  cjdns-route:
+    image: dash-nodes-cjdns:${APP_TAG:-local}
+    profiles: ["cjdns"]
+    restart: unless-stopped
+    logging: *default-logging
+    depends_on:
+      - cjdns
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+    init: true
+    entrypoint:
+      - /bin/sh
+      - -c
+      - while :; do ip -6 route replace fc00::/8 via fd86:d4a5:1c3e:186::fe 2>/dev/null; sleep 30; done
 
   cloudflared:
     image: cloudflare/cloudflared:${CLOUDFLARED_TAG:-2026.10.3}
@@ -108,11 +201,22 @@ networks:
       config:
         - subnet: 172.30.86.0/24
   edge: {}
+  # IPv6 only (ULA), so it never becomes anyone's IPv4 default route. Its gateway is the host,
+  # which routes fc00::/8 to the cjdns container (cjdns-route).
+  cjdns:
+    enable_ipv4: false
+    enable_ipv6: true
+    ipam:
+      config:
+        - subnet: fd86:d4a5:1c3e:186::/64
 
 volumes:
   dashd-mainnet:
   dashd-testnet:
   app-data:
+  tor-data:
+  i2pd-data:
+  cjdns-data:
 
 secrets:
   rpc_password:
