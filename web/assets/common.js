@@ -205,8 +205,8 @@ function isDark() {
   return t ? t === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
 }
 
-/** Renders header and footer. `page` marks the current nav item. */
-export function chrome(page) {
+/** Renders header and footer. `page` marks the current nav item; full-screen pages skip the footer. */
+export function chrome(page, { footer = true } = {}) {
   const net = currentNet();
   document.title = `${document.title}${net === "testnet" ? " · testnet" : ""}`;
   const nav = el("nav", { class: "main" },
@@ -235,12 +235,14 @@ export function chrome(page) {
     el("div", { class: "top-inner" }, brand, nav, el("div", { class: "top-right" }, status, seg, theme)));
   document.body.prepend(header);
 
-  const footer = el("footer", { class: "bottom" }, el("div", { class: "inner" },
+  matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
+    if (!localStorage.getItem("theme")) { paintTheme(); window.dispatchEvent(new Event("themechange")); }
+  });
+  if (footer) document.body.append(el("footer", { class: "bottom" }, el("div", { class: "inner" },
     el("span", {}, "An independent Dash network monitor. Crawls the P2P network every 15 minutes from one vantage point; reachability is as seen from there."),
     el("span", {},
       el("a", { href: href("/api"), text: "API" }), " · ",
-      "IP geolocation by ", el("a", { href: "https://db-ip.com", text: "DB-IP" }), " (CC BY 4.0)")));
-  document.body.append(footer);
+      "IP geolocation by ", el("a", { href: "https://db-ip.com", text: "DB-IP" }), " (CC BY 4.0)"))));
   refreshStatus();
   setInterval(refreshStatus, 60_000);
 }

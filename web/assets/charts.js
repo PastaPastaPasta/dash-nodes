@@ -15,7 +15,7 @@ function svg(tag, attrs = {}) {
 export class Palette {
   constructor() { this.map = new Map(); }
   assign(keys) {
-    const live = new Set(keys.filter((k) => k !== "Other"));
+    const live = new Set(keys.filter((k) => k !== "Other" && k !== "Unknown"));
     for (const k of [...this.map.keys()]) if (!live.has(k)) this.map.delete(k);
     const used = new Set(this.map.values());
     for (const k of live) {
@@ -25,6 +25,7 @@ export class Palette {
   }
   color(key) {
     if (key === "Other") return "var(--other)";
+    if (key === "Unknown") return "var(--axis)";
     const s = this.map.get(key);
     return s ? `var(--s${s})` : "var(--other)";
   }

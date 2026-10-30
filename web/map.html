@@ -2,32 +2,24 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Dash Nodes: masternode map</title>
-  <meta name="description" content="Live map of every Dash masternode and evonode, from our network crawl: port check, version, country and hosting.">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Dash Nodes: network map</title>
+  <meta name="description" content="Live map of the Dash network: every masternode and reachable node by city, from a crawl every 15 minutes.">
   <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="/assets/vendor/leaflet.css">
-  <link rel="stylesheet" href="/assets/vendor/markercluster.css">
+  <link rel="stylesheet" href="/assets/vendor/maplibre-gl.css">
   <link rel="stylesheet" href="/assets/style.css">
-  <script src="/assets/vendor/leaflet.js"></script>
-  <script src="/assets/vendor/markercluster.js"></script>
   <script type="module" src="/assets/map.js"></script>
 </head>
-<body>
-<main class="wide">
-  <div class="page-head">
-    <div>
-      <h1>Masternode map</h1>
-      <p class="sub" id="lede">Every registered masternode, placed by the city its IP address geolocates to.</p>
-    </div>
-    <div class="actions">
-      <a class="btn" id="to-list" href="/masternodes">View as list</a>
-    </div>
-  </div>
-  <div class="map-layout">
-    <div id="map" class="map" role="region" aria-label="Map of masternodes"></div>
-    <aside class="map-panel" id="panel" aria-label="Map filters and summary"></aside>
-  </div>
+<body class="app">
+<main class="map-app">
+  <div id="map" class="map" role="region" aria-label="Map of the Dash network"></div>
+  <aside class="mp" id="panel" aria-label="Map controls">
+    <button class="mp-handle" type="button" id="panel-handle" aria-expanded="false" aria-controls="panel-body">
+      <span class="mp-grip" aria-hidden="true"></span><span class="sr-only">Show map controls</span>
+    </button>
+    <div class="mp-head" id="panel-head"></div>
+    <div class="mp-body" id="panel-body"></div>
+  </aside>
 </main>
 </body>
 </html>

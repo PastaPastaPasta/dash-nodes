@@ -3,34 +3,87 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Dash Nodes: network overview</title>
-  <meta name="description" content="Dash P2P network crawler: node and masternode user agents, protocol versions, countries, hosting and reachability over time.">
+  <title>Dash Nodes: the Dash network, live</title>
+  <meta name="description" content="Live census of the Dash P2P network: every reachable node and masternode, the software they run, where they're hosted and how reachable they are.">
   <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/assets/style.css">
   <script type="module" src="/assets/overview.js"></script>
 </head>
 <body>
-<main>
-  <div class="page-head">
-    <div>
-      <h1>Network overview</h1>
-      <p class="sub" id="lede">Nodes reachable on the Dash P2P network as of our latest crawl.</p>
-    </div>
+<section class="hero" id="hero" aria-labelledby="hero-title">
+  <svg class="hero-map" id="hero-map" role="img" aria-label="Where reachable Dash nodes are, by city"></svg>
+  <div class="hero-inner">
+    <h1 id="hero-title">Counting the Dash network…</h1>
+    <p class="hero-sub" id="hero-sub"></p>
+    <dl class="hero-stats" id="hero-stats"></dl>
+    <p class="hero-links">
+      <a class="btn primary" id="to-map" href="/map">Open the map</a>
+      <a class="btn" id="to-list" href="/masternodes">Browse masternodes</a>
+    </p>
   </div>
+</section>
+<main class="overview">
   <div id="banner"></div>
-  <div class="tiles" id="tiles"></div>
-  <div class="filters" id="filters"></div>
-  <div class="grid-2">
-    <section class="card">
-      <div class="card-head"><h2 id="versions-title">Versions over time</h2><span id="versions-mode"></span></div>
-      <div id="versions-chart"></div>
-    </section>
-    <section class="card">
-      <div class="card-head"><h2>Network size</h2><span class="sub">whole network, any scope</span></div>
-      <div id="size-chart"></div>
-    </section>
-  </div>
-  <div class="grid-3" id="dists"></div>
+  <nav class="scope-bar" id="scope-bar" aria-label="Which nodes the sections below describe"></nav>
+
+  <section class="ov-section" aria-labelledby="sw-title">
+    <div class="ov-head">
+      <h2 id="sw-title">What they run</h2>
+      <p class="ov-lede" id="sw-lede"></p>
+    </div>
+    <div class="ov-grid">
+      <div>
+        <div class="sharebar" id="sw-bar"></div>
+        <div class="share-legend" id="sw-legend"></div>
+        <p class="muted small" id="sw-proto"></p>
+        <details class="ov-details">
+          <summary>Every version and user agent</summary>
+          <div class="table-wrap"><table class="data" id="sw-table"></table></div>
+        </details>
+      </div>
+      <div class="ov-chart">
+        <div class="chart-head"><h3>Share over time</h3><span id="sw-range"></span></div>
+        <div id="versions-chart"></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="ov-section" aria-labelledby="where-title">
+    <div class="ov-head">
+      <h2 id="where-title">Where they run</h2>
+      <p class="ov-lede" id="where-lede"></p>
+    </div>
+    <div class="ov-grid even">
+      <div>
+        <h3>Hosting providers</h3>
+        <div class="sharebar thin" id="host-bar"></div>
+        <div id="host-list"></div>
+      </div>
+      <div>
+        <h3>Countries</h3>
+        <div class="sharebar thin" id="country-bar"></div>
+        <div id="country-list"></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="ov-section" aria-labelledby="reach-title">
+    <div class="ov-head">
+      <h2 id="reach-title">Can they be reached</h2>
+      <p class="ov-lede" id="reach-lede"></p>
+    </div>
+    <div class="ov-grid">
+      <div>
+        <div class="sharebar" id="reach-bar"></div>
+        <div class="share-legend" id="reach-legend"></div>
+        <div id="networks"></div>
+      </div>
+      <div class="ov-chart">
+        <div class="chart-head"><h3>Network size</h3><span class="muted small">whole network</span></div>
+        <div id="size-chart"></div>
+      </div>
+    </div>
+  </section>
 </main>
 </body>
 </html>

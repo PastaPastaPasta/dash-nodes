@@ -1,7 +1,13 @@
-Unmodified copies, so the site loads nothing from third-party CDNs:
+Unmodified copies, so the site loads nothing from third-party CDNs (only the `sourceMappingURL`
+comments are stripped):
 
-- `leaflet.js`, `leaflet.css`: [Leaflet](https://leafletjs.com) 1.9.4, BSD 2-Clause.
-- `markercluster.js`, `markercluster.css`: [Leaflet.markercluster](https://github.com/Leaflet/Leaflet.markercluster) 1.5.3
-  (`leaflet.markercluster.js`, `MarkerCluster.css`), MIT.
+- `maplibre-gl.mjs`, `maplibre-gl-worker.mjs`, `maplibre-gl.css`: [MapLibre GL JS](https://maplibre.org) 6.16.0
+  (`dist/` of the npm package), BSD 3-Clause.
 
-The sha384 hashes match the ones unpkg publishes for those versions.
+Other third-party assets:
+
+- `../fonts/archivo-*.woff2`: [Archivo](https://github.com/Omnibus-Type/Archivo) variable (weight and width axes,
+  latin and latin-ext subsets from Google Fonts), SIL Open Font License 1.1.
+- `../map/glyphs/`: Noto Sans map label glyphs from [protomaps/basemaps-assets](https://github.com/protomaps/basemaps-assets),
+  SIL Open Font License 1.1.
+- `../map/*.json`: built from [Natural Earth](https://www.naturalearthdata.com) (public domain) by `tools/basemap.py`.
