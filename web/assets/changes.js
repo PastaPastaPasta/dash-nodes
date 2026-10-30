@@ -19,7 +19,7 @@ function render() {
     [...tr.children].forEach((td, i) => { td.dataset.label = heads[i]; });
     return tr;
   };
-  document.getElementById("table").replaceChildren(
+  document.getElementById("changes-table").replaceChildren(
     el("thead", {}, el("tr", {}, ...heads.map((h) => el("th", { text: h })))),
     el("tbody", {}, ...(list.length ? list.map(row)
       : [el("tr", {}, el("td", { colspan: 3, class: "empty", text: changes.length ? "No changes of this kind lately." : "No changes recorded yet." }))])));

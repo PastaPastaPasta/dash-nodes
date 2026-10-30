@@ -9,6 +9,7 @@
 //!
 //! The latest result per evonode is kept in `platform_status`, and daily counts in `platform_daily`.
 
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -17,6 +18,8 @@ use futures::StreamExt;
 use rusqlite::params;
 use serde_json::{Value, json};
 use tokio::net::TcpStream;
+
+use crate::addr::PeerAddr;
 
 use crate::db;
 use crate::state::NetCtx;
@@ -168,10 +171,23 @@ fn store(c: &mut rusqlite::Connection, results: &[(String, Check)]) -> Result<()
     Ok(())
 }
 
+/// A registered Platform address we're willing to connect to: an IP literal (all of them are, since
+/// Core registers IPs) that's publicly routable, so a registration can't aim the checker at private,
+/// loopback or link-local hosts.
+fn target(addr: &str) -> Result<SocketAddr, String> {
+    let sa: SocketAddr = addr.parse().map_err(|_| "not an IP address and port".to_owned())?;
+    let peer = PeerAddr::from_socket(sa);
+    if peer.public_ip().is_none() || !peer.is_routable() {
+        return Err("not a public address".into());
+    }
+    Ok(sa)
+}
+
 async fn check(client: &reqwest::Client, p2p: Option<&str>, https: Option<&str>) -> Check {
     let mut c = Check::default();
-    match p2p {
-        Some(addr) => {
+    match p2p.map(target) {
+        Some(Err(e)) => c.p2p_error = Some(e),
+        Some(Ok(addr)) => {
             let t = Instant::now();
             match tokio::time::timeout(TIMEOUT, TcpStream::connect(addr)).await {
                 Ok(Ok(_)) => c.p2p_ms = Some(t.elapsed().as_millis() as i64),
@@ -181,8 +197,9 @@ async fn check(client: &reqwest::Client, p2p: Option<&str>, https: Option<&str>)
         }
         None => c.p2p_error = Some("no Platform P2P address registered".into()),
     }
-    match https {
-        Some(addr) => {
+    match https.map(target) {
+        Some(Err(e)) => c.https_error = Some(e),
+        Some(Ok(addr)) => {
             let t = Instant::now();
             match get_status(client, addr).await {
                 Ok((status, cert)) => {
@@ -201,7 +218,7 @@ async fn check(client: &reqwest::Client, p2p: Option<&str>, https: Option<&str>)
 }
 
 /// `getStatus` over gRPC-web. Returns the decoded status and the server's leaf certificate (DER).
-async fn get_status(client: &reqwest::Client, addr: &str) -> Result<(Status, Option<Vec<u8>>)> {
+async fn get_status(client: &reqwest::Client, addr: SocketAddr) -> Result<(Status, Option<Vec<u8>>)> {
     // GetStatusRequest { v0: {} }, in one gRPC-web data frame.
     let body: &[u8] = &[0, 0, 0, 0, 2, 0x0a, 0x00];
     let mut resp = client
@@ -443,6 +460,23 @@ mod tests {
         // Only trailers (an error answer): no data frame.
         assert!(first_data_frame(&[0x80, 0, 0, 0, 2, b'a', b'b']).is_none());
         assert!(parse_status(&[0x0a]).is_err());
+    }
+
+    #[test]
+    fn only_public_ip_targets() {
+        assert!(target("37.27.83.17:443").is_ok());
+        assert!(target("[2a01:4f8::1]:443").is_ok());
+        for bad in [
+            "127.0.0.1:9998",
+            "10.0.0.5:443",
+            "192.168.1.1:443",
+            "169.254.169.254:80",
+            "[::1]:443",
+            "example.com:443",
+            "1.2.3.4",
+        ] {
+            assert!(target(bad).is_err(), "{bad}");
+        }
     }
 
     #[test]

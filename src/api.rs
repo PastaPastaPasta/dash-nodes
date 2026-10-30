@@ -556,7 +556,7 @@ async fn masternode(State(nets): State<Nets>, UrlPath((net, protx)): UrlPath<(St
             });
             mn["payments"] = json!(recent_payments(c, &protx, None, 25)?);
             let evo = mn["type"].as_str() == Some("Evo");
-            mn["returns"] = mn_returns(c, &protx, evo)?;
+            mn["returns"] = mn_returns(c, &protx, evo, mn["removed"].as_i64().is_some())?;
             if evo {
                 let latest = c
                     .query_row("SELECT * FROM platform_status WHERE protx = ?1", [&protx], crate::platform::status_json)
@@ -628,7 +628,7 @@ fn paid_since(c: &Connection, protx: &str, from: Option<i64>) -> Result<i64> {
 /// Paid in the last 30, 90 and 365 days (as far as the payments index goes back), and the annualized
 /// yield over the last 90 days, or since registration or the start of the index if later (none under
 /// two weeks: too few payments to say).
-fn mn_returns(c: &Connection, protx: &str, evo: bool) -> Result<Value> {
+fn mn_returns(c: &Connection, protx: &str, evo: bool, removed: bool) -> Result<Value> {
     let now = db::now();
     let paid = |days: i64| -> Result<i64> { paid_since(c, protx, height_at(c, now - days * DAY)?) };
     let registered: Option<i64> = c
@@ -642,7 +642,8 @@ fn mn_returns(c: &Connection, protx: &str, evo: bool) -> Result<Value> {
     let from = [Some(now - RETURN_WINDOW * DAY), registered, indexed_since].into_iter().flatten().max().unwrap_or(now);
     // Whole days, and payments summed over exactly those days.
     let window = (now - from) / DAY;
-    let annual_yield = (window >= 14)
+    // A masternode that left the list stopped being paid then: a yield up to now would mean nothing.
+    let annual_yield = (window >= 14 && !removed)
         .then(|| -> Result<i64> { paid_since(c, protx, height_at(c, now - window * DAY)?) })
         .transpose()?
         .map(|p| round4(annualized(p, window, evo)));

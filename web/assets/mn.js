@@ -176,7 +176,8 @@ function earnedTile(m) {
   // While the payments index covers less than a year, say how far it goes back.
   const partial = r.indexed_since && Date.now() / 1000 - r.indexed_since < 365 * 86400;
   const label = partial ? `Earned since ${new Date(r.indexed_since * 1000).toLocaleDateString("en-GB", { dateStyle: "medium", timeZone: "UTC" })}` : "Earned, last 365 days";
-  const y = r.annual_yield != null ? `≈ ${pct(r.annual_yield)} a year on its ${m.type === "Evo" ? "4,000" : "1,000"} DASH (last ${r.window_days} days)` : "too new to tell its yield";
+  const y = r.annual_yield != null ? `≈ ${pct(r.annual_yield)} a year on its ${m.type === "Evo" ? "4,000" : "1,000"} DASH (last ${r.window_days} days)`
+    : m.removed ? "no longer in the list" : "too new to tell its yield";
   return tile(label, dash(r.paid_365d), y);
 }
 
