@@ -331,6 +331,10 @@ async function renderSpeed() {
   }));
 }
 
+/** A stat tile without a link: label, value, an optional note and an optional tone (stat-good, stat-warning). */
+const plainStat = (label, value, note, tone) =>
+  el("div", { class: tone ? `stat-${tone}` : null }, el("dt", { text: label }), el("dd", { class: "num" }, value, note ? el("small", { text: note }) : null));
+
 /** Realized returns (summary.returns): the median yield over the last 90 days, by type. */
 function renderEarn() {
   const r = summary.returns;
@@ -339,10 +343,9 @@ function renderEarn() {
   if ($("earn-section").hidden) return;
   $("earn-lede").textContent = `What masternodes were actually paid over the last ${r.window_days} days, against their collateral, ` +
     "counting every enabled masternode registered for at least that long. Each masternode's page shows its own.";
-  const stat = (label, value, note) => el("div", {}, el("dt", { text: label }), el("dd", { class: "num" }, value, note ? el("small", { text: note }) : null));
   $("earn-stats").replaceChildren(
-    stat("Regular masternodes", reg != null ? `${pct(reg)} a year` : "–", `median of ${fmt(r.regular.masternodes)}, on 1,000 DASH`),
-    stat("Evonodes", evo != null ? `${pct(evo)} a year` : "–", `median of ${fmt(r.evo.masternodes)}, on 4,000 DASH; core-chain payments only, Platform rewards aren't counted`));
+    plainStat("Regular masternodes", reg != null ? `${pct(reg)} a year` : "–", `median of ${fmt(r.regular.masternodes)}, on 1,000 DASH`),
+    plainStat("Evonodes", evo != null ? `${pct(evo)} a year` : "–", `median of ${fmt(r.evo.masternodes)}, on 4,000 DASH; core-chain payments only, Platform rewards aren't counted`));
 }
 
 /** Evonode Platform health (summary.platform): the latest check of every evonode's Platform endpoints. */
@@ -352,16 +355,17 @@ function renderPlatform() {
   if (!p?.checked) return;
   $("platform-lede").textContent = `${pct(p.healthy / p.checked)} of ${fmt(p.checked)} enabled evonodes passed our latest Platform check: ` +
     `their Tenderdash P2P port was open and their DAPI answered over valid TLS, as themselves. Checked every 15 minutes, last ${ago(p.updated)}.`;
-  const stat = (label, value, note, tone) => el("div", { class: tone ? `stat-${tone}` : null }, el("dt", { text: label }), el("dd", { class: "num" }, value, note ? el("small", { text: note }) : null));
   $("platform-stats").replaceChildren(
-    stat("Healthy", `${fmt(p.healthy)} of ${fmt(p.checked)}`, null, p.healthy / p.checked >= 0.95 ? "good" : "warning"),
-    stat("DAPI answered", fmt(p.https_ok)),
-    stat("Tenderdash P2P open", fmt(p.p2p_ok)),
-    stat("Certificates expiring", fmt(p.cert_expiring_3d), "within 3 days", p.cert_expiring_3d ? "warning" : null),
-    stat("Platform height", p.max_height != null ? fmt(p.max_height) : "–", "highest seen"));
-  const palette = (rows) => { const pal = new Palette(); pal.assign(rows.map(([k]) => k)); return (k) => (k === "Unknown" ? "var(--axis)" : pal.color(k)); };
-  shareBar($("drive-bar"), $("drive-legend"), p.drive, { color: palette(p.drive), label: (k) => (k === "Unknown" ? "No answer" : k) });
-  shareBar($("td-bar"), $("td-legend"), p.tenderdash, { color: palette(p.tenderdash), label: (k) => (k === "Unknown" ? "No answer" : k) });
+    plainStat("Healthy", `${fmt(p.healthy)} of ${fmt(p.checked)}`, null, p.healthy / p.checked >= 0.95 ? "good" : "warning"),
+    plainStat("DAPI answered", fmt(p.https_ok)),
+    plainStat("Tenderdash P2P open", fmt(p.p2p_ok)),
+    plainStat("Certificates expiring", fmt(p.cert_expiring_3d), "within 3 days", p.cert_expiring_3d ? "warning" : null),
+    plainStat("Platform height", p.max_height != null ? fmt(p.max_height) : "–", "highest seen"));
+  for (const [bar, legend, rows] of [["drive-bar", "drive-legend", p.drive], ["td-bar", "td-legend", p.tenderdash]]) {
+    const palette = new Palette();
+    palette.assign(rows.map(([k]) => k));
+    shareBar($(bar), $(legend), rows, { color: (k) => (k === "Unknown" ? "var(--axis)" : palette.color(k)), label: (k) => (k === "Unknown" ? "No answer" : k) });
+  }
 }
 
 function renderSections() {

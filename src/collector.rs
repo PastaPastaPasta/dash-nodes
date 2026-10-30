@@ -203,7 +203,7 @@ fn tracked(r: &MnRow) -> [Option<String>; 11] {
         r.owner_address.clone(),
         r.voting_address.clone(),
         r.pubkey_operator.clone(),
-        r.operator_reward.map(|x| format!("{x}")),
+        r.operator_reward.map(|x| x.to_string()),
         Some(pose),
     ]
 }

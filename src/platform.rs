@@ -204,7 +204,7 @@ async fn check(client: &reqwest::Client, p2p: Option<&str>, https: Option<&str>)
 async fn get_status(client: &reqwest::Client, addr: &str) -> Result<(Status, Option<Vec<u8>>)> {
     // GetStatusRequest { v0: {} }, in one gRPC-web data frame.
     let body: &[u8] = &[0, 0, 0, 0, 2, 0x0a, 0x00];
-    let resp = client
+    let mut resp = client
         .post(format!("https://{addr}/org.dash.platform.dapi.v0.Platform/getStatus"))
         .header("content-type", "application/grpc-web+proto")
         .header("x-grpc-web", "1")
@@ -220,7 +220,6 @@ async fn get_status(client: &reqwest::Client, addr: &str) -> Result<(Status, Opt
     if resp.content_length().is_some_and(|n| n > MAX_ANSWER as u64) {
         bail!("answer too large");
     }
-    let mut resp = resp;
     let mut bytes = Vec::new();
     while let Some(chunk) = resp.chunk().await.map_err(|e| anyhow!(describe(&e)))? {
         if bytes.len() + chunk.len() > MAX_ANSWER {
@@ -235,23 +234,23 @@ async fn get_status(client: &reqwest::Client, addr: &str) -> Result<(Status, Opt
 
 /// A reqwest error as one line, with the TLS or connection reason it wraps.
 fn describe(e: &reqwest::Error) -> String {
-    let mut s = if e.is_timeout() {
-        "timed out".to_owned()
+    let kind = if e.is_timeout() {
+        "timed out"
     } else if e.is_connect() {
-        "connect".to_owned()
+        "connect"
     } else {
-        "request".to_owned()
+        "request"
     };
+    let mut reason = None;
     let mut src = std::error::Error::source(e);
-    let mut last = None;
     while let Some(inner) = src {
-        last = Some(inner.to_string());
+        reason = Some(inner.to_string());
         src = inner.source();
     }
-    if let Some(l) = last {
-        s = format!("{s}: {l}");
+    match reason {
+        Some(r) => format!("{kind}: {r}"),
+        None => kind.to_owned(),
     }
-    s
 }
 
 /// The payload of the first gRPC-web data frame (flag 0x00): frames are a flag byte, a big-endian
@@ -290,21 +289,22 @@ fn varint(buf: &mut &[u8]) -> Option<u64> {
 
 /// The fields of a protobuf message, in order (fixed-width fields are skipped).
 fn fields(mut buf: &[u8]) -> Result<Vec<(u64, Field<'_>)>> {
+    let bad = || anyhow!("bad protobuf");
     let mut out = Vec::new();
     while !buf.is_empty() {
-        let key = varint(&mut buf).ok_or_else(|| anyhow!("bad protobuf"))?;
+        let key = varint(&mut buf).ok_or_else(bad)?;
         let (num, wire) = (key >> 3, key & 7);
         match wire {
-            0 => out.push((num, Field::Varint(varint(&mut buf).ok_or_else(|| anyhow!("bad protobuf"))?))),
+            0 => out.push((num, Field::Varint(varint(&mut buf).ok_or_else(bad)?))),
             2 => {
-                let len = varint(&mut buf).ok_or_else(|| anyhow!("bad protobuf"))? as usize;
-                let b = buf.get(..len).ok_or_else(|| anyhow!("bad protobuf"))?;
+                let len = varint(&mut buf).ok_or_else(bad)? as usize;
+                let b = buf.get(..len).ok_or_else(bad)?;
                 out.push((num, Field::Bytes(b)));
                 buf = &buf[len..];
             }
-            1 => buf = buf.get(8..).ok_or_else(|| anyhow!("bad protobuf"))?,
-            5 => buf = buf.get(4..).ok_or_else(|| anyhow!("bad protobuf"))?,
-            _ => bail!("bad protobuf"),
+            1 => buf = buf.get(8..).ok_or_else(bad)?,
+            5 => buf = buf.get(4..).ok_or_else(bad)?,
+            _ => return Err(bad()),
         }
     }
     Ok(out)

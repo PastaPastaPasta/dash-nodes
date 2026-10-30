@@ -555,8 +555,9 @@ async fn masternode(State(nets): State<Nets>, UrlPath((net, protx)): UrlPath<(St
                 "indexed": indexed_json(range),
             });
             mn["payments"] = json!(recent_payments(c, &protx, None, 25)?);
-            mn["returns"] = mn_returns(c, &protx, mn["type"].as_str() == Some("Evo"))?;
-            if mn["type"].as_str() == Some("Evo") {
+            let evo = mn["type"].as_str() == Some("Evo");
+            mn["returns"] = mn_returns(c, &protx, evo)?;
+            if evo {
                 let latest = c
                     .query_row("SELECT * FROM platform_status WHERE protx = ?1", [&protx], crate::platform::status_json)
                     .optional()?;
@@ -597,6 +598,11 @@ fn collateral_duffs(evo: bool) -> f64 {
     if evo { 4_000.0 * COIN } else { 1_000.0 * COIN }
 }
 
+/// `paid` duffs over `days` days, as a yearly share of the collateral.
+fn annualized(paid: i64, days: i64, evo: bool) -> f64 {
+    paid as f64 / days as f64 * 365.0 / collateral_duffs(evo)
+}
+
 /// The first indexed block at or after `ts` (None: nothing indexed that late).
 fn height_at(c: &Connection, ts: i64) -> Result<Option<i64>> {
     Ok(c.query_row("SELECT min(height) FROM blocks WHERE time >= ?1", [ts], |r| r.get(0))?)
@@ -630,16 +636,16 @@ fn mn_returns(c: &Connection, protx: &str, evo: bool) -> Result<Value> {
             |r| r.get(0),
         )
         .optional()?;
-    let from =
-        [Some(now - RETURN_WINDOW * DAY), registered, index_start(c)?].into_iter().flatten().max().unwrap_or(now);
+    let indexed_since = index_start(c)?;
+    let from = [Some(now - RETURN_WINDOW * DAY), registered, indexed_since].into_iter().flatten().max().unwrap_or(now);
     let window = (now - from) / DAY;
     let annual_yield = (window >= 14)
-        .then(|| paid_since(c, protx, height_at(c, from).ok().flatten()))
+        .then(|| -> Result<i64> { paid_since(c, protx, height_at(c, from)?) })
         .transpose()?
-        .map(|p| round4(p as f64 / window as f64 * 365.0 / collateral_duffs(evo)));
+        .map(|p| round4(annualized(p, window, evo)));
     Ok(json!({
         "paid_30d": paid(30)?, "paid_90d": paid(RETURN_WINDOW)?, "paid_365d": paid(365)?,
-        "window_days": window, "annual_yield": annual_yield, "indexed_since": index_start(c)?,
+        "window_days": window, "annual_yield": annual_yield, "indexed_since": indexed_since,
     }))
 }
 
@@ -670,7 +676,7 @@ fn network_returns(c: &Connection) -> Result<Value> {
         let mut ys: Vec<f64> = rows
             .iter()
             .filter(|(t, _)| (t == "Evo") == evo)
-            .map(|(_, paid)| *paid as f64 / RETURN_WINDOW as f64 * 365.0 / collateral_duffs(evo))
+            .map(|(_, paid)| annualized(*paid, RETURN_WINDOW, evo))
             .collect();
         ys.sort_by(f64::total_cmp);
         let n = ys.len();
@@ -690,22 +696,12 @@ fn platform_summary(c: &Connection) -> Result<Value> {
     let (checked, p2p_ok, https_ok, healthy, expiring, height, ts): (i64, i64, i64, i64, i64, Option<i64>, Option<i64>) =
         c.query_row(
             &format!(
-                "SELECT count(*), sum(s.p2p_error IS NULL), sum(s.https_error IS NULL),
-                    sum(s.p2p_error IS NULL AND s.https_error IS NULL AND (s.node_protx IS NULL OR s.node_protx = s.protx)),
-                    sum(s.cert_expires IS NOT NULL AND s.cert_expires < ?2), max(s.height), max(s.ts) {LIVE}"
+                "SELECT count(*), coalesce(sum(s.p2p_error IS NULL), 0), coalesce(sum(s.https_error IS NULL), 0),
+                    coalesce(sum(s.p2p_error IS NULL AND s.https_error IS NULL AND (s.node_protx IS NULL OR s.node_protx = s.protx)), 0),
+                    coalesce(sum(s.cert_expires IS NOT NULL AND s.cert_expires < ?2), 0), max(s.height), max(s.ts) {LIVE}"
             ),
             params![since, db::now() + 3 * 86_400],
-            |r| {
-                Ok((
-                    r.get(0)?,
-                    r.get::<_, Option<i64>>(1)?.unwrap_or(0),
-                    r.get::<_, Option<i64>>(2)?.unwrap_or(0),
-                    r.get::<_, Option<i64>>(3)?.unwrap_or(0),
-                    r.get::<_, Option<i64>>(4)?.unwrap_or(0),
-                    r.get(5)?,
-                    r.get(6)?,
-                ))
-            },
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?)),
         )?;
     let dist = |col: &str| -> Result<Value> {
         let rows: Vec<(String, i64)> = query_all(

@@ -354,7 +354,7 @@ export function segmented(options, value, onChange, label) {
 
 // ---- registration changes (collector.rs records them; the masternode page and /changes show them) ----
 
-export const CHANGE_LABELS = {
+const CHANGE_LABELS = {
   registered: "Registered", removed: "Left the list", service: "Core P2P address", platform_p2p: "Platform P2P address",
   platform_https: "Platform HTTPS address", platform_node_id: "Platform node ID", payout_address: "Payout address",
   operator_payout_address: "Operator payout address", owner_address: "Owner address", voting_address: "Voting address",
@@ -370,7 +370,7 @@ export const CHANGE_KINDS = [
 ];
 
 /** A stored value as people read it. */
-export function changeValue(field, v) {
+function changeValue(field, v) {
   if (v == null || v === "") return "–";
   if (field === "pose") return v === "enabled" ? "Enabled" : v.replace(/^banned at (\d+)$/, (_, h) => `Banned at block ${fmt(Number(h))}`);
   if (field === "operator_reward") return `${v}%`;

@@ -180,7 +180,7 @@ function earnedTile(m) {
 /** Registration changes we've recorded, newest first. */
 function changesSection(m) {
   const rows = (m.changes || []).map((c) => labelled(["When", "Block", "Change"], el("tr", {},
-    el("td", { title: dateTime(c.ts), text: dateTime(c.ts) }),
+    el("td", { text: dateTime(c.ts) }),
     el("td", { class: "r", text: c.height != null ? fmt(c.height) : "–" }),
     el("td", {}, badge(changeKind(c), changeText(c))))));
   return el("section", { class: "section card" },
