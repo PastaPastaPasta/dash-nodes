@@ -74,3 +74,16 @@ test("bench combines vantages and ranks within each", async () => {
   assert.ok(KEY.test("v1/mainnet/bench/home/3f.json") && KEY.test("v1/testnet/bench/sgp-1/summary.json") && KEY.test("v1/mainnet/reference.json"));
   assert.ok(!KEY.test("v1/mainnet/bench/HOME/3f.json") && !KEY.test("v1/mainnet/bench/home/x.json"));
 });
+
+test("health fails when a network's crawl or chain data is stale, or dashd errs", async () => {
+  const now = 1_000_000;
+  const net = (crawl, chain, error = null) => ({ crawl: { last_finished: now - crawl }, chain: { updated: now - chain, error } });
+  const at = (networks) => async (k) => (k === "v1/status.json" ? { networks } : null);
+  const ok = await route(["health"], new URLSearchParams(), at({ mainnet: net(600, 60), testnet: net(900, 60) }), [], now);
+  assert.equal(ok.ok, true);
+  for (const networks of [{ mainnet: net(3 * 3600, 60), testnet: net(60, 60) }, { mainnet: net(60, 3 * 3600), testnet: net(60, 60) },
+    { mainnet: net(60, 60, "Loading block index"), testnet: net(60, 60) }, { mainnet: net(60, 60) }]) {
+    await assert.rejects(route(["health"], new URLSearchParams(), at(networks), [], now), (e) => e.status === 503);
+  }
+  await assert.rejects(route(["health"], new URLSearchParams(), async () => null, [], now), (e) => e.status === 503);
+});

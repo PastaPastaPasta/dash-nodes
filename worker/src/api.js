@@ -18,6 +18,9 @@ export const PAYMENT_BUCKET = 100_000;
 /** Query parameters each endpoint reads; the Worker caches on these alone. */
 export const PARAMS = { history: ["scope", "dim", "days", "top"], payments: ["before", "limit"] };
 
+/** Data older than this (three missed crawls, as the site's stale bar) makes /health fail. */
+export const STALE_AFTER = 45 * 60;
+
 export class ApiError extends Error {
   constructor(status, message) {
     super(message);
@@ -141,9 +144,30 @@ async function benchSummary(get, net, vantages) {
   return { vantages: docs.filter(Boolean) };
 }
 
+/**
+ * Whether the site is being fed: each network's last finished crawl and last chain reading are
+ * recent, and dashd answered. A 503 lists what's wrong, for uptime checks to alert on.
+ */
+async function health(get, now) {
+  const status = await required(get, "v1/status.json", "Status");
+  const problems = [];
+  const ages = {};
+  for (const net of NETWORKS) {
+    const s = status.networks?.[net];
+    const crawl = Math.round(now - (s?.crawl?.last_finished || 0)), chain = Math.round(now - (s?.chain?.updated || 0));
+    ages[net] = { crawl, chain };
+    if (crawl > STALE_AFTER) problems.push(`${net}: last crawl ${Math.round(crawl / 60)} min ago`);
+    if (chain > STALE_AFTER) problems.push(`${net}: chain data ${Math.round(chain / 60)} min old`);
+    else if (s?.chain?.error) problems.push(`${net}: dashd: ${s.chain.error}`);
+  }
+  if (problems.length) throw new ApiError(503, problems.join("; "));
+  return { ok: true, age_secs: ages };
+}
+
 /** Routes /api/v1/... (the path after it, split) to a JSON value. `vantages`: speed-test vantage ids. */
-export async function route(parts, query, get, vantages = []) {
+export async function route(parts, query, get, vantages = [], now = Date.now() / 1000) {
   if (parts.length === 1 && parts[0] === "status") return required(get, "v1/status.json", "Status");
+  if (parts.length === 1 && parts[0] === "health") return health(get, now);
   const [net, what, protx, sub] = parts;
   if (!NETWORKS.includes(net)) throw new ApiError(404, `unknown network ${net}`);
   if (parts.length === 2 && DOCS.includes(what)) return required(get, `v1/${net}/${what}.json`, `The ${what} document`);

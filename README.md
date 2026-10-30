@@ -62,6 +62,10 @@ npm run deploy                                      # copies ../web into public/
 `npm run dev` runs it locally (with a local R2); `SOURCE=http://127.0.0.1:8080 TARGET=http://127.0.0.1:8787
 INGEST_TOKEN=… node scripts/publish.mjs --once` fills it from a running app.
 
+
+`/api/v1/health` answers 200 while every network's last crawl and chain reading are under 45
+minutes old and dashd answers, and 503 with what's wrong otherwise. Point an uptime check at it:
+it catches a stopped crawler, a stuck publisher and a dashd that won't start alike.
 ## Running it
 
 ```sh
