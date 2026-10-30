@@ -78,6 +78,12 @@ export function timeChart(container, data, opts) {
   host.append(tip);
   let state = { data, opts };
   let width = container.clientWidth || 600;
+  // Touch: a tooltip stays up until the next tap somewhere else.
+  document.addEventListener("pointerdown", (ev) => {
+    if (ev.pointerType !== "touch" || container.contains(ev.target)) return;
+    tip.hidden = true;
+    host.querySelector(".xhair")?.setAttribute("visibility", "hidden");
+  });
 
   function draw() {
     const { data, opts } = state;
@@ -178,13 +184,21 @@ export function timeChart(container, data, opts) {
       return best;
     };
     let focusIdx = t.length - 1;
-    hit.addEventListener("pointermove", (ev) => {
+    const at = (ev) => {
       const r = root.getBoundingClientRect();
       focusIdx = nearest(((ev.clientX - r.left) / r.width) * W);
       show(focusIdx);
-    });
+    };
+    // A tap shows the point under the finger and a drag scrubs; on touch the tooltip stays until
+    // the next tap elsewhere (a finger lifting counts as leaving).
+    hit.addEventListener("pointerdown", at);
+    hit.addEventListener("pointermove", at);
+    // Some WebKit builds deliver touches without pointer events.
+    hit.addEventListener("touchstart", (ev) => at(ev.touches[0]), { passive: true });
+    hit.addEventListener("touchmove", (ev) => at(ev.touches[0]), { passive: true });
     const hide = () => { tip.hidden = true; xhair.setAttribute("visibility", "hidden"); };
-    hit.addEventListener("pointerleave", hide);
+    hit.addEventListener("pointerleave", (ev) => { if (ev.pointerType !== "touch") hide(); });
+
     hit.addEventListener("blur", hide);
     hit.addEventListener("focus", () => show(focusIdx));
     hit.addEventListener("keydown", (ev) => {

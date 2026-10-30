@@ -130,10 +130,10 @@ async function main() {
 
   root.append(el("div", { class: "cols-2 section" },
     el("section", {}, el("h2", { text: "Version history", style: { marginBottom: "10px" } }),
-      el("div", { class: "table-wrap" }, el("table", { class: "data" },
+      el("div", { class: "table-wrap" }, el("table", { class: "data stack" },
         el("thead", {}, el("tr", {}, el("th", { text: "First seen" }), el("th", { text: "User agent" }), el("th", { class: "r", text: "Protocol" }))),
-        el("tbody", {}, ...(m.versions.length ? m.versions.map((v) => el("tr", {},
-          el("td", { text: dateTime(v.ts) }), el("td", {}, el("code", { text: v.user_agent })), el("td", { class: "r", text: v.protocol })))
+        el("tbody", {}, ...(m.versions.length ? m.versions.map((v) => labelled(["First seen", "User agent", "Protocol"], el("tr", {},
+          el("td", { text: dateTime(v.ts) }), el("td", {}, el("code", { text: v.user_agent })), el("td", { class: "r", text: v.protocol }))))
           : [el("tr", {}, el("td", { colspan: 3, class: "empty", text: "No handshake recorded yet." }))]))))),
     paymentsSection(m)));
 }

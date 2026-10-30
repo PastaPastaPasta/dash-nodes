@@ -154,6 +154,7 @@ main { max-width: 1280px; width: 100%; margin: 0 auto; padding: 22px 20px 48px; 
 /* ---- charts ---- */
 .chart { position: relative; }
 .chart svg { display: block; width: 100%; overflow: visible; }
+.chart svg rect[tabindex] { touch-action: pan-y; } /* sideways drags scrub the chart, vertical ones scroll */
 .chart .gridline { stroke: var(--grid); stroke-width: 1; shape-rendering: crispEdges; }
 .chart .baseline { stroke: var(--axis); stroke-width: 1; shape-rendering: crispEdges; }
 .chart .tick { fill: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
@@ -236,6 +237,34 @@ pre.code { background: var(--surface-2); padding: 10px 12px; border-radius: 8px;
 .api-ep { margin-bottom: 18px; }
 .api-ep h3 { color: var(--ink); font-family: var(--mono); font-size: 13px; font-weight: 600; }
 
+/* ---- touch: comfortable targets and readable small text ---- */
+@media (pointer: coarse), (max-width: 900px) {
+  .seg button { min-height: 40px; padding: 6px 12px; }
+  .btn { min-height: 42px; }
+  .chip { min-height: 40px; }
+  nav.main a { display: inline-flex; align-items: center; min-height: 40px; }
+  .more-toggle { width: 42px; height: 42px; display: grid; place-items: center; }
+  .theme-toggle { width: 40px; height: 40px; justify-content: center; align-items: center; }
+  .brand { min-height: 40px; }
+  .pager .btn { min-width: 88px; }
+  .maplibregl-ctrl-group button { width: 40px !important; height: 40px !important; }
+  table.kv a, .mn-list a, footer.bottom a, .ov-lede a, .mp-foot a { display: inline-block; padding: 8px 0; margin: -8px 0; }
+  body button.link, .ov-details summary { padding: 10px 0; margin: -10px 0; }
+  .ov-details summary { display: block; margin: 0; }
+  table.data td a { display: inline-block; padding: 8px 0; margin: -8px 0; }
+  .mp-handle { height: 32px; }
+  .brand { min-width: 40px; justify-content: center; }
+  table.data { font-size: 14px; }
+  code, .mono { font-size: 13px; }
+}
+/* Overview scope tabs: all four visible on phones, two by two. */
+@media (max-width: 560px) {
+  .scope-bar { flex-direction: column; align-items: stretch; gap: 6px; }
+  .scope-bar .seg { display: grid; grid-template-columns: 1fr 1fr; overflow: visible; }
+  .scope-bar .seg button { white-space: normal; }
+  .chart-head { flex-wrap: wrap; gap: 8px; }
+}
+
 /* ---- masternode list on phones: cards instead of the table ---- */
 .filters-toggle, .mn-cards, .filters .sort-select { display: none; }
 @media (max-width: 760px) {
@@ -259,7 +288,8 @@ pre.code { background: var(--surface-2); padding: 10px 12px; border-radius: 8px;
 }
 
 /* ---- masternode page on phones ---- */
-#lede, .kv td { overflow-wrap: anywhere; }
+#lede, .kv .mono, .kv code { overflow-wrap: anywhere; }
+.kv td { overflow-wrap: break-word; }
 @media (max-width: 760px) {
   main { padding: 16px 14px 40px; }
   h1 { font-size: 26px; }
@@ -269,7 +299,8 @@ pre.code { background: var(--surface-2); padding: 10px 12px; border-radius: 8px;
   .tile .foot { font-size: 12px; }
   .card { padding: 14px; }
   .card-head { flex-wrap: wrap; row-gap: 2px; }
-  .cols-2 { grid-template-columns: 1fr; }
+  .cols-2 { grid-template-columns: minmax(0, 1fr); }
+  .cols-2 > * { min-width: 0; }
   table.kv, table.kv tbody, table.kv tr, table.kv td { display: block; }
   table.kv tr { padding: 8px 0; border-bottom: 1px solid var(--grid); }
   table.kv tr:last-child { border-bottom: 0; }
@@ -472,7 +503,7 @@ button.link { font: inherit; font-size: 13px; background: none; border: 0; paddi
   }
   .mp[data-mode="detail"] { max-height: 62%; }
   /* A tall touch target: the whole top strip grabs the sheet. */
-  .mp-handle { display: grid; place-items: center; height: 26px; border: 0; background: none; cursor: grab; padding: 0; touch-action: none; }
+  .mp-handle { display: grid; place-items: center; height: 32px; border: 0; background: none; cursor: grab; padding: 0; touch-action: none; }
   .mp-grip { width: 44px; height: 5px; border-radius: 3px; background: var(--axis); }
   .mp-head { padding: 0 14px 10px; }
   .mp-search-row { display: flex; gap: 8px; }
