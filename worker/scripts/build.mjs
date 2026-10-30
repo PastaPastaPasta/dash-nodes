@@ -5,7 +5,9 @@ import { cpSync, rmSync, writeFileSync } from "node:fs";
 const out = new URL("../public/", import.meta.url);
 rmSync(out, { recursive: true, force: true });
 cpSync(new URL("../../web/", import.meta.url), out, { recursive: true });
-const csp = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; " +
+// Cloudflare Web Analytics, if the zone has it on, injects its beacon; that is the only outside source.
+const csp = "default-src 'self'; script-src 'self' https://static.cloudflareinsights.com; style-src 'self'; img-src 'self' data:; " +
+  "connect-src 'self' https://cloudflareinsights.com; " +
   "worker-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
 // Assets aren't content-hashed, so lifetimes stay short enough that a deploy shows up within a day;
 // each specific block detaches the default Cache-Control rather than adding a second one.
