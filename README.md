@@ -32,7 +32,7 @@ site (`web/`, plain HTML and JS with no build step). It keeps one SQLite file pe
 The public site doesn't talk to the crawler host:
 
 ```
-the host (no inbound)                                Cloudflare
+crawler host (no inbound)                          Cloudflare
 dashd ×2 ─ app (crawler, SQLite, API :8080) ─ publisher ──PUT /_ingest──▶ Worker ─▶ R2 (dash-nodes-data)
                                                                           │
                                          nodes.dashhq.org ◀── static assets + /api/v1/* from R2
@@ -128,28 +128,28 @@ reach dashd's RPC on `core`.
 Both dashds use Tor (`-onion`, `-listenonion=0`) and i2pd (`-i2psam`, `-i2pacceptincoming=0`), so
 their address managers, which the crawler reads, keep onion and I2P peers. With `CJDNS=true` they
 also get `-cjdnsreachable=1`. dashd, the app and cjdns share the IPv6-only `cjdns` network (ULA,
-no IPv4), whose gateway is the host. On a host without IPv6 (the host), internet IPv6 from there
+no IPv4), whose gateway is the host. On a host without IPv6, internet IPv6 from there
 fails within about a second; on a host with IPv6, Docker's NAT66 makes it work.
 
 ## Deploy notes
 
-Production runs in container the host (`dash-nodes`, 192.0.2.10, 8 cores / 12 GB / 150 GB on
-`local storage`) on the host. The source is unpacked at `/opt/dash-nodes` (the deployed commit is in
-`DEPLOYED_COMMIT`) and the stack runs from `/opt/dash-nodes/deploy`.
+The stack runs on any Docker host (Docker Engine 28+, Compose 2.33+); 8 cores, 12 GB RAM and about
+150 GB of disk are comfortable for both networks with `txindex`. Unpack the source somewhere such as
+`/opt/dash-nodes` (keeping the deployed commit in a `DEPLOYED_COMMIT` file helps) and run the stack
+from its `deploy/` directory.
 
 - **Redeploy:** `git archive` or tar the tree (without `target/`, `deploy/secrets`, `deploy/.env`),
-  unpack it over `/opt/dash-nodes`, then `docker compose build app && docker compose up -d app`.
+  unpack it over the old one, then `docker compose build app && docker compose up -d app`.
   Restarting the app abandons a crawl in progress; the next one starts right away.
-- **Seeding dashd:** the datadirs were seeded on 2026-10-29 from a ZFS snapshot of another node's
-  (the host) v24.0.0-rc.4, txindex=1 datadirs (`blocks chainstate indexes evodb llmq`, rsynced on the
-  host host into `dash-nodes_dashd-{mainnet,testnet}` volumes, owner the mapped uid). Keep `DASHD_TAG` at or
-  above the version that wrote them.
-- **Public access:** the `dash-nodes` Worker serves `nodes.dashhq.org` (custom domain) from R2; the
-  CT only connects out to it (see How it's served). The app's port 8080 is LAN-only, for debugging.
-- **Tor, I2P, CJDNS (2026-10-30):** `tor`, `i2pd`, `cjdns` and `cjdns-route` run on the host with
-  `COMPOSE_PROFILES=cjdns` and `CJDNS=true` in `.env`. cjdns needs `/dev/net/tun`, which the
-  unprivileged CT gets from two lines in `the container's config file` on the host (backup of the old
-  file: `a backup copy`):
+- **Seeding dashd:** a cold sync takes many hours. Copying `blocks chainstate indexes evodb llmq`
+  from another synced node with the same dashd version and `txindex=1` into the
+  `dash-nodes_dashd-{mainnet,testnet}` volumes (owned by the container's uid 1000, as mapped on
+  your host) is much faster. Keep `DASHD_TAG` at or above the version that wrote them.
+- **Public access:** the `dash-nodes` Worker serves the site from R2; the host only connects out to
+  it (see How it's served). The app's port 8080 is for the local network, for debugging.
+- **Tor, I2P, CJDNS:** `tor` and `i2pd` always run; `cjdns` and `cjdns-route` need
+  `COMPOSE_PROFILES=cjdns` and `CJDNS=true` in `.env`, and a `/dev/net/tun` device. In an
+  unprivileged LXC container that takes two lines in the container's config on its host:
   `lxc.cgroup2.devices.allow: c 10:200 rwm` and
   `lxc.mount.entry: /dev/net/tun dev/net/tun none bind,create=file`. Their state is in the
   `dash-nodes_{tor,i2pd,cjdns}-data` volumes (the cjdns volume holds its keys and fc address).
