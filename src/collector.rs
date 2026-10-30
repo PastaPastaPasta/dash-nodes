@@ -274,7 +274,9 @@ async fn sync_masternodes(ctx: &NetCtx, height: i64) -> Result<()> {
                 if !stored.is_empty() {
                     for r in &rows {
                         match stored.get(&r.protx) {
-                            None if was_removed.contains(&r.protx) => {}
+                            None if was_removed.contains(&r.protx) => {
+                                log.execute(params![now, height, r.protx, "returned", None::<String>, r.service])?;
+                            }
                             None => {
                                 log.execute(params![now, height, r.protx, "registered", None::<String>, r.service])?;
                             }

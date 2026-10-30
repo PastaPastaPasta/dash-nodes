@@ -605,7 +605,9 @@ fn annualized(paid: i64, days: i64, evo: bool) -> f64 {
 
 /// The first indexed block at or after `ts` (None: nothing indexed that late).
 fn height_at(c: &Connection, ts: i64) -> Result<Option<i64>> {
-    Ok(c.query_row("SELECT min(height) FROM blocks WHERE time >= ?1", [ts], |r| r.get(0))?)
+    // Written so SQLite walks the blocks_time index (a min() over a range would scan by height).
+    Ok(c.query_row("SELECT height FROM blocks WHERE time >= ?1 ORDER BY time, height LIMIT 1", [ts], |r| r.get(0))
+        .optional()?)
 }
 
 /// When the payments index starts (the time of its lowest block), if it has any.
@@ -638,9 +640,10 @@ fn mn_returns(c: &Connection, protx: &str, evo: bool) -> Result<Value> {
         .optional()?;
     let indexed_since = index_start(c)?;
     let from = [Some(now - RETURN_WINDOW * DAY), registered, indexed_since].into_iter().flatten().max().unwrap_or(now);
+    // Whole days, and payments summed over exactly those days.
     let window = (now - from) / DAY;
     let annual_yield = (window >= 14)
-        .then(|| -> Result<i64> { paid_since(c, protx, height_at(c, from)?) })
+        .then(|| -> Result<i64> { paid_since(c, protx, height_at(c, now - window * DAY)?) })
         .transpose()?
         .map(|p| round4(annualized(p, window, evo)));
     Ok(json!({
