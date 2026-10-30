@@ -16,6 +16,7 @@ use serde_json::{Value, json};
 use crate::addr::{AddrNet, PeerAddr, net_of};
 use crate::collector::pose_status;
 use crate::db::{self, day_of, get_meta, query_all, set_meta};
+use crate::network::Network;
 use crate::p2p::{self, Probe};
 use crate::state::NetCtx;
 use crate::transport::{Route, Routes};
@@ -187,10 +188,8 @@ async fn crawl_once(ctx: &NetCtx) -> Result<i64> {
     // new ones.
     let proxied = |a: &PeerAddr| matches!(routes.for_addr(a), Some(Route::Socks5(_)));
     let unproven: HashSet<PeerAddr> = unproven.into_iter().collect();
-    let [mut direct_first, mut proxied_first]: [Vec<(PeerAddr, bool)>; 2] = Default::default();
-    for (a, g) in &targets {
-        if proxied(a) { &mut proxied_first } else { &mut direct_first }.push((*a, *g));
-    }
+    let (mut proxied_first, mut direct_first): (Vec<_>, Vec<_>) =
+        targets.iter().map(|(a, g)| (*a, *g)).partition(|(a, _)| proxied(a));
     for list in [&mut direct_first, &mut proxied_first] {
         list.sort_by_key(|(a, _)| unproven.contains(a));
     }
@@ -231,19 +230,20 @@ async fn crawl_once(ctx: &NetCtx) -> Result<i64> {
     Ok(id)
 }
 
-/// Takes the gossiped addresses out of successful probes. Gossip is only trusted for the network's
-/// default port (port 0 for I2P): anything else could aim us at arbitrary services on third-party
-/// hosts. Masternodes on other ports come from the list. Addresses on networks we can't reach
-/// are kept too, as known.
+/// Whether an address learned from a peer or dashd is worth recording: routable, on the network's
+/// default port (port 0 for I2P). Anything else could aim us at arbitrary services on third-party
+/// hosts; masternodes on other ports come from the list.
+fn is_trusted_gossip(net: Network, a: &PeerAddr) -> bool {
+    a.is_routable() && a.port == net.default_port_for(a.net())
+}
+
+/// Takes the trusted gossiped addresses out of successful probes. Addresses on networks we can't
+/// reach are kept too, as known.
 fn take_gossip(ctx: &NetCtx, outcomes: &mut [Outcome]) -> Vec<PeerAddr> {
     let mut gossip = Vec::new();
     for o in outcomes {
         if let Ok(p) = &mut o.result {
-            gossip.extend(
-                std::mem::take(&mut p.addrs)
-                    .into_iter()
-                    .filter(|a| a.is_routable() && a.port == ctx.net.default_port_for(a.net())),
-            );
+            gossip.extend(std::mem::take(&mut p.addrs).into_iter().filter(|a| is_trusted_gossip(ctx.net, a)));
         }
     }
     gossip
@@ -276,7 +276,7 @@ async fn probe_all(
     deadline: Option<Instant>,
 ) -> Vec<Outcome> {
     let net = ctx.net;
-    let mut by_net: [Vec<(PeerAddr, bool)>; 5] = Default::default();
+    let mut by_net: [Vec<(PeerAddr, bool)>; AddrNet::COUNT] = Default::default();
     for t in targets {
         by_net[t.0.net().index()].push(t);
     }
@@ -326,7 +326,7 @@ async fn learn_from_dashd(ctx: &NetCtx) -> Result<()> {
         }
         Err(e) => tracing::warn!(net = ctx.net.name(), "getnodeaddresses: {e:#}"),
     }
-    addrs.retain(|a| a.is_routable() && a.port == ctx.net.default_port_for(a.net()));
+    addrs.retain(|a| is_trusted_gossip(ctx.net, a));
     let empty =
         ctx.db.read(|c| Ok(c.query_row("SELECT count(*) FROM nodes", [], |r| r.get::<_, i64>(0))? == 0)).await?;
     if addrs.is_empty() && empty {

@@ -32,7 +32,7 @@ pub struct CrawlConfig {
     pub interval_secs: u64,
     pub transport: TransportConfig,
     /// Timeouts and parallel probes, per address network (`AddrNet::index`).
-    pub limits: [NetLimits; 5],
+    pub limits: [NetLimits; AddrNet::COUNT],
     /// Max peers asked for addresses per crawl; each one is asked at most every 6 hours.
     pub getaddr_per_crawl: usize,
 }

@@ -6,7 +6,6 @@ use std::net::{IpAddr, Ipv6Addr, SocketAddr, UdpSocket};
 use std::time::Duration;
 
 use anyhow::{Result, anyhow, bail};
-use serde::Serialize;
 use tokio::net::TcpStream;
 use tokio::time::timeout;
 
@@ -52,9 +51,8 @@ pub struct TransportConfig {
 }
 
 /// Whether and how a network is crawled right now; `reason` says why not when it isn't.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug)]
 pub struct NetRoute {
-    #[serde(skip)]
     pub route: Option<Route>,
     pub reason: Option<String>,
 }
@@ -71,7 +69,7 @@ impl NetRoute {
 
 /// One `NetRoute` per network, indexed by `AddrNet::index`.
 #[derive(Clone, Debug)]
-pub struct Routes(pub [NetRoute; 5]);
+pub struct Routes([NetRoute; AddrNet::COUNT]);
 
 impl Routes {
     pub fn get(&self, net: AddrNet) -> &NetRoute {
@@ -123,7 +121,7 @@ fn source_for(dst: Ipv6Addr) -> Option<Ipv6Addr> {
 /// A route to the IPv6 internet from a global address. A default route from a ULA address (e.g.
 /// a Docker network with NAT66 and no upstream IPv6) doesn't count: it usually leads nowhere, and
 /// CRAWL_IPV6=true covers the cases where it does.
-pub fn has_global_ipv6_route() -> bool {
+fn has_global_ipv6_route() -> bool {
     // 2001:4860:4860::8888, Google Public DNS: any well-known global address works.
     source_for(Ipv6Addr::new(0x2001, 0x4860, 0x4860, 0, 0, 0, 0, 0x8888))
         .is_some_and(|src| (src.segments()[0] & 0xe000) == 0x2000)
@@ -132,7 +130,7 @@ pub fn has_global_ipv6_route() -> bool {
 /// A local CJDNS address (fc00::/8) that the kernel would use for fc00::/8 destinations, i.e. a
 /// cjdns TUN interface in this network namespace. Routes through a NAT (CJDNS=true) can't be
 /// detected this way.
-pub fn has_cjdns_route() -> bool {
+fn has_cjdns_route() -> bool {
     source_for(Ipv6Addr::new(0xfc00, 0, 0, 0, 0, 0, 0, 1)).is_some_and(|src| is_cjdns_ip(&src))
 }
 
@@ -165,7 +163,11 @@ pub struct NetLimits {
     pub concurrency: usize,
 }
 
-pub fn default_limits(direct_concurrency: usize, tor_concurrency: usize, i2p_concurrency: usize) -> [NetLimits; 5] {
+pub fn default_limits(
+    direct_concurrency: usize,
+    tor_concurrency: usize,
+    i2p_concurrency: usize,
+) -> [NetLimits; AddrNet::COUNT] {
     let t = |connect: u64, handshake: u64, getaddr: u64| Timeouts {
         connect: Duration::from_secs(connect),
         handshake: Duration::from_secs(handshake),

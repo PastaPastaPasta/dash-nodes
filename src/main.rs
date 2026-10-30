@@ -12,16 +12,16 @@ mod state;
 mod transport;
 mod ua;
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, RwLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand};
 
-use crate::addr::PeerAddr;
+use crate::addr::{AddrNet, PeerAddr};
 use crate::geo::Geo;
 use crate::network::Network;
 use crate::state::{CrawlConfig, NetCtx};
@@ -175,17 +175,17 @@ async fn probe(addr: &str, network: &str, getaddr: bool, transport: &TransportAr
         format!("{} isn't reachable: {}", addr.net(), net_route.reason.as_deref().unwrap_or("no route"))
     })?;
     let limits = transport::default_limits(1, 1, 1);
-    let started = std::time::Instant::now();
+    let started = Instant::now();
     let p = p2p::probe(net, &addr, &route, 0, getaddr, &limits[addr.net().index()].timeouts).await?;
     println!("{addr} ({}, via {route:?}) in {:.1?}", addr.net(), started.elapsed());
     println!("{:#?}", p.version);
     if getaddr {
-        let mut by_net = std::collections::BTreeMap::new();
+        let mut by_net = BTreeMap::new();
         for a in &p.addrs {
             *by_net.entry(a.net()).or_insert(0) += 1;
         }
         println!("{} addresses: {by_net:?}", p.addrs.len());
-        for a in p.addrs.iter().filter(|a| a.net() != addr::AddrNet::Ipv4) {
+        for a in p.addrs.iter().filter(|a| a.net() != AddrNet::Ipv4) {
             println!("  {a}");
         }
     }
@@ -212,10 +212,12 @@ async fn serve(args: ServeArgs) -> Result<()> {
         ),
         getaddr_per_crawl: args.getaddr_per_crawl,
     };
-    for (net, r) in addr::AddrNet::ALL.iter().zip(&crawl_cfg.transport.routes().0) {
-        match (&r.route, &r.reason) {
-            (Some(route), _) => tracing::info!("{net}: crawled via {route:?}"),
-            (None, reason) => tracing::info!("{net}: not crawled ({})", reason.as_deref().unwrap_or("")),
+    let routes = crawl_cfg.transport.routes();
+    for net in AddrNet::ALL {
+        let r = routes.get(net);
+        match &r.route {
+            Some(route) => tracing::info!("{net}: crawled via {route:?}"),
+            None => tracing::info!("{net}: not crawled ({})", r.reason.as_deref().unwrap_or("")),
         }
     }
     let mut nets = HashMap::new();

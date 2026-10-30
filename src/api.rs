@@ -22,6 +22,7 @@ use tower_http::set_header::SetResponseHeaderLayer;
 
 use crate::addr::net_of;
 use crate::collector::{payments_range, pose_status};
+use crate::crawler::network_stats;
 use crate::db::{self, day_of, query_all};
 use crate::network::Network;
 use crate::state::NetCtx;
@@ -195,7 +196,7 @@ async fn summary(State(nets): State<Nets>, UrlPath(net): UrlPath<String>) -> Api
         .db
         .read(|c| {
             let Some(id) = latest_crawl(c)? else {
-                return Ok(json!({"crawl": null, "dists": {}, "networks": crate::crawler::network_stats(c, 0, db::now(), None)?}));
+                return Ok(json!({"crawl": null, "dists": {}, "networks": network_stats(c, 0, db::now(), None)?}));
             };
             let crawl = c.query_row("SELECT * FROM crawls WHERE id = ?1", [id], crawl_json)?;
             // The crawl closest to 24h earlier, for deltas.
@@ -218,11 +219,12 @@ async fn summary(State(nets): State<Nets>, UrlPath(net): UrlPath<String>) -> Api
                     v.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
                 }
             }
-            let stored: Option<String> = c.query_row("SELECT networks FROM crawls WHERE id = ?1", [id], |r| r.get(0))?;
+            let stored: Option<String> =
+                c.query_row("SELECT networks FROM crawls WHERE id = ?1", [id], |r| r.get(0))?;
             let networks = match stored.and_then(|s| serde_json::from_str::<Value>(&s).ok()) {
                 Some(v) => v,
                 // Crawls from before per-network stats were recorded.
-                None => json!(crate::crawler::network_stats(c, id, started, None)?),
+                None => json!(network_stats(c, id, started, None)?),
             };
             Ok(json!({"crawl": crawl, "day_ago": day_ago, "dists": dists, "networks": networks}))
         })

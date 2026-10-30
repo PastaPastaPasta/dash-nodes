@@ -28,7 +28,9 @@ pub enum AddrNet {
 
 impl AddrNet {
     /// Every network, in the order the API lists them.
-    pub const ALL: [AddrNet; 5] = [AddrNet::Ipv4, AddrNet::Ipv6, AddrNet::Onion, AddrNet::I2p, AddrNet::Cjdns];
+    pub const ALL: [AddrNet; Self::COUNT] =
+        [AddrNet::Ipv4, AddrNet::Ipv6, AddrNet::Onion, AddrNet::I2p, AddrNet::Cjdns];
+    pub const COUNT: usize = 5;
 
     pub fn name(self) -> &'static str {
         match self {

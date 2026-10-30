@@ -3,6 +3,8 @@
 //! because it's small, and because replies come from a proxy relaying for untrusted peers: every
 //! field is checked and nothing is read beyond the reply.
 
+use std::net::IpAddr;
+
 use anyhow::{Result, anyhow, bail};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
@@ -20,7 +22,7 @@ const ATYP_IPV6: u8 = 4;
 pub async fn handshake<S: AsyncRead + AsyncWrite + Unpin>(s: &mut S, target: &SocksTarget) -> Result<()> {
     s.write_all(&[VERSION, 1, NO_AUTH]).await?;
     let mut choice = [0u8; 2];
-    s.read_exact(&mut choice).await.map_err(|e| anyhow!("socks: read: {}", e.kind()))?;
+    s.read_exact(&mut choice).await.map_err(read_error)?;
     if choice[0] != VERSION {
         bail!("socks: not a SOCKS5 proxy");
     }
@@ -30,7 +32,7 @@ pub async fn handshake<S: AsyncRead + AsyncWrite + Unpin>(s: &mut S, target: &So
     s.write_all(&connect_request(target)?).await?;
 
     let mut head = [0u8; 4];
-    s.read_exact(&mut head).await.map_err(|e| anyhow!("socks: read: {}", e.kind()))?;
+    s.read_exact(&mut head).await.map_err(read_error)?;
     let [ver, rep, rsv, atyp] = head;
     if ver != VERSION || rsv != 0 {
         bail!("socks: malformed reply");
@@ -42,12 +44,16 @@ pub async fn handshake<S: AsyncRead + AsyncWrite + Unpin>(s: &mut S, target: &So
     let addr_len = match atyp {
         ATYP_IPV4 => 4,
         ATYP_IPV6 => 16,
-        ATYP_DOMAIN => s.read_u8().await.map_err(|e| anyhow!("socks: read: {}", e.kind()))? as usize,
+        ATYP_DOMAIN => s.read_u8().await.map_err(read_error)? as usize,
         _ => bail!("socks: malformed reply (address type {atyp})"),
     };
     let mut rest = [0u8; 255 + 2];
-    s.read_exact(&mut rest[..addr_len + 2]).await.map_err(|e| anyhow!("socks: read: {}", e.kind()))?;
+    s.read_exact(&mut rest[..addr_len + 2]).await.map_err(read_error)?;
     Ok(())
+}
+
+fn read_error(e: std::io::Error) -> anyhow::Error {
+    anyhow!("socks: read: {}", e.kind())
 }
 
 fn connect_request(target: &SocksTarget) -> Result<Vec<u8>> {
@@ -55,11 +61,11 @@ fn connect_request(target: &SocksTarget) -> Result<Vec<u8>> {
     let port = match target {
         SocksTarget::Ip(sa) => {
             match sa.ip() {
-                std::net::IpAddr::V4(ip) => {
+                IpAddr::V4(ip) => {
                     req.push(ATYP_IPV4);
                     req.extend_from_slice(&ip.octets());
                 }
-                std::net::IpAddr::V6(ip) => {
+                IpAddr::V6(ip) => {
                     req.push(ATYP_IPV6);
                     req.extend_from_slice(&ip.octets());
                 }
