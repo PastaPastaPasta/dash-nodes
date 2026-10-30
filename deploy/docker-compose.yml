@@ -1,6 +1,6 @@
 # dash-nodes: dashd (mainnet + testnet), the crawler/monitor app with Tor and I2P clients so both can
-# reach onion and I2P peers (+ optional cjdns), and the publisher that pushes the app's API documents
-# to the Cloudflare Worker serving nodes.dashhq.org.
+# reach onion and I2P peers (+ optional cjdns), the publisher that pushes the app's API documents
+# to the Cloudflare Worker serving nodes.dashhq.org, and the bench (masternode speed tests).
 #
 #   scripts/init.sh                  once: generates secrets and .env
 #   docker compose up -d --build     everything
@@ -131,11 +131,14 @@ services:
       - app-data:/data
     ports:
       - "${HTTP_BIND:-0.0.0.0}:${HTTP_PORT:-8080}:8080"
+    # `api` resolves on `edge` only: for containers that are also on the IPv6-only `cjdns` network
+    # (the bench), plain `app` can point at an address the API (IPv4) doesn't listen on.
     networks:
-      - core
-      - edge
-      - overlay
-      - cjdns
+      core: {}
+      edge:
+        aliases: [api]
+      overlay: {}
+      cjdns: {}
 
   # Tor client: SOCKS for .onion peers (the app's TOR_PROXY, dashd's -onion). No relay, no exit.
   tor:
@@ -245,6 +248,43 @@ services:
     networks:
       - edge
 
+  # Masternode speed tests (`dash-nodes bench`, vantage BENCH_VANTAGE): targets and reference hashes
+  # from the app, results to the Worker's ingest. Same image as the app; no dashd, no inbound traffic.
+  # Idles until secrets/bench_token holds a token. Other vantages: bench-vantage/.
+  bench:
+    image: dash-nodes:${APP_TAG:-local}
+    <<: *hardened
+    restart: unless-stopped
+    logging: *default-logging
+    depends_on:
+      - app
+    command: ["bench"]
+    environment:
+      VANTAGE: ${BENCH_VANTAGE:-local}
+      VANTAGE_LOCATION: ${BENCH_LOCATION:-}
+      SOURCE: http://api:8080
+      TARGET: ${PUBLISH_TARGET:-https://nodes.dashhq.org}
+      BENCH_TOKEN_FILE: /run/secrets/bench_token
+      NETWORKS: ${BENCH_NETWORKS:-mainnet testnet}
+      CYCLE_DAYS: ${BENCH_CYCLE_DAYS:-14}
+      BENCH_CONCURRENCY: ${BENCH_CONCURRENCY:-2}
+      STATE_DIR: /state
+      # The same routes as the app's crawler.
+      TOR_PROXY: 172.30.88.10:9050
+      I2P_PROXY: 172.30.88.11:4447
+      CRAWL_IPV6: ${CRAWL_IPV6:-auto}
+      IPV6_PROXY: ${IPV6_PROXY:-}
+      CJDNS: ${CJDNS:-auto}
+      RUST_LOG: ${RUST_LOG:-info}
+    secrets:
+      - bench_token
+    volumes:
+      - bench-state:/state
+    networks:
+      - edge
+      - overlay
+      - cjdns
+
 networks:
   core:
     ipam:
@@ -271,6 +311,7 @@ volumes:
   dashd-testnet:
   app-data:
   publisher-state:
+  bench-state:
   tor-data:
   i2pd-data:
   cjdns-data:
@@ -280,3 +321,5 @@ secrets:
     file: ./secrets/rpc_password
   ingest_token:
     file: ./secrets/ingest_token
+  bench_token:
+    file: ./secrets/bench_token

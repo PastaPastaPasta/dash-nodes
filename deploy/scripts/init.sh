@@ -1,6 +1,7 @@
 #!/bin/sh
-# One-time setup: RPC password secret (readable by uid 1000, which dashd, the app and the publisher
-# run as), a placeholder for the Worker's ingest token, and a default .env.
+# One-time setup: RPC password secret (readable by uid 1000, which dashd, the app, the publisher and
+# the bench run as), placeholders for the Worker's ingest and bench tokens, and a default .env.
+# Safe to re-run: existing secrets and .env are kept.
 set -eu
 cd "$(dirname "$0")/.."
 mkdir -p secrets
@@ -10,8 +11,10 @@ if [ ! -s secrets/rpc_password ]; then
 fi
 # The Worker's INGEST_TOKEN secret; the publisher idles until it's filled in.
 [ -e secrets/ingest_token ] || : > secrets/ingest_token
+# The bench's token for the Worker's ingest; the bench idles until it's filled in.
+[ -e secrets/bench_token ] || : > secrets/bench_token
 chown 1000:1000 secrets/* 2>/dev/null || true
 chmod 0400 secrets/rpc_password
-chmod 0400 secrets/ingest_token
+chmod 0400 secrets/ingest_token secrets/bench_token
 [ -e .env ] || cp .env.example .env
 echo "ok: edit .env if needed, then: docker compose up -d --build"

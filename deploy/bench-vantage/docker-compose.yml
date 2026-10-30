@@ -1,0 +1,56 @@
+# A standalone bench vantage: `dash-nodes bench` on its own small box (e.g. a DigitalOcean droplet
+# in NYC, Amsterdam or Singapore), reading targets and reference hashes from the public site and
+# publishing results under its own vantage id. No dashd, no inbound traffic. See README.md.
+#
+#   cp .env.example .env              set VANTAGE and VANTAGE_LOCATION
+#   install -m 0400 -o 1000 -g 1000 /dev/null bench_token; cat > bench_token   (as root; paste the token)
+#   docker compose up -d
+
+name: dash-nodes-bench
+
+services:
+  bench:
+    image: ${BENCH_IMAGE:-dash-nodes:local}
+    restart: unless-stopped
+    command: ["bench"]
+    # Host networking: the droplet's own IPv4 and IPv6 (a bridge network would hide IPv6).
+    network_mode: host
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+    # A test needs a few MB; this only stops a runaway from taking the box.
+    mem_limit: 512m
+    pids_limit: 256
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
+    environment:
+      VANTAGE: ${VANTAGE:?set VANTAGE in .env}
+      VANTAGE_LOCATION: ${VANTAGE_LOCATION:-}
+      SOURCE: ${SOURCE:-https://nodes.dashhq.org}
+      TARGET: ${TARGET:-https://nodes.dashhq.org}
+      BENCH_TOKEN_FILE: /run/secrets/bench_token
+      NETWORKS: ${NETWORKS:-mainnet testnet}
+      CYCLE_DAYS: ${CYCLE_DAYS:-14}
+      BENCH_CONCURRENCY: ${BENCH_CONCURRENCY:-2}
+      BENCH_MAX_MBIT: ${BENCH_MAX_MBIT:-24}
+      STATE_DIR: /state
+      CRAWL_IPV6: ${CRAWL_IPV6:-auto}
+      RUST_LOG: ${RUST_LOG:-info}
+    secrets:
+      - bench_token
+    volumes:
+      - bench-state:/state
+
+volumes:
+  bench-state:
+
+secrets:
+  bench_token:
+    file: ./bench_token
