@@ -36,6 +36,14 @@ impl Network {
         }
     }
 
+    /// Default P2P port for addresses on `net`: I2P has no ports (SAM 3.1), so it's always 0.
+    pub fn default_port_for(self, net: crate::addr::AddrNet) -> u16 {
+        match net {
+            crate::addr::AddrNet::I2p => 0,
+            _ => self.default_port(),
+        }
+    }
+
     pub fn dns_seeds(self) -> &'static [&'static str] {
         match self {
             Network::Mainnet => &["dnsseed.dash.org"],
