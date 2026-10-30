@@ -1,0 +1,17 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "dash-nodes",
+  "main": "src/index.js",
+  "compatibility_date": "2026-10-01",
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "not_found_handling": "404-page",
+    "html_handling": "auto-trailing-slash",
+    // Everything else is served straight from the asset store without running the Worker.
+    "run_worker_first": ["/api/*", "/_ingest/*", "/mn/*"]
+  },
+  "r2_buckets": [{ "binding": "DATA", "bucket_name": "dash-nodes-data" }],
+  "routes": [{ "pattern": "nodes.dashhq.org", "custom_domain": true }],
+  "observability": { "enabled": true }
+}

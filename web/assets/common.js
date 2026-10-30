@@ -259,6 +259,8 @@ export function chrome(page, { footer = true } = {}) {
   setInterval(refreshStatus, 60_000);
 }
 
+const STALE_AFTER = 45 * 60; // three missed crawls
+
 async function refreshStatus() {
   const box = document.getElementById("chain-status");
   try {
@@ -276,6 +278,18 @@ async function refreshStatus() {
       if (n.crawl.running) text += " · crawling now";
     }
     if (c.error) dot = "warn";
+    // The site keeps serving the last published data if the crawler stops; say so once it's clearly old.
+    const age = n.crawl.last_finished ? Date.now() / 1000 - n.crawl.last_finished : 0;
+    const stale = age > STALE_AFTER;
+    if (stale) { dot = "warn"; text = `last crawl ${ago(n.crawl.last_finished)}`; }
+    document.getElementById("stale-bar")?.remove();
+    if (stale) {
+      const bar = el("div", { class: "stale-bar", id: "stale-bar", role: "status" },
+        `This data is from ${ago(n.crawl.last_finished)}: the crawler hasn't published since. Numbers may be out of date.`);
+      // Full-screen pages float it over the map; others get a strip under the header.
+      if (document.body.classList.contains("app")) document.querySelector("main").prepend(bar);
+      else document.querySelector("header.top").after(bar);
+    }
     box.replaceChildren(el("span", { class: `dot ${dot}` }), text);
     box.title = c.dashd_version ? `Our dashd: ${c.dashd_version}` : "";
   } catch {

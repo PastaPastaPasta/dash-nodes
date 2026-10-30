@@ -90,6 +90,8 @@ nav.main a[aria-current="page"] { color: var(--ink); background: var(--surface-2
 .chain-status .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 6px; vertical-align: 1px; background: var(--muted); }
 .chain-status .dot.ok { background: var(--good); }
 .chain-status .dot.warn { background: var(--warning); }
+.stale-bar { background: color-mix(in srgb, var(--warning) 18%, var(--surface)); color: var(--ink); font-size: 13.5px; text-align: center; padding: 7px 16px; border-bottom: 1px solid var(--ring); }
+body.app .stale-bar { position: absolute; z-index: 3; top: 12px; left: 50%; transform: translateX(-50%); border-radius: 999px; border: 0; box-shadow: 0 0 0 1px var(--ring), var(--shadow); width: max-content; max-width: calc(100% - 32px); }
 
 /* segmented control */
 .seg { display: inline-flex; background: var(--surface-2); border-radius: 8px; padding: 2px; gap: 2px; }
