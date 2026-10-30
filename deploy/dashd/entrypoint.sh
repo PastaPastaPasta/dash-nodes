@@ -59,5 +59,13 @@ cp /etc/dash-nodes/dash.conf "$CONF"
   esac
 } >> "$CONF"
 
+# dashd refuses to start while the datadir holds a dash.conf that -conf makes it ignore. An empty one
+# appears there now and then (dash-cli run without -conf, say) and would stop dashd at its next start;
+# it holds nothing, so drop it. A non-empty one still fails loudly.
+DATADIR_CONF=/home/dash/.dashcore/dash.conf
+if [ -f "$DATADIR_CONF" ] && [ ! -s "$DATADIR_CONF" ]; then
+  rm -f "$DATADIR_CONF"
+fi
+
 # shellcheck disable=SC2086  # DASHD_EXTRA_ARGS is deliberately word-split
 exec dashd -conf="$CONF" ${DASHD_EXTRA_ARGS:-}
