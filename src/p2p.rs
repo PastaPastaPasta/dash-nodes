@@ -147,12 +147,24 @@ async fn probe_inner(
 
 async fn read_before(stream: &mut TcpStream, magic: [u8; 4], deadline: Instant) -> Result<(String, Vec<u8>)> {
     let left = deadline.saturating_duration_since(Instant::now());
-    timeout(left, read_message(stream, magic)).await.map_err(|_| anyhow!("timeout"))?
+    timeout(left, read_message(stream, magic, MAX_PAYLOAD)).await.map_err(|_| anyhow!("timeout"))?
 }
 
-async fn read_message(stream: &mut TcpStream, magic: [u8; 4]) -> Result<(String, Vec<u8>)> {
+/// Reads one message, refusing payloads over `max_payload` bytes before reading them. Not
+/// cancel-safe: a timeout mid-message leaves the stream unusable.
+pub async fn read_message(stream: &mut TcpStream, magic: [u8; 4], max_payload: usize) -> Result<(String, Vec<u8>)> {
     let mut header = [0u8; 24];
     stream.read_exact(&mut header).await.map_err(|e| anyhow!("read: {}", e.kind()))?;
+    let (cmd, len) = decode_header(&header, magic, max_payload)?;
+    let mut payload = vec![0u8; len];
+    stream.read_exact(&mut payload).await.map_err(|e| anyhow!("read: {}", e.kind()))?;
+    verify_checksum(&cmd, &header, &payload)?;
+    Ok((cmd, payload))
+}
+
+/// Checks a 24-byte message header (magic, ASCII command, payload size) and returns the command
+/// and payload length.
+pub fn decode_header(header: &[u8], magic: [u8; 4], max_payload: usize) -> Result<(String, usize)> {
     if header[..4] != magic {
         bail!("bad magic {:02x?}", &header[..4]);
     }
@@ -160,15 +172,17 @@ async fn read_message(stream: &mut TcpStream, magic: [u8; 4]) -> Result<(String,
     let end = cmd_bytes.iter().position(|&b| b == 0).unwrap_or(12);
     let cmd = std::str::from_utf8(&cmd_bytes[..end]).context("command not ascii")?.to_string();
     let len = u32::from_le_bytes(header[16..20].try_into().unwrap()) as usize;
-    if len > MAX_PAYLOAD {
+    if len > max_payload {
         bail!("{cmd} payload too large ({len})");
     }
-    let mut payload = vec![0u8; len];
-    stream.read_exact(&mut payload).await.map_err(|e| anyhow!("read: {}", e.kind()))?;
-    if checksum(&payload) != header[20..24] {
+    Ok((cmd, len))
+}
+
+pub fn verify_checksum(cmd: &str, header: &[u8], payload: &[u8]) -> Result<()> {
+    if checksum(payload) != header[20..24] {
         bail!("{cmd} bad checksum");
     }
-    Ok((cmd, payload))
+    Ok(())
 }
 
 fn checksum(payload: &[u8]) -> [u8; 4] {
@@ -188,7 +202,7 @@ pub fn encode(magic: [u8; 4], cmd: &str, payload: &[u8]) -> Vec<u8> {
     out
 }
 
-fn version_payload(addr_you: &PeerAddr, start_height: i32) -> Vec<u8> {
+pub fn version_payload(addr_you: &PeerAddr, start_height: i32) -> Vec<u8> {
     let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64;
     let mut p = Vec::with_capacity(128);
     p.extend_from_slice(&PROTOCOL_VERSION.to_le_bytes());
@@ -224,7 +238,7 @@ fn write_net_addr(p: &mut Vec<u8>, addr: Option<(IpAddr, u16)>) {
     }
 }
 
-fn write_compact_size(p: &mut Vec<u8>, n: u64) {
+pub fn write_compact_size(p: &mut Vec<u8>, n: u64) {
     match n {
         0..=0xfc => p.push(n as u8),
         0xfd..=0xffff => {
@@ -242,12 +256,16 @@ fn write_compact_size(p: &mut Vec<u8>, n: u64) {
     }
 }
 
-struct Reader<'a> {
+/// Bounds-checked cursor over an untrusted payload.
+pub struct Reader<'a> {
     buf: &'a [u8],
 }
 
 impl<'a> Reader<'a> {
-    fn take(&mut self, n: usize) -> Result<&'a [u8]> {
+    pub fn new(buf: &'a [u8]) -> Reader<'a> {
+        Reader { buf }
+    }
+    pub fn take(&mut self, n: usize) -> Result<&'a [u8]> {
         if self.buf.len() < n {
             bail!("truncated");
         }
@@ -255,20 +273,20 @@ impl<'a> Reader<'a> {
         self.buf = tail;
         Ok(head)
     }
-    fn u8(&mut self) -> Result<u8> {
+    pub fn u8(&mut self) -> Result<u8> {
         Ok(self.take(1)?[0])
     }
-    fn i32(&mut self) -> Result<i32> {
+    pub fn i32(&mut self) -> Result<i32> {
         Ok(i32::from_le_bytes(self.take(4)?.try_into().unwrap()))
     }
-    fn u32(&mut self) -> Result<u32> {
+    pub fn u32(&mut self) -> Result<u32> {
         Ok(u32::from_le_bytes(self.take(4)?.try_into().unwrap()))
     }
-    fn u64(&mut self) -> Result<u64> {
+    pub fn u64(&mut self) -> Result<u64> {
         Ok(u64::from_le_bytes(self.take(8)?.try_into().unwrap()))
     }
     /// Bitcoin CompactSize; like Dash Core, non-canonical (over-long) encodings are rejected.
-    fn compact_size(&mut self) -> Result<u64> {
+    pub fn compact_size(&mut self) -> Result<u64> {
         let (n, min) = match self.u8()? {
             0xfd => (u16::from_le_bytes(self.take(2)?.try_into().unwrap()) as u64, 0xfd),
             0xfe => (self.u32()? as u64, 0x1_0000),
@@ -280,8 +298,28 @@ impl<'a> Reader<'a> {
         }
         Ok(n)
     }
-    fn is_empty(&self) -> bool {
+    pub fn is_empty(&self) -> bool {
         self.buf.is_empty()
+    }
+    pub fn u16(&mut self) -> Result<u16> {
+        Ok(u16::from_le_bytes(self.take(2)?.try_into().unwrap()))
+    }
+    pub fn hash(&mut self) -> Result<[u8; 32]> {
+        Ok(self.take(32)?.try_into().unwrap())
+    }
+    /// A CompactSize count of items at least `min_item` bytes each, checked against what's left so a
+    /// hostile count can't make us allocate or loop far beyond the payload.
+    pub fn count(&mut self, min_item: usize) -> Result<usize> {
+        let n = self.compact_size()?;
+        if n.saturating_mul(min_item.max(1) as u64) > self.buf.len() as u64 {
+            bail!("count {n} exceeds payload");
+        }
+        Ok(n as usize)
+    }
+    /// A CompactSize-prefixed byte string.
+    pub fn var_bytes(&mut self) -> Result<&'a [u8]> {
+        let n = self.count(1)?;
+        self.take(n)
     }
 }
 

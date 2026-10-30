@@ -39,6 +39,7 @@ pub fn router(nets: Nets, web: &Path) -> Router {
         .route("/api/v1/{net}/masternodes", get(masternodes))
         .route("/api/v1/{net}/masternodes/{protx}", get(masternode))
         .route("/api/v1/{net}/masternodes/{protx}/payments", get(payments))
+        .route("/api/v1/{net}/reference", get(reference))
         .with_state(nets)
         .layer(SetResponseHeaderLayer::if_not_present(
             header::CACHE_CONTROL,
@@ -598,6 +599,14 @@ fn recent_payments(c: &Connection, protx: &str, before: Option<i64>, limit: i64)
             }))
         },
     )?)
+}
+
+/// Block hashes for the bench to check headers against (see reference.rs).
+async fn reference(State(nets): State<Nets>, UrlPath(net): UrlPath<String>) -> ApiResult {
+    let ctx = net_ctx(&nets, &net)?;
+    let r = ctx.reference.read().unwrap().clone();
+    let r = r.ok_or_else(|| ApiError(StatusCode::SERVICE_UNAVAILABLE, "reference not ready".into()))?;
+    Ok(Json(json!(r)))
 }
 
 #[derive(Deserialize)]

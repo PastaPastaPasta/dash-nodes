@@ -1,11 +1,13 @@
 mod addr;
 mod api;
+mod bench;
 mod collector;
 mod crawler;
 mod db;
 mod geo;
 mod network;
 mod p2p;
+mod reference;
 mod rpc;
 mod socks5;
 mod state;
@@ -51,11 +53,14 @@ enum Cmd {
         #[command(flatten)]
         transport: TransportArgs,
     },
+    /// Speed-test masternodes (headers, ping, masternode list) and publish the results. Needs no
+    /// dashd: targets and reference hashes come from SOURCE. See bench/mod.rs.
+    Bench(Box<bench::BenchArgs>),
 }
 
 /// How to reach each address network. See transport.rs.
 #[derive(Args)]
-struct TransportArgs {
+pub(crate) struct TransportArgs {
     /// Crawl IPv6: auto (if this host has a global IPv6 route, or IPV6_PROXY is set), true, false.
     #[arg(long, env = "CRAWL_IPV6", default_value = "auto")]
     crawl_ipv6: Toggle,
@@ -74,7 +79,7 @@ struct TransportArgs {
 }
 
 impl TransportArgs {
-    fn config(&self) -> TransportConfig {
+    pub(crate) fn config(&self) -> TransportConfig {
         TransportConfig {
             ipv6: self.crawl_ipv6,
             ipv6_proxy: self.ipv6_proxy.clone(),
@@ -155,28 +160,16 @@ async fn main() -> Result<()> {
     match Cli::parse().cmd {
         Cmd::Serve(args) => serve(*args).await,
         Cmd::Probe { addr, network, getaddr, transport } => probe(&addr, &network, getaddr, &transport).await,
+        Cmd::Bench(args) => bench::main(*args).await,
     }
 }
 
 async fn probe(addr: &str, network: &str, getaddr: bool, transport: &TransportArgs) -> Result<()> {
     let net = Network::parse(network).context("network must be mainnet or testnet")?;
-    let addr: PeerAddr = match addr.parse() {
-        Ok(a) => a,
-        // A mistyped onion or I2P name must not go to the system resolver.
-        Err(e) if addr.rsplit_once(':').is_some_and(|(h, _)| h.ends_with(".onion") || h.ends_with(".i2p")) => {
-            return Err(e);
-        }
-        // A host name: resolve it.
-        Err(_) => PeerAddr::from_socket(tokio::net::lookup_host(addr).await?.next().context("no address")?),
-    };
-    let routes = transport.config().routes();
-    let net_route = routes.get(addr.net());
-    let route = net_route.route.clone().with_context(|| {
-        format!("{} isn't reachable: {}", addr.net(), net_route.reason.as_deref().unwrap_or("no route"))
-    })?;
-    let limits = transport::default_limits(1, 1, 1);
+    let addr = resolve_addr(addr).await?;
+    let route = transport.config().routes().require(addr.net())?;
     let started = Instant::now();
-    let p = p2p::probe(net, &addr, &route, 0, getaddr, &limits[addr.net().index()].timeouts).await?;
+    let p = p2p::probe(net, &addr, &route, 0, getaddr, &transport::default_timeouts(addr.net())).await?;
     println!("{addr} ({}, via {route:?}) in {:.1?}", addr.net(), started.elapsed());
     println!("{:#?}", p.version);
     if getaddr {
@@ -190,6 +183,16 @@ async fn probe(addr: &str, network: &str, getaddr: bool, transport: &TransportAr
         }
     }
     Ok(())
+}
+
+/// A peer address from the command line: an address in any of our forms, or a host name to resolve.
+pub(crate) async fn resolve_addr(addr: &str) -> Result<PeerAddr> {
+    match addr.parse() {
+        Ok(a) => Ok(a),
+        // A mistyped onion or I2P name must not go to the system resolver.
+        Err(e) if addr.rsplit_once(':').is_some_and(|(h, _)| h.ends_with(".onion") || h.ends_with(".i2p")) => Err(e),
+        Err(_) => Ok(PeerAddr::from_socket(tokio::net::lookup_host(addr).await?.next().context("no address")?)),
+    }
 }
 
 async fn serve(args: ServeArgs) -> Result<()> {
@@ -238,11 +241,13 @@ async fn serve(args: ServeArgs) -> Result<()> {
             crawl_cfg: crawl_cfg.clone(),
             backfill_pause_ms: args.backfill_pause_ms,
             pay_lock: tokio::sync::Mutex::new(()),
+            reference: RwLock::default(),
         });
         let floor = floor.unwrap_or(net.dip3_enforcement_height());
         supervise("collector", &ctx, collector::run);
         supervise("backfill", &ctx, move |c| collector::backfill(c, floor));
         supervise("crawler", &ctx, crawler::run);
+        supervise("reference", &ctx, reference::run);
         tracing::info!("{}: dashd at {url}", net.name());
         nets.insert(net, ctx);
     }

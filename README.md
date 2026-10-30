@@ -121,6 +121,7 @@ The compose stack (Docker Engine 28+, Compose 2.33+) adds these; only the app's 
 | `cjdns` (profile `cjdns`) | fd86:d4a5:1c3e:186::fe on `cjdns` | cjdns built from the upstream tag (`deploy/cjdns`, commit-checked), peers from `deploy/cjdns/peers.json` (hyperboria/peers, IPv4) plus cjdns' DNS seeds; NATs fc00::/8 out of its TUN |
 | `cjdns-route` (profile `cjdns`) | host network | keeps the host route `fc00::/8 via` the cjdns container (removed when it stops) |
 | `publisher` | `edge` | Node 24, `worker/scripts/publish.mjs`: the app's API → the Worker's ingest (token in `secrets/ingest_token`) |
+| `bench` | `edge`, `overlay`, `cjdns` | the app image running `dash-nodes bench` (vantage from `BENCH_VANTAGE`): masternode speed tests → the Worker's ingest (token in `secrets/bench_token`) |
 
 Tor and i2pd run with no capabilities, read-only, on their own `overlay` network, so they can't
 reach dashd's RPC on `core`.
@@ -130,6 +131,88 @@ their address managers, which the crawler reads, keep onion and I2P peers. With 
 also get `-cjdnsreachable=1`. dashd, the app and cjdns share the IPv6-only `cjdns` network (ULA,
 no IPv4), whose gateway is the host. On a host without IPv6, internet IPv6 from there
 fails within about a second; on a host with IPv6, Docker's NAT66 makes it work.
+
+## Masternode speed tests (bench)
+
+`dash-nodes bench` tests every enabled masternode about once every two weeks from each vantage
+point and publishes a report per masternode. It needs no dashd: the masternode list and reference
+block hashes come from `SOURCE` (the app's API, or nodes.dashhq.org), so the same image runs in the
+compose stack and on small boxes elsewhere (`deploy/bench-vantage/`), each under its own vantage id.
+
+A test, over the masternode's core P2P address (`service`), as an ordinary light client (it answers
+the node's pings and ignores everything else it isn't waiting for), bounded at 120 s:
+
+1. TCP connect and the version/verack handshake (user agent, protocol, start height).
+2. Five `ping`s, one at a time: min, median, max round trip.
+3. The newest 50,000 headers: `getheaders` from the reference hash at `tip − 50,000`, 2,000 per
+   reply, up to the reference tip (or the node's advertised height, if lower). Each header must link
+   to the one before (X11 hash) and every 2,000th must match our dashd's hash; only headers up to
+   the last matching one count as served. 10 s without a byte from the node is a stall and the
+   request is re-sent (at most 3 times). Headers per second count only time spent waiting on the node.
+4. `getmnlistd` from the empty list (base hash zero) to the reference tip: time, size, and a check
+   that it parses (header, coinbase and every list entry), is for that block and has about as many
+   entries as the list.
+5. A grade from spv-network-health's rubric (QuantumExplorer, MIT; see `src/bench/grade.rs`):
+   completeness 45%, throughput 20% (full marks at 2,500 headers/s), reliability 20%, latency 10%
+   (median ping), connectivity 5%, with incomplete downloads capped at C/D/F.
+
+A node that can't be connected to or doesn't finish the handshake gets `"ok": false` and no grade.
+
+**Pacing.** A masternode is due again a cycle after its last successful test, or 12 h, 24 h, 48 h …
+(up to a cycle) after a failure. Starts are spaced so a full pass plus the retries of the
+masternodes currently failing (4 each) fits in 90% of `CYCLE_DAYS`, jittered ±50%, at most
+`BENCH_CONCURRENCY` at once; while any masternode is more than a tenth of a cycle overdue (after
+downtime), starts come twice as fast. No two tests run in the same IPv4 /16 or IPv6 /32 at once,
+and no new test starts while running ones download more than `BENCH_MAX_MBIT`. Results (the newest 6 per masternode) live in `STATE_DIR/bench.sqlite`.
+For mainnet's ~2,250 enabled masternodes plus testnet's ~100 that's a start every ~7.7 min, a pass
+in 12.6 days, and per test about 4.6 MB downloaded (4.05 MB of headers, 0.5 MB of masternode list),
+so ~11 GB per vantage per cycle. `--sweep` tests everything not tested this cycle right away (8 at a
+time, about an hour for mainnet, ~23 Mbit/s); `--once <addr>` tests one node and prints the result.
+
+**Reference hashes:** `GET /api/v1/{net}/reference` (the app; the publisher uploads it as
+`v1/{net}/reference.json`): `{"tip": H, "tip_hash": "…", "hashes": {"<height>": "<hash>", …}}` for
+`tip − 50,000` … `tip` every 2,000 blocks, in RPC byte order. `tip` is our dashd's tip minus 6
+blocks, refreshed when it has moved 100 blocks; 503 until dashd is synced.
+
+**Published documents** (every 10 minutes and at the end of a sweep, changed ones only, plus
+everything once a day; to `PUT {TARGET}/_ingest/<key>` with `Authorization: Bearer <token>`, gzip
+body, `x-body-encoding: gzip`; a round stops at the first failed upload and resumes next time):
+
+- `v1/{net}/bench/{vantage}/{shard}.json`: `{"<protx>": [result, …]}`, newest first, at most 6 per
+  masternode; `shard` = (first ProTx byte × 64) >> 8 as two hex digits (`00`–`3f`, like the Worker's
+  `shardOf`). All 64 are published, `{}` when empty.
+- `v1/{net}/bench/{vantage}/summary.json`: `{"vantage", "location", "cycle_days", "updated"` (time of
+  the newest result, null before the first)`, "tested"` (masternodes with a result this cycle)`,
+  "scores", "headers_per_sec", "ping_ms"` (latest per masternode, ascending; failed tests are left
+  out)`, "grades": {"A": n, …, "F": n}, "failed"}`.
+- A result: `{"ts", "vantage", "address", "ok", "error", "user_agent", "protocol", "height",
+  "connect_ms", "handshake_ms", "ping_ms": {"min", "median", "max", "samples"}, "headers":
+  {"start_height", "requested", "served", "valid", "seconds", "per_sec", "bytes", "stalls"},
+  "mnlistdiff": {"bytes", "seconds", "entries", "ok"}, "grade": {"score", "letter", "completeness",
+  "throughput", "reliability", "latency", "connectivity"}}`. Times in ms or s; anything not measured
+  is null (`grade` when `ok` is false; `latency` when no pong came back). `error` lists what went
+  wrong, phases separated by `; `, even when the test was graded (e.g. a mnlistdiff timeout).
+
+| Variable | Default | |
+|---|---|---|
+| `VANTAGE`, `VANTAGE_LOCATION` | required, empty | vantage id (`[a-z0-9-]{2,16}`) and where it is, for people (in the compose stack: `BENCH_VANTAGE`, `BENCH_LOCATION`) |
+| `SOURCE` | `https://nodes.dashhq.org` | masternode lists and reference hashes (the app's API or the Worker) |
+| `TARGET`, `BENCH_TOKEN` / `BENCH_TOKEN_FILE` | | the Worker and its ingest token; without a token the bench waits (re-reading the file every minute) |
+| `NETWORKS`, `CYCLE_DAYS` | `mainnet testnet`, `14` | |
+| `BENCH_CONCURRENCY`, `BENCH_SWEEP_CONCURRENCY` | `2`, `8` | tests at once, paced and with `--sweep` |
+| `BENCH_MAX_MBIT` | `24` | don't start tests above this download rate |
+| `BENCH_DEPTH`, `BENCH_STALL_SECS`, `BENCH_TEST_TIMEOUT`, `BENCH_PINGS` | `50000`, `10`, `120`, `5` | |
+| `BENCH_PUBLISH_INTERVAL`, `STATE_DIR` | `600`, `./bench-state` (`/state` in the image) | |
+
+The transports are the crawler's (`TOR_PROXY`, `I2P_PROXY`, `CRAWL_IPV6`, `IPV6_PROXY`, `CJDNS`);
+masternodes on a network without a route are skipped, not failed.
+
+```sh
+SOURCE=http://127.0.0.1:8080 cargo run --release -- bench --once 1.2.3.4:9999
+# Without TARGET a sweep only keeps results in STATE_DIR. Never publish as another vantage's id:
+# its documents would replace that vantage's.
+SOURCE=http://127.0.0.1:8080 VANTAGE=dev STATE_DIR=/tmp/b cargo run --release -- bench --sweep --limit 20
+```
 
 ## Deploy notes
 
@@ -154,6 +237,11 @@ from its `deploy/` directory.
   `lxc.mount.entry: /dev/net/tun dev/net/tun none bind,create=file`. Their state is in the
   `dash-nodes_{tor,i2pd,cjdns}-data` volumes (the cjdns volume holds its keys and fc address).
   Without a TUN device, leave the `cjdns` profile off and `CJDNS=false`.
+- **Bench (2026-10-30):** the `bench` service runs from the app image (`docker compose up -d app
+  bench` after a build); its results are in the `dash-nodes_bench-state` volume. It idles until
+  `secrets/bench_token` (created empty by `init.sh`) holds the Worker's bench ingest token, and
+  re-reads it every minute. Write the token into the existing file (`cat > secrets/bench_token`): the
+  secret is a bind mount, so a file replaced by a new one needs `docker compose up -d bench`.
 - **Data:** SQLite in the `dash-nodes_app-data` volume (`mainnet.sqlite`, `testnet.sqlite`,
   `geo/`). Deleting a file rebuilds that network from scratch (history is lost).
 

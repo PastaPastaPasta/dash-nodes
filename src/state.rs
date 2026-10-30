@@ -8,6 +8,7 @@ use crate::collector::ChainStatus;
 use crate::db::Db;
 use crate::geo::Geo;
 use crate::network::Network;
+use crate::reference::Reference;
 use crate::rpc::Rpc;
 use crate::transport::{NetLimits, TransportConfig};
 
@@ -25,6 +26,8 @@ pub struct NetCtx {
     pub backfill_pause_ms: u64,
     /// Serializes the forward indexer and the backfill (see collector.rs).
     pub pay_lock: tokio::sync::Mutex<()>,
+    /// Block hashes the bench checks headers against (see reference.rs); None until dashd is synced.
+    pub reference: RwLock<Option<Reference>>,
 }
 
 #[derive(Clone, Debug)]

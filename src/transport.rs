@@ -76,6 +76,12 @@ impl Routes {
         &self.0[net.index()]
     }
 
+    /// The route for `net`, or why there's none.
+    pub fn require(&self, net: AddrNet) -> Result<Route> {
+        let r = self.get(net);
+        r.route.clone().ok_or_else(|| anyhow!("{net} isn't reachable: {}", r.reason.as_deref().unwrap_or("no route")))
+    }
+
     /// The route to probe `addr` over, if it's routable and its network is reachable.
     pub fn for_addr(&self, addr: &PeerAddr) -> Option<&Route> {
         if !addr.is_routable() {
@@ -183,6 +189,11 @@ pub fn default_limits(
         // CJDNS: route discovery across the mesh adds seconds to the first packet.
         NetLimits { timeouts: t(20, 15, 15), concurrency: direct_concurrency.min(32) },
     ]
+}
+
+/// Timeouts for a single probe of a node on `net` (`probe`, `bench`).
+pub fn default_timeouts(net: AddrNet) -> Timeouts {
+    default_limits(1, 1, 1)[net.index()].timeouts.clone()
 }
 
 #[cfg(test)]
