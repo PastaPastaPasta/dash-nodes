@@ -23,32 +23,44 @@
     </div>
     <div class="api-ep">
       <h3>GET /api/v1/{net}/summary</h3>
-      <p class="sub">The latest finished crawl, the crawl about 24 hours before it, and every distribution from the latest crawl:
-        <code>dists[scope][dim] = [[key, count], …]</code>, largest first.</p>
+      <p class="sub">The latest finished crawl, the crawl about 24 hours before it, every distribution from the latest crawl
+        (<code>dists[scope][dim] = [[key, count], …]</code>, largest first) and <code>networks</code>: per address network
+        (<code>ipv4</code>, <code>ipv6</code>, <code>onion</code>, <code>i2p</code>, <code>cjdns</code>, always in that order),
+        <code>{network, known, tried, reachable, masternodes, crawled, reason}</code>. <code>known</code> counts addresses heard of in the
+        past week; a network we have no route to is <code>crawled: false</code> with a <code>reason</code>, and its addresses never count
+        as unreachable.</p>
       <p class="sub">Scopes: <code>all</code> (every node that answered), <code>nonmn</code> (those that aren't masternodes),
         <code>mn</code> and <code>evo</code> (every enabled masternode or evonode, reachable or not, keyed by the user agent it last
         announced in the past 7 days, else <code>Unknown</code>).</p>
       <p class="sub">Dimensions: <code>ua</code>, <code>version</code>, <code>client</code>, <code>protocol</code>, <code>country</code> (ISO 3166),
-        <code>asn</code>, <code>reachable</code>, <code>status</code> and <code>type</code> (masternode scopes).</p>
+        <code>asn</code>, <code>network</code>, <code>reachable</code>, <code>status</code> and <code>type</code> (masternode scopes).</p>
       <pre class="code">curl https://nodes.dashhq.org/api/v1/mainnet/summary | jq '.dists.mn.version'</pre>
     </div>
     <div class="api-ep">
       <h3>GET /api/v1/{net}/history?scope=mn&amp;dim=version&amp;days=30&amp;top=8</h3>
       <p class="sub">A time series of one distribution: <code>{resolution, t: [...], series: [{key, values}]}</code>. Up to 14 days back
         it has one point per crawl; past that, daily averages. Keys outside the top <code>top</code> (by total over the window) fold into
-        <code>Other</code>. <code>dim=totals</code> returns reachable nodes, enabled masternodes and reachable masternodes instead.</p>
+        <code>Other</code>. <code>dim=totals</code> returns reachable nodes, enabled masternodes and reachable masternodes instead.
+        <code>days</code> is one of 1, 7, 14, 30, 90 and 365 (default 30); <code>top</code> is 1 to 20 (default 8).</p>
+    </div>
+    <div class="api-ep">
+      <h3>GET /api/v1/{net}/geo</h3>
+      <p class="sub">Every node that answered the latest crawl, counted per city and never by address:
+        <code>{crawl_id, points: [{lat, lon, city, country, nodes, masternodes}], unlocated}</code>. Onion and I2P nodes have no
+        location and only count in <code>unlocated</code>.</p>
     </div>
     <div class="api-ep">
       <h3>GET /api/v1/{net}/masternodes</h3>
       <p class="sub">Every registered masternode with its latest port check (<code>reachable</code> is <code>null</code> when the latest
         crawl didn't check it), announced user agent, geolocation and 7- and 30-day port-check uptime. Geolocation is
         <code>country</code> (ISO 3166), <code>continent</code> (two-letter code), <code>city</code>, city-level
-        <code>lat</code>/<code>lon</code>, <code>asn</code> and <code>as_org</code>; the map page is drawn from this endpoint.</p>
+        <code>lat</code>/<code>lon</code>, <code>asn</code> and <code>as_org</code>; <code>network</code> is the service address's network.
+        The map page is drawn from this endpoint.</p>
     </div>
     <div class="api-ep">
       <h3>GET /api/v1/{net}/masternodes/{protx}</h3>
-      <p class="sub">One masternode: everything from the list plus collateral and keys, version history, 90 days of daily uptime and
-        its 25 latest payments.</p>
+      <p class="sub">One masternode: everything from the list plus collateral and keys, every registered Core address
+        (<code>core_p2p: [{address, network}]</code>), version history, 90 days of daily uptime and its 25 latest payments.</p>
     </div>
     <div class="api-ep">
       <h3>GET /api/v1/{net}/masternodes/{protx}/payments?before={height}&amp;limit=100</h3>
@@ -60,11 +72,14 @@
     <h2>How the data is collected</h2>
     <p class="sub">Every 15 minutes the crawler opens a P2P connection to every registered masternode's Core address, to every
       node that answered in the past week, and to new addresses learned from our dashd and from other nodes' <code>getaddr</code>
-      replies. It completes the <code>version</code> handshake and disconnects. It announces itself as
+      replies (in <code>addrv2</code>, so including Tor, I2P and CJDNS addresses). Onion peers are reached through Tor, I2P peers
+      through I2P and CJDNS peers through a cjdns node; IPv6 only when our host has an IPv6 route. It completes the <code>version</code> handshake and disconnects. It announces itself as
       <code>/dash-nodes:…(nodes.dashhq.org)/</code>, doesn't relay transactions and keeps nothing but what the node announces.
       Masternode registration data and payments come from our own dashd. Reachability is measured from one vantage point, so a
       node that blocks or rate-limits us shows as unreachable even when others can reach it.</p>
     <p class="sub">Non-masternode IP addresses are never published, only counted.</p>
+    <p class="sub">This site and API are served by Cloudflare from documents the crawler publishes after each crawl, so they stay
+      up when the crawler doesn't; the header says when the last crawl finished.</p>
   </section>
 </main>
 </body>

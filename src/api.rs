@@ -67,9 +67,8 @@ pub fn router(nets: Nets, web: &Path) -> Router {
         .layer(CompressionLayer::new())
 }
 
-// The map page's basemap tiles come from OpenStreetMap; nothing else is loaded from elsewhere.
-const CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self'; \
-    img-src 'self' data: https://tile.openstreetmap.org; \
+// Everything, including the map's basemap, fonts and libraries, is served from this origin.
+const CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; \
     connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
 
 async fn harden(mut r: Response) -> Response {
