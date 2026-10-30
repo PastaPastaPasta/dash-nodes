@@ -64,6 +64,13 @@ services:
       DASHD_ONION: 172.30.88.10:9050
       DASHD_I2PSAM: 172.30.88.11:7656
       DASHD_CJDNSREACHABLE: ${CJDNS:-false}
+    # The RPC name resolves on `core` only: on the IPv6 `cjdns` network the plain service name points at
+    # an address RPC doesn't listen on.
+    networks:
+      core:
+        aliases: [rpc-mainnet]
+      overlay: {}
+      cjdns: {}
     volumes:
       - dashd-mainnet:/home/dash
       - ./dashd/dash.conf:/etc/dash-nodes/dash.conf:ro
@@ -78,6 +85,13 @@ services:
       DASHD_ONION: 172.30.88.10:9050
       DASHD_I2PSAM: 172.30.88.11:7656
       DASHD_CJDNSREACHABLE: ${CJDNS:-false}
+    # The RPC name resolves on `core` only: on the IPv6 `cjdns` network the plain service name points at
+    # an address RPC doesn't listen on.
+    networks:
+      core:
+        aliases: [rpc-testnet]
+      overlay: {}
+      cjdns: {}
     volumes:
       - dashd-testnet:/home/dash
       - ./dashd/dash.conf:/etc/dash-nodes/dash.conf:ro
@@ -95,8 +109,8 @@ services:
       - tor
       - i2pd
     environment:
-      MAINNET_RPC: http://dashd-mainnet:9998
-      TESTNET_RPC: http://dashd-testnet:19998
+      MAINNET_RPC: http://rpc-mainnet:9998
+      TESTNET_RPC: http://rpc-testnet:19998
       RPC_USER: dashnodes
       RPC_PASSWORD_FILE: /run/secrets/rpc_password
       DATA_DIR: /data
