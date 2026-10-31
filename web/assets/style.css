@@ -552,7 +552,7 @@ button.link { font: inherit; font-size: 13px; background: none; border: 0; paddi
   .mp.dragging { transition: none; }
   /* The sheet's translated part would make the page scrollable (a focused control scrolls it, out
      of reach); clip, not hidden, which scripts and focus can still scroll. */
-  main.map-app { overflow: clip; }
+  main.map-app { overflow: hidden; overflow: clip; } /* hidden: before iOS 16 */
   .mp-handle, .mp-head { flex: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
   .mp-head input { -webkit-user-select: text; user-select: text; }
   .mp-body { flex: 0 1 auto; min-height: 0; overflow-y: hidden; touch-action: none; padding: 0 14px 14px; }

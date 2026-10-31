@@ -39,7 +39,7 @@ export function bottomSheet({ panel, handle, head, body, active, restFor, onDrag
   let at = "collapsed"; // the rest it's at or heading to
   let y = 0; // translateY: height less what shows
   let sheet = false; // whether it was a sheet at the last refresh
-  let gesture = null; // the press in progress
+  let cancelGesture = null; // ends the press in progress, if any, as a pointercancel would
   // The click that ends a drag (on whatever was under the finger): only that one, so it's dropped by
   // the next press and soon after the drag (a keyboard or assistive click comes without a press).
   let swallowUntil = 0;
@@ -80,9 +80,10 @@ export function bottomSheet({ panel, handle, head, body, active, restFor, onDrag
 
   // A press anywhere on the sheet can become a drag, except in a body that scrolls.
   panel.addEventListener("pointerdown", (e) => {
-    gesture?.abort();
+    if (!e.isPrimary) return; // a second finger doesn't end or start anything
+    cancelGesture?.(); // one left over (its pointerup never came): ended properly, not dropped
     swallowUntil = 0;
-    if (!sheet || !e.isPrimary || (e.pointerType === "mouse" && e.button !== 0)) return;
+    if (!sheet || (e.pointerType === "mouse" && e.button !== 0)) return;
     if (panel.dataset.scrolls === "true" && body.contains(e.target)) return;
     const id = e.pointerId, y0 = e.clientY, x0 = e.clientX;
     const names = order(), lo = height - rests.full, hi = height - rests[names[0]];
@@ -93,12 +94,16 @@ export function bottomSheet({ panel, handle, head, body, active, restFor, onDrag
     const start = y;
     let ty = y, engaged = false, frame = 0;
     const samples = [];
-    const ac = gesture = new AbortController();
+    const ac = new AbortController();
+    // Every way a press ends comes through here, so the sheet never stays stopped with its
+    // transition off.
     const end = (ev) => {
+      if (ac.signal.aborted) return;
       ac.abort();
+      cancelGesture = null;
       cancelAnimationFrame(frame);
       if (!engaged) {
-        if (caught) { panel.classList.remove("dragging"); settle(at); } // a tap: carry on to the rest
+        if (caught) { panel.classList.remove("dragging"); if (sheet) settle(at); } // a tap: on to the rest
         return;
       }
       swallowUntil = performance.now() + 300;
@@ -115,10 +120,12 @@ export function bottomSheet({ panel, handle, head, body, active, restFor, onDrag
     };
     panel.addEventListener("pointermove", (ev) => {
       if (ev.pointerId !== id) return;
+      if (!sheet) { end(ev); return; } // turned into the wide layout mid-drag
       const dy = ev.clientY - y0;
       if (!engaged) {
-        if (Math.abs(dy) < ENGAGE) return;
-        if (Math.abs(ev.clientX - x0) > Math.abs(dy)) { ac.abort(); return; } // sideways: not ours
+        const dx = Math.abs(ev.clientX - x0);
+        if (Math.max(dx, Math.abs(dy)) < ENGAGE) return;
+        if (dx > Math.abs(dy)) { end(ev); return; } // sideways: not ours
         engaged = true;
         try { panel.setPointerCapture(id); } catch {} // the pointer may already be gone
         panel.classList.add("dragging");
@@ -132,16 +139,22 @@ export function bottomSheet({ panel, handle, head, body, active, restFor, onDrag
       cancelAnimationFrame(frame);
       frame = requestAnimationFrame(() => place(ty));
     }, { signal: ac.signal });
-    panel.addEventListener("pointerup", end, { signal: ac.signal });
-    panel.addEventListener("pointercancel", end, { signal: ac.signal });
+    panel.addEventListener("pointerup", (ev) => { if (ev.pointerId === id) end(ev); }, { signal: ac.signal });
+    panel.addEventListener("pointercancel", (ev) => { if (ev.pointerId === id) end(ev); }, { signal: ac.signal });
+    cancelGesture = () => end({ type: "pointercancel", timeStamp: performance.now() });
   });
 
   panel.addEventListener("click", (e) => {
     if (performance.now() < swallowUntil) { swallowUntil = 0; e.preventDefault(); e.stopPropagation(); }
   }, true);
 
-  // A control in the body getting focus (Tab, iOS's next-field arrows) is shown whole.
-  body.addEventListener("focusin", () => { if (sheet && at !== "full") settle("full"); });
+  // A control in the body getting focus below the part that shows (Tab, iOS's next-field arrows) is
+  // brought into view. (Focus on what already shows, a tapped chip or details' Back, moves nothing.)
+  body.addEventListener("focusin", (e) => {
+    if (!sheet || at === "full") return;
+    const r = e.target.getBoundingClientRect(), p = panel.getBoundingClientRect();
+    if (r.bottom - p.top > rests[at]) settle("full");
+  });
 
   // Content that grows or shrinks moves the rests (the sheet stays at the same one); a new size, or a
   // switch between phone and wider layouts, too. Never mid-drag.
