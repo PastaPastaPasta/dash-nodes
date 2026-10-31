@@ -36,7 +36,7 @@ export const shardKey = (net, protx) => `v1/${net}/mn/${shardOf(protx).toString(
 
 /** Keys the crawler may write. Anything else is refused at ingest. */
 export const KEY = new RegExp(
-  `^v1/(status\\.json|(${NETWORKS.join("|")})/(` +
+  `^v1/(status\\.json|releases\\.json|(${NETWORKS.join("|")})/(` +
   `(${DOCS.join("|")})\\.json` +
   `|history/(totals|(${SCOPES.join("|")})/(${DIMS.filter((d) => d !== "totals").join("|")}))\\.json` +
   "|mn/[0-9a-f]{2}\\.json|payments/[0-9a-f]{64}(/\\d{1,4})?\\.json" +

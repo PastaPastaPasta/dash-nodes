@@ -12,7 +12,6 @@ const params = new URLSearchParams(location.search);
 let scope = SCOPES.some(([s]) => s === params.get("scope")) ? params.get("scope") : "mn";
 let days = RANGES.some(([d]) => d === params.get("days")) ? params.get("days") : "30";
 
-const versionPalette = new Palette();
 const sizePalette = new Palette();
 let versionsChart, sizeChart, summary;
 const $ = (id) => document.getElementById(id);
@@ -179,16 +178,128 @@ async function heroPoints() {
 
 const versionOf = (ua) => /^\/Dash Core:([^/(]+)/.exec(ua)?.[1] || ua || "(empty)";
 
+// ---- versions: a release ladder ----
+
+const vparts = (v) => v.split(".").map((n) => parseInt(n, 10) || 0);
+/** Newest first: 24.0.0, 23.1.9, 23.1.8. */
+function byNewest(a, b) {
+  const x = vparts(a), y = vparts(b);
+  for (let i = 0; i < Math.max(x.length, y.length); i++) if ((x[i] || 0) !== (y[i] || 0)) return (y[i] || 0) - (x[i] || 0);
+  return 0;
+}
+const releaseLine = (v) => vparts(v)[0];
+
+/** Dash Core's releases (/api/v1/releases) by version: {candidate, published}; null if unavailable. */
+let releases = null;
+
+function loadReleases(doc) {
+  releases = new Map();
+  for (const r of doc.releases) {
+    const had = releases.get(r.version);
+    // A version with a final release is a release, whatever candidates came before it.
+    if (!had || had.candidate) releases.set(r.version, { candidate: r.prerelease, published: r.published });
+  }
+}
+
+/** "release", "candidate" (only release candidates so far) or "build" (matches no release: dev or custom). */
+const releaseStatus = (v) => (!releases ? "release" : !releases.has(v) ? "build" : releases.get(v).candidate ? "candidate" : "release");
+
+/**
+ * Versions colored by release: the latest Dash Core release in the brand blue and each older release a
+ * step paler, release candidates teal, builds that match no release slate. Without the release list,
+ * every version counts as a release, ranked by number. Set from every version in view, so the ladder
+ * and the chart agree (the chart's `assign` leaves it be).
+ */
+class ReleasePalette {
+  constructor() { this.colors = new Map(); this.ranked = []; }
+  set(versions) {
+    this.ranked = versions.filter((v) => releaseStatus(v) === "release").sort(byNewest);
+    this.colors = new Map(versions.map((v) => {
+      const s = releaseStatus(v);
+      if (s !== "release") return [v, `var(--rel-${s})`];
+      return [v, `color-mix(in srgb, var(--brand) ${[100, 64, 42, 30][Math.min(this.ranked.indexOf(v), 3)]}%, var(--page))`];
+    }));
+  }
+  assign() {}
+  color(k) { return k === "Unknown" ? "var(--axis)" : this.colors.get(k) || "var(--other)"; }
+}
+const versionPalette = new ReleasePalette();
+
+/** What a version is, for the ladder: "latest release", "release candidate", "not a release", or when it came out. */
+function releaseNote(v) {
+  const s = releaseStatus(v);
+  if (s === "candidate") return "release candidate";
+  if (s === "build") return "not a release";
+  if (versionPalette.ranked[0] === v) return releases ? "latest release" : "";
+  const at = releases?.get(v)?.published;
+  return at ? new Date(at).toLocaleDateString("en-GB", { month: "short", year: "numeric", timeZone: "UTC" }) : "";
+}
+/** Version shares at the start and end of the chart's history: {t0, first, last} (Maps of key to %). */
+let versionHistory = null;
+
+/**
+ * The ladder's groups: release lines newest first. The newest line lists every version; the next lists
+ * those on at least 1% and folds the rest into one row; older lines are one row together.
+ */
+function ladderGroups(versions, sum) {
+  const lines = new Map();
+  for (const row of versions.slice().sort(([a], [b]) => byNewest(a, b))) {
+    const l = releaseLine(row[0]);
+    if (!lines.has(l)) lines.set(l, []);
+    lines.get(l).push(row);
+  }
+  const entries = [...lines.entries()];
+  const groups = entries.slice(0, 2).map(([l, rows], i) => {
+    const shown = i === 0 ? rows : rows.filter(([, n]) => n / sum >= 0.01);
+    const rest = rows.filter((r) => !shown.includes(r));
+    return { label: `${l}.x`, rows: [...shown.map(([k, n]) => ({ key: k, label: k, n })),
+      ...(rest.length ? [{ key: rest[0][0], label: `${rest.length} more ${l}.x`, n: total(rest), merged: true }] : [])] };
+  });
+  const older = entries.slice(2).flatMap(([, rows]) => rows);
+  if (older.length) {
+    groups.push({ label: `${entries[2][0]}.x and older`, rows: [{ key: older[0][0], label: `${older.length} version${older.length === 1 ? "" : "s"}`, n: total(older), merged: true }] });
+  }
+  return groups;
+}
+
+function renderLadder() {
+  const d = summary.dists[scope] || {};
+  const versions = (d.version || []).filter(([k]) => k !== "Unknown");
+  const unknown = (d.version || []).find(([k]) => k === "Unknown")?.[1] || 0;
+  const sum = total(d.version || []);
+  const h = versionHistory;
+  const change = (row) => {
+    if (!h || row.merged || !h.first.has(row.key) || !h.last.has(row.key)) return "–";
+    const pts = h.last.get(row.key) - h.first.get(row.key);
+    // The unit goes on narrow screens; the note under the table says what the numbers are.
+    return [Math.abs(pts) < 0.05 ? "0.0" : `${pts > 0 ? "+" : "−"}${Math.abs(pts).toFixed(1)}`, el("span", { class: "unit", text: " pts" })];
+  };
+  // Say how far back the change goes when the history is shorter than the range picked.
+  const short = h && h.t0 > Date.now() / 1000 - Number(days) * 86400 + 86400;
+  const since = !h ? "" : short ? `since ${new Date(h.t0 * 1000).toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: "UTC" })}`
+    : ({ 1: "24 hours", 7: "7 days", 30: "30 days", 90: "90 days", 365: "year" })[days];
+  const note = (r) => (r.merged || r.key === "Unknown" ? "" : releaseNote(r.key));
+  const row = (r, line) => el("tr", {},
+    line, el("td", { class: "ver" }, r.label, note(r) ? el("small", { text: note(r) }) : null),
+    el("td", { class: "bar" }, el("i", { style: { width: `${(r.n / sum) * 100}%`, background: r.merged ? "var(--other)" : versionPalette.color(r.key) } })),
+    el("td", { class: "r", text: pct(r.n / sum) }), el("td", { class: "r n", text: fmt(r.n) }), el("td", { class: "r chg" }, change(r)));
+  const lineHead = (g) => el("th", { class: "line", scope: "rowgroup", rowspan: g.rows.length, text: g.label });
+  $("sw-ladder").replaceChildren(
+    el("thead", {}, el("tr", {}, el("th", { colspan: 2, text: "Release" }), el("th", { "aria-label": "Share bar" }),
+      el("th", { class: "r", text: "Share" }), el("th", { class: "r n", text: "Count" }), el("th", { class: "r", text: "Change" }))),
+    ...ladderGroups(versions, sum).map((g) => el("tbody", {}, ...g.rows.map((r, j) => row(r, j ? null : lineHead(g))))),
+    unknown ? el("tbody", { class: "unknown" }, row({ key: "Unknown", label: "No answer this week", n: unknown }, el("th", { class: "line", scope: "rowgroup" }))) : null);
+  $("sw-change").textContent = !since ? "" : short ? `Change is in percentage points of share ${since}, when our history starts.`
+    : `Change is in percentage points of share over the last ${since}.`;
+}
+
 function renderSoftware() {
   const d = summary.dists[scope] || {};
   const versions = (d.version || []).filter(([k]) => k !== "Unknown");
   const unknown = (d.version || []).find(([k]) => k === "Unknown")?.[1] || 0;
   const sum = total(d.version || []);
-  versionPalette.assign(versions.slice(0, 5).map(([k]) => k));
-  shareBar($("sw-bar"), $("sw-legend"), [...versions, ...(unknown ? [["Unknown", unknown]] : [])].sort((a, b) => b[1] - a[1]), {
-    color: (k) => (k === "Unknown" ? "var(--axis)" : versionPalette.color(k)),
-    label: (k) => (k === "Unknown" ? "No answer this week" : k),
-  });
+  versionPalette.set(versions.map(([k]) => k));
+  renderLadder();
   const [a, b] = versions;
   let lede = a ? `${a[0]} runs on ${pct(a[1] / sum)} of ${noun()}` : `No ${noun()} answered yet.`;
   if (b) lede += ` and ${b[0]} on ${pct(b[1] / sum)}`;
@@ -288,6 +399,22 @@ async function loadHistory() {
     api(`${net}/history?dim=totals&days=${days}`),
   ]);
   if (mine !== historyRequest) return; // a newer scope or range was picked meanwhile
+  // Stacked oldest at the bottom to newest on top, as the ladder reads from the top; no answer and
+  // the folded rest underneath.
+  const rank = (k) => (k === "Unknown" ? -2 : k === "Other" ? -1 : 0);
+  v.series.sort((a, b) => rank(a.key) - rank(b.key) || byNewest(b.key, a.key));
+  versionHistory = null;
+  if (v.t.length >= 2) {
+    const shares = (i) => {
+      const tot = v.series.reduce((acc, s) => acc + s.values[i], 0) || 1;
+      return new Map(v.series.map((s) => [s.key, (s.values[i] / tot) * 100]));
+    };
+    versionHistory = { t0: v.t[0], first: shares(0), last: shares(v.t.length - 1) };
+  }
+  renderLadder();
+  $("sw-since").textContent = versionHistory && versionHistory.t0 > Date.now() / 1000 - Number(days) * 86400 + 86400
+    ? `Our history starts ${new Date(versionHistory.t0 * 1000).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" })}, so this range shows less than it asks for.`
+    : "";
   const labels = { reachable_nodes: "Reachable nodes", masternodes: "Enabled masternodes", masternodes_reachable: "Masternodes reachable" };
   const vopts = { stacked: true, share: true, palette: versionPalette, label: (k) => (k === "Unknown" ? "No answer this week" : k), title: "Version share over time", height: 240 };
   // The three counts sit close together far from zero: an axis that starts at zero flattens them.
@@ -428,6 +555,8 @@ function renderControls() {
 }
 
 async function main() {
+  // Optional: without it the ladder ranks versions by number alone.
+  const releaseList = api("releases").catch(() => null);
   try {
     summary = await api(`${net}/summary`);
   } catch (e) {
@@ -440,6 +569,8 @@ async function main() {
     $("hero-sub").textContent = "It starts once our dashd has synced and loaded the masternode list. Check back in a few minutes.";
     return;
   }
+  const rel = await releaseList;
+  if (Array.isArray(rel?.releases)) loadReleases(rel);
   renderHero();
   heroPoints().then((points) => worldMap($("hero-map"), points, $("hero-pings"))).catch(() => {});
   renderControls();
