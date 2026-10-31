@@ -1,5 +1,5 @@
 import { api, chrome, currentNet, el, fmt, pct, href, countryName, flag, shortHash, badge, ago, nodeStatus, registration, poseBadge, uptimeKind, evoPill,
-  MN_FILTERS, mnFilters, mnMatches, rememberParams, filterQuery, filterControls, blocksAgo, blockSpan } from "./common.js";
+  MN_FILTERS, mnFilters, mnMatches, rememberParams, filterQuery, filterControls, blocksAgo, behind, listTip } from "./common.js";
 
 chrome("masternodes");
 const net = currentNet();
@@ -72,11 +72,11 @@ const COLUMNS = [
     cell: (m) => {
       const h = m.last_paid_height;
       if (!h) return el("td", { class: "r", text: "never" });
-      return tip ? blockCell(tip > h ? `${blockSpan(tip - h)} ago` : "latest block", `${fmt(tip - h)} blocks`, `block ${fmt(h)}`)
-        : blockCell(`block ${fmt(h)}`);
+      const b = tip && behind(tip, h);
+      return tip ? blockCell(b ? b[0] : "latest block", b?.[1], `block ${fmt(h)}`) : blockCell(`block ${fmt(h)}`);
     } },
   { key: "registered_height", label: "Registered", r: true, get: (m) => m.registered_height || 0,
-    cell: (m) => blockCell(fmt(m.registered_height), tip && m.registered_height < tip ? `${blockSpan(tip - m.registered_height)} ago` : null) },
+    cell: (m) => blockCell(fmt(m.registered_height), m.registered_height > 0 && tip ? behind(tip, m.registered_height)?.[0] : null) },
   { key: "pose_penalty", label: "PoSe", r: true, get: (m) => m.pose_penalty || 0, cell: (m) => el("td", { class: "r", text: m.pose_penalty ?? "–" }) },
 ];
 
@@ -150,8 +150,10 @@ function cardFor(m) {
       el("span", { class: "mn-card-version", text: m.version || "–" })),
     el("div", { class: "mono mn-card-addr", text: m.service || shortHash(m.protx) }),
     el("div", { class: "mn-card-sub" },
-      [m.country ? `${flag(m.country)} ${m.country}` : null, m.as_org, m.uptime_7d != null ? `${uptimePct(m.uptime_7d)} up 7d` : null, paid]
-        .filter(Boolean).join(" · "))));
+      [m.country ? `${flag(m.country)} ${m.country}` : null, m.as_org, m.uptime_7d != null ? `${uptimePct(m.uptime_7d)} up 7d` : null]
+        .filter(Boolean).join(" · ")),
+    // Its own line: time and blocks don't fit beside the rest on a phone.
+    el("div", { class: "mn-card-sub", text: paid })));
 }
 
 function sortBy(key) {
@@ -202,7 +204,7 @@ async function main() {
   try {
     const data = await api(`${net}/masternodes`);
     rows = data.masternodes;
-    tip = data.tip;
+    tip = listTip(data);
     const reach = rows.filter((m) => m.status === "enabled" && m.reachable === true).length;
     const enabled = rows.filter((m) => m.status === "enabled").length;
     document.getElementById("lede").textContent =

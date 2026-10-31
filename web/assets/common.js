@@ -93,22 +93,44 @@ export function duration(s) {
   if (s < 129600) return `${Math.round(s / 3600)} h`;
   const d = s / 86400;
   if (d < 60) return `${Math.round(d)} days`;
-  if (d < 730) return `${Math.round(d / 30.44)} months`;
-  return `${(d / 365.25).toFixed(1)} years`;
+  if (d < 365) return `${Math.round(d / 30.44)} months`;
+  const y = Number((d / 365.25).toFixed(1));
+  return `${y} year${y === 1 ? "" : "s"}`;
 }
 
+export const blocks = (n) => `${fmt(n)} block${n === 1 ? "" : "s"}`;
 /** About how long n blocks take: "8 months". */
 export const blockSpan = (n) => duration(n * BLOCK_SECONDS);
+/** About how many blocks come in s seconds. */
+export const blocksIn = (s) => Math.round(s / BLOCK_SECONDS);
 
-/** A past height from the tip, in time and blocks: "8 months ago · 129,400 blocks". */
+/**
+ * How far a height is behind the tip, as ["8 months ago", "129,400 blocks"]; null at the tip or past
+ * it (the masternode list can be a block ahead of the payments index the tip comes from).
+ */
+export function behind(tip, height) {
+  const n = tip - height;
+  return n > 0 ? [`${blockSpan(n)} ago`, blocks(n)] : null;
+}
+
+/** A past height in time and blocks: "8 months ago · 129,400 blocks". */
 export function blocksAgo(tip, height) {
-  const n = Math.max(0, tip - height);
-  return n ? `${blockSpan(n)} ago · ${fmt(n)} blocks` : "in the latest block";
+  const b = behind(tip, height);
+  return b ? b.join(" · ") : "in the latest block";
 }
 
 /** A height, and about when it was if the tip is known: "2,435,262, about 8 months ago". */
-export const heightWhen = (height, tip) =>
-  tip && height <= tip ? `${fmt(height)}, ${tip - height ? `about ${blockSpan(tip - height)} ago` : "the latest block"}` : fmt(height);
+export function heightWhen(height, tip) {
+  if (!(height > 0) || !tip) return fmt(height);
+  const b = behind(tip, height);
+  return `${fmt(height)}, ${b ? `about ${b[0]}` : "the latest block"}`;
+}
+
+/**
+ * The tip for a masternode list: the API's (the payments index's top), or the latest payment the list
+ * knows of if that's higher, since the index can fall behind the list.
+ */
+export const listTip = (data) => Math.max(data.tip ?? 0, ...data.masternodes.map((m) => m.last_paid_height || 0)) || null;
 
 export function dateTime(ts) {
   return new Date(ts * 1000).toLocaleString("en-GB", { dateStyle: "medium", timeStyle: "short", timeZone: "UTC" }) + " UTC";

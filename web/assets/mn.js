@@ -1,5 +1,5 @@
 import { api, chrome, currentNet, NETWORKS, el, fmt, pct, href, countryName, flag, place, badge, ago, dateTime, dash, nodeStatus, poseBadge, uptimeKind, tile, card,
-  changeText, changeKind, DKG_CHECKS, DKG_OVERALL, blockSpan, heightWhen } from "./common.js";
+  changeText, changeKind, DKG_CHECKS, DKG_OVERALL, blockSpan, blocks, blocksIn, behind, heightWhen } from "./common.js";
 
 chrome("masternodes");
 const net = currentNet();
@@ -90,7 +90,9 @@ async function main() {
   document.getElementById("lede").textContent = m.protx;
 
   const ps = m.payments_summary;
-  const tip = ps.indexed?.to;
+  // The payments index's top, or this node's last payment if the index has fallen behind the list.
+  const tip = Math.max(ps.indexed?.to || 0, m.last_paid_height || 0) || null;
+  const paidAgo = m.last_paid_height && tip ? behind(tip, m.last_paid_height) : null;
   const up30 = m.uptime_daily.slice(-30);
   const ok30 = up30.reduce((a, d) => a + d.ok, 0), at30 = up30.reduce((a, d) => a + d.attempts, 0);
   root.append(el("div", { class: "tiles" },
@@ -98,9 +100,8 @@ async function main() {
       m.last_seen ? `last answered ${ago(m.last_seen)}` : "never answered our crawler"),
     tile("Version", m.version || "–", m.protocol ? `protocol ${m.protocol}` : "no handshake yet"),
     tile("Uptime, 30 days", at30 ? pct(ok30 / at30) : "–", at30 ? `${fmt(ok30)} of ${fmt(at30)} port checks` : "no checks yet"),
-    tile("Last paid", !m.last_paid_height ? "never" : tip ? (tip > m.last_paid_height ? `${blockSpan(tip - m.last_paid_height)} ago` : "latest block")
-      : `block ${fmt(m.last_paid_height)}`,
-      m.last_paid_height && tip ? `${fmt(tip - m.last_paid_height)} blocks ago · block ${fmt(m.last_paid_height)}` : ""),
+    tile("Last paid", !m.last_paid_height ? "never" : paidAgo ? paidAgo[0] : "in the latest block",
+      m.last_paid_height ? [paidAgo && `${paidAgo[1]} ago`, `block ${fmt(m.last_paid_height)}`].filter(Boolean).join(" · ") : ""),
     earnedTile(m),
   ));
 
@@ -513,7 +514,7 @@ function paymentsSection(m) {
   const rounds = m.payments.filter((p, i, all) => i === 0 || all[i - 1].height - p.height > 1).slice(0, 6);
   const every = rounds.length > 2 ? (rounds[0].time - rounds.at(-1).time) / (rounds.length - 1) / 86400 : null;
   const lede = ps.count
-    ? `${fmt(ps.count)} payments, ${dash(ps.total_duffs)} in total${every ? `; lately one every ${every < 2 ? every.toFixed(1) : Math.round(every)} days` : ""}.`
+    ? `${fmt(ps.count)} payments, ${dash(ps.total_duffs)} in total${every ? `; lately one every ${every < 2 ? every.toFixed(1) : Math.round(every)} days, about ${blocks(blocksIn(every * 86400))}` : ""}.`
     : null;
   return el("section", {}, el("div", { class: "card-head" }, el("h2", { text: "Payments" }), el("span", { class: "sub", text: note })),
     lede ? el("p", { class: "sub", text: lede }) : null,
