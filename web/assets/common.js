@@ -71,6 +71,11 @@ export const dash = (duffs) => (duffs == null ? "–" : `${(duffs / 1e8).toLocal
 /** Platform credits (1 DASH = 100,000,000,000 credits) as DASH: "6.4321 DASH". */
 export const CREDITS_PER_DASH = 1e11;
 export const credits = (c, digits = 4) => (c == null ? "–" : `${(c / CREDITS_PER_DASH).toLocaleString("en-US", { maximumFractionDigits: digits })} DASH`);
+/** Credits as DASH with as many decimals as the size needs: 2,317 DASH, 6.43 DASH, 0.0412 DASH. */
+export const amount = (c) => {
+  const d = Math.abs(c / CREDITS_PER_DASH);
+  return credits(c, d >= 100 ? 0 : d >= 1 ? 2 : 4);
+};
 
 export function compact(n) {
   if (Math.abs(n) >= 1e6) return `${+(n / 1e6).toFixed(1)}M`;

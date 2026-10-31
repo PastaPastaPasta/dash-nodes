@@ -564,35 +564,52 @@ async fn round(ctx: &NetCtx, client: &reqwest::Client, explorer: &reqwest::Clien
     // The current epoch: getEpochsInfo { count = 2: 1, ascending = 3: false }, from the latest epoch.
     let (epochs, meta) = peers.agreed("getEpochsInfo", &v0(&[0x10, 0x01]), parse_epochs).await?;
     let current = *epochs.first().ok_or_else(|| anyhow!("getEpochsInfo: no epoch"))?;
-    let stored = finalized(ctx, &mut peers, current.epoch).await?;
-    let blocks = epoch_blocks(&mut peers, current.epoch).await?;
+    let net = ctx.net.name();
+    // Each part stands alone: one that fails (live numbers can move between two evonodes' answers)
+    // keeps its last values and is tried again next round.
+    let stored = soft(net, "finished epochs", finalized(ctx, &mut peers, current.epoch).await);
+    let blocks = soft(net, "blocks this epoch", epoch_blocks(&mut peers, current.epoch).await);
     let ids: Vec<String> = ctx
         .db
         .read(|c| {
             Ok(query_all(c, "SELECT protx FROM masternodes WHERE type = 'Evo' AND removed IS NULL", [], |r| r.get(0))?)
         })
         .await?;
-    let balances = balances(&mut peers, &ids).await?;
-    let (versions, _) = peers.agreed("getProtocolVersionUpgradeState", &v0(&[]), parse_upgrade_state).await?;
-    let votes = votes(&mut peers).await?;
-    let now = json!({
-        "epoch": current.epoch, "start": current.start_ms / 1000, "first_height": current.first_block_height,
-        "first_core_height": current.first_core_height, "protocol_version": meta.protocol_version.max(current.protocol_version),
-        "height": meta.height, "core_height": meta.core_height, "time": meta.time_ms / 1000, "versions": versions,
-        "updated": db::now(),
-    });
-    let n = (blocks.len(), balances.len(), votes.len());
+    let balances = soft(net, "balances", balances(&mut peers, &ids).await);
+    let versions = soft(
+        net,
+        "upgrade state",
+        peers.agreed("getProtocolVersionUpgradeState", &v0(&[]), parse_upgrade_state).await.map(|v| v.0),
+    );
+    let votes = soft(net, "votes", votes(&mut peers).await);
+    // For the log: how many of each came back ("failed" for a part that didn't).
+    let n = |x: Option<usize>| x.map_or_else(|| "failed".to_owned(), |n| n.to_string());
+    let counts =
+        (n(blocks.as_ref().map(Vec::len)), n(balances.as_ref().map(Vec::len)), n(votes.as_ref().map(BTreeMap::len)));
     ctx.db
         .write(move |c| {
             let tx = c.transaction()?;
             let now_ts = db::now();
-            tx.execute("DELETE FROM platform_epoch_blocks", [])?;
-            {
+            // Without a fresh vote count, the last one stands.
+            let versions = match versions {
+                Some(v) => json!(v),
+                None => self::current(&tx)?.map_or(json!([]), |n| n["versions"].clone()),
+            };
+            let now = json!({
+                "epoch": current.epoch, "start": current.start_ms / 1000, "first_height": current.first_block_height,
+                "first_core_height": current.first_core_height,
+                "protocol_version": meta.protocol_version.max(current.protocol_version), "height": meta.height,
+                "core_height": meta.core_height, "time": meta.time_ms / 1000, "versions": versions, "updated": now_ts,
+            });
+            if let Some(blocks) = &blocks {
+                tx.execute("DELETE FROM platform_epoch_blocks", [])?;
                 let mut st =
                     tx.prepare("INSERT INTO platform_epoch_blocks (protx, epoch, blocks) VALUES (?1, ?2, ?3)")?;
-                for (id, b) in &blocks {
+                for (id, b) in blocks {
                     st.execute(params![hex(id), current.epoch as i64, *b as i64])?;
                 }
+            }
+            if let Some(balances) = &balances {
                 let mut latest = tx.prepare(
                     "INSERT INTO platform_balances (protx, credits, ts) VALUES (?1, ?2, ?3)
                      ON CONFLICT(protx) DO UPDATE SET credits = excluded.credits, ts = excluded.ts",
@@ -602,17 +619,18 @@ async fn round(ctx: &NetCtx, client: &reqwest::Client, explorer: &reqwest::Clien
                      SELECT ?1, ?2, ?3 WHERE ?3 IS NOT (SELECT credits FROM platform_balance_history
                         WHERE protx = ?1 ORDER BY ts DESC LIMIT 1)",
                 )?;
-                for (id, credits) in &balances {
+                for (id, credits) in balances {
                     let credits = credits.map(|v| v as i64);
                     latest.execute(params![hex(id), credits, now_ts])?;
                     if let Some(v) = credits {
                         history.execute(params![hex(id), now_ts, v])?;
                     }
                 }
+            }
+            if let Some(votes) = &votes {
                 tx.execute("DELETE FROM platform_votes", [])?;
-                let mut st =
-                    tx.prepare("INSERT OR REPLACE INTO platform_votes (protx, version, ts) VALUES (?1, ?2, ?3)")?;
-                for (id, v) in &votes {
+                let mut st = tx.prepare("INSERT INTO platform_votes (protx, version, ts) VALUES (?1, ?2, ?3)")?;
+                for (id, v) in votes {
                     st.execute(params![hex(id), *v as i64, now_ts])?;
                 }
             }
@@ -622,17 +640,23 @@ async fn round(ctx: &NetCtx, client: &reqwest::Client, explorer: &reqwest::Clien
         })
         .await?;
     tracing::info!(
-        net = ctx.net.name(),
-        "platform rewards: epoch {}, {stored} new finalized, {} proposers so far, {} balances, {} votes",
+        net,
+        "platform rewards: epoch {}, {} new finished epochs, {} proposers so far, {} balances, {} votes",
         current.epoch,
-        n.0,
-        n.1,
-        n.2
+        n(stored),
+        counts.0,
+        counts.1,
+        counts.2
     );
     if ctx.net == Network::Mainnet {
         explorer_totals(ctx, explorer).await;
     }
     Ok(())
+}
+
+/// `r`'s value, or None with a warning.
+fn soft<T>(net: &str, what: &str, r: Result<T>) -> Option<T> {
+    r.map_err(|e| tracing::warn!(net, "platform rewards: {what}: {e:#}")).ok()
 }
 
 /// Fetches and stores finalized epochs after the newest stored one, up to the one before `current`.
@@ -781,16 +805,17 @@ async fn sample(ctx: &NetCtx, client: &reqwest::Client, prev: Option<&(Quorums, 
         slots,
     }));
     // Turns since the previous sample, when it was of the same set and epoch.
+    let active = q.sets.iter().find(|s| s.quorum_hash == q.current);
     let mut turns = Vec::new();
     if let Some((pq, pm)) = prev
         && pq.current == q.current
         && pm.epoch == meta.epoch
         && meta.height > pm.height
-        && let Some(set) = q.sets.iter().find(|s| s.quorum_hash == q.current)
+        && let Some(set) = active
     {
         turns = turns_between(set, &pq.last_proposer, &q.last_proposer, meta.height - pm.height).unwrap_or_default();
     }
-    if let Some(set) = q.sets.iter().find(|s| s.quorum_hash == q.current) {
+    if let Some(set) = active {
         tracing::debug!(
             net = ctx.net.name(),
             "validator sets: height {}, set {} of {}, proposer {} of {}, {} turns pinned",
@@ -1282,7 +1307,7 @@ pub fn mn_json(c: &Connection, protx: &str, schedule: Option<&Schedule>, window_
     let max_epoch: Option<i64> = c.query_row("SELECT max(epoch) FROM platform_epochs", [], |r| r.get(0))?;
     let Some(max_epoch) = max_epoch else { return Ok(Value::Null) };
     let from = max_epoch - EPOCHS_SHOWN + 1;
-    // Rank by credits among the epoch's proposers, and the epoch's spread.
+    // Each epoch's reward and its rank by credits among the epoch's proposers.
     let epochs: Vec<Value> = query_all(
         c,
         &format!(
@@ -1415,8 +1440,8 @@ pub fn mn_json(c: &Connection, protx: &str, schedule: Option<&Schedule>, window_
             Ok((r.get(0)?, r.get(1)?, r.get(2)?))
         })
         .optional()?;
-    // Our own total over the epochs Platform Explorer had counted when asked: what it says beyond that
-    // is from before epoch 34.
+    // Our own total over the epochs Platform Explorer had counted when asked. It reads the same epoch
+    // records, so the two should match; `before_ours` is anything it counts beyond them.
     let explorer = match explorer {
         Some((total, epoch, fetched)) => {
             let ours: Option<i64> = match epoch {

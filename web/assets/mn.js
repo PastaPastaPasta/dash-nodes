@@ -1,5 +1,5 @@
 import { api, chrome, currentNet, NETWORKS, el, fmt, pct, href, countryName, flag, place, badge, ago, dateTime, dash, nodeStatus, poseBadge, uptimeKind, tile, card,
-  changeText, changeKind, DKG_CHECKS, DKG_OVERALL, blockSpan, blocks, blocksIn, behind, heightWhen, credits, inAbout, CREDITS_PER_DASH } from "./common.js";
+  changeText, changeKind, DKG_CHECKS, DKG_OVERALL, blockSpan, blocks, blocksIn, behind, heightWhen, credits, amount, inAbout, CREDITS_PER_DASH } from "./common.js";
 import { svg, sized, axisStep } from "./charts.js";
 
 chrome("masternodes");
@@ -318,8 +318,6 @@ function earnedTile(m) {
 // ---- Platform rewards (evonodes) ----
 
 const toDash = (c) => c / CREDITS_PER_DASH;
-/** Credits as DASH with as many decimals as the size needs. */
-const amount = (c) => credits(c, Math.abs(toDash(c)) >= 100 ? 0 : Math.abs(toDash(c)) >= 1 ? 2 : 4);
 const ordinal = (n) => `${fmt(n)}${["th", "st", "nd", "rd"][(n % 100 > 10 && n % 100 < 14) || n % 10 > 3 ? 0 : n % 10]}`;
 
 /**
@@ -424,14 +422,22 @@ function estimateTable(m, p) {
   return el("div", {}, el("h3", { text: "Estimates" }), rewardsKv([
     ["Platform, a month", el("span", {}, amount(p.monthly), el("span", { class: "muted", text: ` at its pace of the last ${Math.round(p.monthly_basis_days || 0)} days` }))],
     ["Core, a month", coreMonthly != null ? el("span", {}, `${(coreMonthly / 1e8).toFixed(2)} DASH`, el("span", { class: "muted", text: ` from its payments over ${r.window_days} days` })) : null],
+    coreMonthly != null ? ["Both, a month", el("span", {}, `≈ ${(toDash(p.monthly) + coreMonthly / 1e8).toFixed(2)} DASH`)] : null,
     ["Both, a year", yearly != null ? el("span", {}, `${pct(yearly)} on 4,000 DASH`,
       el("span", { class: "muted", text: ` (${pct(p.annual_yield)} Platform, ${pct(r.annual_yield)} Core)` })) : "too new to tell"],
     c?.turns?.expected_blocks != null && c.blocks_total > 0 ? ["This epoch, blocks", `${fmt(c.blocks)} made, ≈ ${c.turns.expected_blocks} expected for its validator sets`] : null,
+    lastWatched(p),
     watched?.turns || missed30?.turns ? ["Missed turns we saw", `${fmt(missed30.missed)} of ${fmt(missed30.turns)} turns, last 30 days`] : null,
     ["Upgrade vote", p.vote ? el("span", {}, `protocol ${p.vote.version}`, el("span", { class: "muted", text: " (from its blocks this epoch)" }))
       : el("span", { class: "muted", text: "none yet this epoch: it votes with the blocks it proposes" })],
   ]), el("p", { class: "muted small", text: "Expected blocks follow from how many validator sets it was in while we watched; missed turns are ones we saw skipped " +
     "(we sample the validator sets every 90 seconds, so some turns go unseen). Platform rewards are gross: reward shares (none on mainnet today) aren't deducted." }));
+}
+
+/** The latest finished epoch we watched the validator sets through: blocks made against expected. */
+function lastWatched(p) {
+  const w = (p.watched || []).find((x) => x.coverage >= 0.8 && x.expected != null);
+  return w ? [`Epoch ${fmt(w.epoch)}, blocks`, `${fmt(w.actual)} made, ≈ ${w.expected} expected${w.missed ? `; ${fmt(w.missed)} missed turns seen` : ""}`] : null;
 }
 
 /** Rewards per epoch as bars, newest right, and every epoch in a table. */

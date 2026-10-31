@@ -3,7 +3,7 @@
 // rest of the page, since the SDK is a 9 MB download.
 import { el, fmt, credits, dateTime, ago, badge } from "./common.js";
 
-export const SDK = "/assets/vendor/evo-sdk-5.0.1/evo-sdk.module.js";
+const SDK = "/assets/vendor/evo-sdk-5.0.1/evo-sdk.module.js";
 /** The withdrawals system contract and its document type. */
 const WITHDRAWALS = "4fJLR2GYTPFdomuTVvNy3VRrvWgvkKPzqehEBpNf2nk6";
 const STATUS = [["none", "Queued"], ["none", "Pooled"], ["warning", "Broadcast"], ["good", "Complete"], ["serious", "Expired (refunded)"]];
@@ -12,7 +12,7 @@ const VERIFY_EPOCHS = 12;
 
 const B58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
 /** An identity id (the ProTx hash as displayed, hex) in base58, as document queries want it. */
-export function base58(hex) {
+function base58(hex) {
   let n = BigInt(`0x${hex}`), out = "";
   while (n > 0n) { out = B58[Number(n % 58n)] + out; n /= 58n; }
   for (let i = 0; i < hex.length && hex.slice(i, i + 2) === "00"; i += 2) out = `1${out}`;
@@ -28,7 +28,7 @@ const hexOf = (b58) => {
  * What `protx` was paid for one finalized epoch, the way Drive pays it: in identifier order, pool ×
  * blocks / total rounded down, the last proposer also getting what the divisions left.
  */
-export function payout(info, protx) {
+function payout(info, protx) {
   const pool = BigInt(info.totalProcessingFees) + BigInt(info.totalDistributedStorageFees) + BigInt(info.coreBlockRewards);
   const total = BigInt(info.totalBlocksInEpoch);
   const list = [...info.blockProposers].map(([k, v]) => [hexOf(k), BigInt(v)]).sort((a, b) => (a[0] < b[0] ? -1 : 1));

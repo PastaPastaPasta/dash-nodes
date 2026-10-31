@@ -1,5 +1,5 @@
 // /platform: Platform rewards across the network (the crawler's rewards.rs, /api/v1/{net}/platform).
-import { api, chrome, currentNet, el, fmt, pct, href, ago, dateTime, credits, inAbout, shortHash, badge, segmented, searchBox, CREDITS_PER_DASH } from "./common.js";
+import { api, chrome, currentNet, el, fmt, pct, href, ago, dateTime, amount, inAbout, shortHash, badge, segmented, searchBox, CREDITS_PER_DASH } from "./common.js";
 import { svg, sized, axisStep } from "./charts.js";
 
 chrome("platform");
@@ -8,8 +8,6 @@ const $ = (id) => document.getElementById(id);
 let doc;
 
 const dashOf = (c) => c / CREDITS_PER_DASH;
-/** Credits as DASH with as many decimals as the size needs: 2,317 DASH, 6.43 DASH, 0.0412 DASH. */
-const amount = (c) => credits(c, Math.abs(dashOf(c)) >= 100 ? 0 : Math.abs(dashOf(c)) >= 1 ? 2 : 4);
 const days = (s) => s / 86400;
 const stat = (label, value, note, tone) =>
   el("div", { class: tone ? `stat-${tone}` : null }, el("dt", { text: label }), el("dd", { class: "num" }, value, note ? el("small", { text: note }) : null));

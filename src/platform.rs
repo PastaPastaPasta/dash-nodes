@@ -499,8 +499,13 @@ mod tests {
                 pro_tx_hash: Some("ee".repeat(32)),
             }
         );
-        // Only trailers (an error answer): no data frame.
+        // Only trailers (an error answer): no data frame, and the trailer says why.
         assert!(first_data_frame(&[0x80, 0, 0, 0, 2, b'a', b'b']).is_none());
+        let trailer = b"grpc-status:3\r\ngrpc-message:limit out of bounds\r\n";
+        let mut error = vec![0x80, 0, 0, 0, trailer.len() as u8];
+        error.extend(trailer);
+        assert_eq!(trailer_message(&error).as_deref(), Some("limit out of bounds"));
+        assert_eq!(trailer_message(&framed), None);
         assert!(parse_status(&[0x0a]).is_err());
     }
 

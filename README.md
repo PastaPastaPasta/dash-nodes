@@ -25,8 +25,9 @@ mnowatch.org/user-agents and the old dashninja.pl:
   page `/platform`). It's read over gRPC-web from evonodes (no SDK on the server), and an answer counts only when
   two evonodes give the same one. An evonode's page loads Dash's Platform SDK (`@dashevo/evo-sdk`, pinned in
   `worker/package.json`, served from `/assets/vendor/` by the Worker build) to show its live balance and
-  withdrawals with proofs and check our numbers against them. Lifetime totals from Platform Explorer (third party)
-  cover the epochs before 34.
+  withdrawals with proofs and check our numbers against them, and to estimate what it earned before epoch 34 from
+  its balance and withdrawals (no record has those per evonode). Platform Explorer's lifetime totals (third party,
+  fetched for a few evonodes per round, each at most daily) are kept as a cross-check.
 - **Map:** every masternode (or every reachable node, counted per city) placed by the city its IP
   geolocates to (DB-IP City Lite), clustered, colored by port-check status, version or type, with the
   list's filters. It replaces the old map.dashhq.org / map.thepasta.org (`PastaPastaPasta/dash-mn-map`).
