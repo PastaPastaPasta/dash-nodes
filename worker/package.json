@@ -6,7 +6,7 @@
     "build": "node scripts/build.mjs",
     "dev": "npm run build && wrangler dev",
     "deploy": "npm run build && wrangler deploy",
-    "test": "node --test test/api.test.mjs test/check.test.mjs"
+    "test": "node --test test/api.test.mjs test/check.test.mjs test/r2.test.mjs"
   },
   "devDependencies": {
     "wrangler": "^4.40.0"

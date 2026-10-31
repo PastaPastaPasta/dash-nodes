@@ -33,9 +33,9 @@ The public site doesn't talk to the crawler host:
 
 ```
 crawler host (no inbound)                          Cloudflare
-dashd ×2 ─ app (crawler, SQLite, API :8080) ─ publisher ──PUT /_ingest──▶ Worker ─▶ R2 (dash-nodes-data)
-                                                                          │
-                                         nodes.dashhq.org ◀── static assets + /api/v1/* from R2
+dashd ×2 ─ app (crawler, SQLite, API :8080) ─ publisher ──S3 PUT──────────────▶ R2 (dash-nodes-data)
+                                             bench ──PUT /_ingest──▶ Worker ─▶ R2       │
+                                         nodes.dashhq.org ◀── Worker: static assets + /api/v1/* from R2
 ```
 
 - `worker/` is a Cloudflare Worker that serves `web/` as static assets and answers `/api/v1/*` from
@@ -44,8 +44,13 @@ dashd ×2 ─ app (crawler, SQLite, API :8080) ─ publisher ──PUT /_ingest�
   so `days` must be one of those and `top` at most 20; masternode details live in 64 shards; payments
   in one list per masternode.
 - `worker/scripts/publish.mjs` (the `publisher` compose service) reads the app's API inside the
-  compose network and uploads those documents to the Worker's authenticated `PUT /_ingest/<key>`:
-  status every minute, the rest after each crawl, skipping unchanged ones.
+  compose network and uploads those documents straight to the R2 bucket over its S3 API
+  (`R2_ENDPOINT` and the `r2_*` secrets): status every minute, the rest after each crawl, skipping
+  unchanged ones. Without `R2_ENDPOINT` it uses the Worker's authenticated `PUT /_ingest/<key>`
+  instead (that's how a local `wrangler dev` gets seeded), but in production every upload would then
+  be a Worker request, and a full republish (a new host, or a payments backfill) is ~26k of them.
+- Speed-test vantages upload through `/_ingest` with their own tokens, which the Worker limits to
+  their own documents (R2 tokens can't be limited to a key prefix); that's a few dozen an hour.
 - If the crawler host is down, the site keeps serving the last published data and says how old it is.
 
 Deploying the Worker (needs a Cloudflare API token with Workers Scripts and R2 edit on the account,
@@ -80,8 +85,11 @@ its oldest block, so the full history comes from a snapshot (below) or from a ru
 unpruned node. A cold mainnet sync takes many hours; seeding the datadirs from another node with the
 same dashd version is much faster (see Deploy notes).
 
-Put the Worker's ingest token in `secrets/ingest_token` and the `publisher` service starts pushing to
-`PUBLISH_TARGET`; until then it idles.
+The `publisher` service uploads straight to R2 when `.env` sets `R2_ENDPOINT` and
+`secrets/r2_access_key_id` and `secrets/r2_secret_access_key` hold an R2 API token's S3 credentials
+(Object Read & Write on the data bucket only, never the snapshot bucket); without `R2_ENDPOINT` it
+pushes to `PUBLISH_TARGET`'s ingest with `secrets/ingest_token`. Until its secrets are filled in, it
+idles. Secrets are bind mounts: after replacing a secret file, `docker compose up -d publisher`.
 
 Useful while developing:
 
@@ -126,7 +134,7 @@ The compose stack (Docker Engine 28+, Compose 2.33+) adds these; only the app's 
 | `i2pd` | 172.30.88.11:4447 (SOCKS), :7656 (SAM) on `overlay` | `purplei2p/i2pd`, firewalled, bandwidth class L, ≤200 transit tunnels, no console |
 | `cjdns` (profile `cjdns`) | fd86:d4a5:1c3e:186::fe on `cjdns` | cjdns built from the upstream tag (`deploy/cjdns`, commit-checked), peers from `deploy/cjdns/peers.json` (hyperboria/peers, IPv4) plus cjdns' DNS seeds; NATs fc00::/8 out of its TUN |
 | `cjdns-route` (profile `cjdns`) | host network | keeps the host route `fc00::/8 via` the cjdns container (removed when it stops) |
-| `publisher` | `edge` | Node 24, `worker/scripts/publish.mjs`: the app's API → the Worker's ingest (token in `secrets/ingest_token`) |
+| `publisher` | `edge` | Node 24, `worker/scripts/publish.mjs`: the app's API → R2 over S3 (`R2_ENDPOINT`, `secrets/r2_*`) |
 | `bench` | `edge`, `overlay`, `cjdns` | the app image running `dash-nodes bench` (vantage from `BENCH_VANTAGE`): masternode speed tests → the Worker's ingest (token in `secrets/bench_token`) |
 
 Tor and i2pd run with no capabilities, read-only, on their own `overlay` network, so they can't
@@ -243,14 +251,16 @@ of disk are enough for both networks pruned. Unpack the source somewhere such as
 from its `deploy/` directory.
 
 - **Redeploy:** `git archive` or tar the tree (without `target/`, `deploy/secrets`, `deploy/.env`),
-  unpack it over the old one, then `docker compose build app && docker compose up -d app`.
+  unpack it over the old one, run `scripts/init.sh` (it adds any new secret placeholders; compose
+  won't start a service whose secret file is missing), then `docker compose build app && docker
+  compose up -d app publisher` (the publisher runs the tree's `worker/` scripts).
   Restarting the app abandons a crawl in progress; the next one starts right away.
 - **Seeding dashd:** a cold sync takes many hours. Copying `blocks chainstate evodb llmq` (and
   `indexes` without `txindex`) from another synced node with the same dashd version into the
   `dash-nodes_dashd-{mainnet,testnet}` volumes (owned by the container's uid 1000, as mapped on
   your host) is much faster. Keep `DASHD_TAG` at or above the version that wrote them.
 - **Public access:** the `dash-nodes` Worker serves the site from R2; the host only connects out to
-  it (see How it's served). The app's port 8080 is for the local network, for debugging.
+  R2 and the Worker (see How it's served). The app's port 8080 is for the local network, for debugging.
 - **Tor, I2P, CJDNS:** `tor` and `i2pd` always run; `cjdns` and `cjdns-route` need
   `COMPOSE_PROFILES=cjdns` and `CJDNS=true` in `.env`, and a `/dev/net/tun` device. In an
   unprivileged LXC container that takes two lines in the container's config on its host:

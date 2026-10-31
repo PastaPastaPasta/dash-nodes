@@ -1,5 +1,6 @@
-//! Turns the result history into the Worker's documents and uploads the changed ones, the same way
-//! worker/scripts/publish.mjs does: `PUT {TARGET}/_ingest/<key>`, bearer token, gzip body with
+//! Turns the result history into the Worker's documents and uploads the changed ones through the
+//! Worker's ingest, which limits each vantage's token to its own documents (an R2 token can't be
+//! limited to a key prefix): `PUT {TARGET}/_ingest/<key>`, bearer token, gzip body with
 //! `x-body-encoding: gzip`, retried with backoff, skipped when the content hasn't changed.
 //!
 //! - `v1/{net}/bench/{vantage}/{shard}.json`: `{"<protx>": [result, ...]}`, newest first, all 64
