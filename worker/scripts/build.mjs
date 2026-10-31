@@ -1,32 +1,17 @@
 // Copies the site (../web) into public/ for Workers static assets, with the headers the Rust server
 // sets on its own pages.
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { PAGE_HEADERS } from "../src/pages.js";
 
 const out = new URL("../public/", import.meta.url);
 rmSync(out, { recursive: true, force: true });
 cpSync(new URL("../../web/", import.meta.url), out, { recursive: true });
 iconSet();
 const sdk = evoSdk();
-// Cloudflare Web Analytics, if the zone has it on, injects its beacon; that is the only outside source.
-const csp = "default-src 'self'; script-src 'self' https://static.cloudflareinsights.com; style-src 'self'; img-src 'self' data:; " +
-  "connect-src 'self' https://cloudflareinsights.com; " +
-  "worker-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
-// Masternode pages load the Dash Platform SDK, which runs WebAssembly (in a worker it starts from a blob)
-// and asks evonodes directly, by IP over HTTPS (any of them, and the list changes), plus
-// quorums.*.networks.dash.org for quorum keys.
-const mnCsp = csp.replace("script-src 'self'", "script-src 'self' 'wasm-unsafe-eval'").replace("connect-src 'self'", "connect-src 'self' https:")
-  .replace("worker-src 'self'", "worker-src 'self' blob:");
-// Assets aren't content-hashed, so lifetimes stay short enough that a deploy shows up within a day;
-// each specific block detaches the default Cache-Control rather than adding a second one.
+// Every page's headers (src/pages.js; masternode pages get theirs from the Worker). Each specific block
+// detaches the default Cache-Control rather than adding a second one.
 writeFileSync(new URL("_headers", out), `/*
-  Content-Security-Policy: ${csp}
-  X-Content-Type-Options: nosniff
-  Referrer-Policy: strict-origin-when-cross-origin
-  Cache-Control: public, max-age=300
-
-/mn/*
-  ! Content-Security-Policy
-  Content-Security-Policy: ${mnCsp}
+${Object.entries(PAGE_HEADERS).map(([k, v]) => `  ${k}: ${v}`).join("\n")}
 
 /assets/vendor/*
   ! Cache-Control
@@ -57,6 +42,11 @@ function evoSdk() {
   const size = statSync(from).size;
   if (size > 25 * 1024 * 1024) throw new Error(`evo-sdk.module.js is ${size} bytes, over Workers' 25 MiB asset limit`);
   const dir = `evo-sdk-${version}`;
+  // The page imports it by this path: an SDK upgrade has to change both.
+  const live = readFileSync(new URL("../../web/assets/platform-live.js", import.meta.url), "utf8");
+  if (!live.includes(`"/assets/vendor/${dir}/evo-sdk.module.js"`)) {
+    throw new Error(`web/assets/platform-live.js doesn't import /assets/vendor/${dir}/evo-sdk.module.js (the installed @dashevo/evo-sdk)`);
+  }
   mkdirSync(new URL(`assets/vendor/${dir}/`, out), { recursive: true });
   cpSync(from, new URL(`assets/vendor/${dir}/evo-sdk.module.js`, out));
   return dir;
