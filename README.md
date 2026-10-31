@@ -250,11 +250,70 @@ of disk are enough for both networks pruned. Unpack the source somewhere such as
 `/opt/dash-nodes` (keeping the deployed commit in a `DEPLOYED_COMMIT` file helps) and run the stack
 from its `deploy/` directory.
 
-- **Redeploy:** `git archive` or tar the tree (without `target/`, `deploy/secrets`, `deploy/.env`),
-  unpack it over the old one, run `scripts/init.sh` (it adds any new secret placeholders; compose
-  won't start a service whose secret file is missing), then `docker compose build app && docker
-  compose up -d app publisher` (the publisher runs the tree's `worker/` scripts).
-  Restarting the app abandons a crawl in progress; the next one starts right away.
+- **Continuous deployment** (`deploy/cd/`): a merge to `main` deploys itself. The host pulls; nothing
+  connects in, and no deploy key is on GitHub. Every 5 minutes `dash-nodes-update.timer` runs
+  `update.sh`, which fetches `main` and, if it moved:
+  1. checks that the new head is signed by a trusted key (git's `%G?` must be `G`) and descends from
+     the deployed commit. Trusted: the SSH signing keys in `/etc/dash-nodes-cd/allowed_signers`, and
+     GitHub's web-flow GPG key (it signs squash merges made on GitHub, so trusting it means trusting
+     whoever can merge on the repo) in `/etc/dash-nodes-cd/gnupg`. Anything else is refused and logged;
+  2. unpacks the tree over `/opt/dash-nodes`, runs `scripts/init.sh`, `docker compose build` and
+     `up -d`, and restarts services whose bind-mounted files changed (the publisher's scripts, dashd's
+     and i2pd's config). Then it checks that the app's `/healthz` answers from the new image and still
+     does a minute later, and that every service that was running still is. If not, the last good
+     tree and images (tagged `:good`; `:previous` is the one before) go back. A container that
+     restarts during that minute counts as a failure too. A commit is tried 3 times
+     (a pass that dies mid-deploy counts) and then waits for a newer one. Docs-only changes just
+     update the tree;
+  3. if what the Worker is built from changed (`web/`, `worker/src/`, `worker/scripts/build.mjs`,
+     `worker/package*.json`, `worker/wrangler.jsonc`; not the publisher's scripts), deploys it: `npm ci --ignore-scripts`, `npm test` and
+     the build in a `node` container without the token, then `wrangler deploy` with it (wrangler
+     itself is pinned by the lockfile like everything else). It waits until every network's
+     published summary comes from a crawl that finished after the new app started, so pages never
+     ask for fields the data doesn't have yet. The token (one that can edit Workers scripts) lives in
+     `/etc/dash-nodes-cd/cf-token` (0600); without it, each pass logs that the Worker is waiting.
+
+  Install as root on the host, from the deployed tree: `sh deploy/cd/install.sh`, then check the
+  fingerprints it prints and `sh deploy/cd/install.sh --enable` (the first pass runs right away). It
+  writes `/etc/dash-nodes-cd/env` (host settings, from `deploy/cd/env.example`), fetches the trust
+  files (the SSH keys from GitHub as of install time, and the pinned web-flow key), mirrors the repo
+  into `/var/lib/dash-nodes-cd`, and records what's deployed from `DEPLOYED_COMMIT`, or from
+  `APP_COMMIT=… WORKER_COMMIT=…` (full or short hashes) when the live Worker is from another commit.
+  It also tags the running images `:good`, and refuses an `/opt/dash-nodes` that anyone but root
+  can write. Edit the trust files by hand afterwards; nothing refreshes them. A deploy that changes
+  `deploy/cd/` re-installs the updater.
+
+  ```sh
+  dash-nodes-update status                  # deployed app/Worker commits, main, pause, failures
+  journalctl -u dash-nodes-update -f        # what each pass did
+  touch /etc/dash-nodes-cd/paused           # pause (rm to resume); or systemctl disable --now dash-nodes-update.timer
+  dash-nodes-update deploy <commit>         # deploy a signed commit now: a rollback, or a retry
+  ```
+
+  **Rolling back:** `dash-nodes-update deploy <last good commit>`. Going back, the Worker is deployed
+  first and without waiting, since older pages work on newer data. Passes then skip `main`'s head
+  as it was at that moment, and deploy again once `main` moves on (the fix). The installed updater
+  stays as it is: a deploy only replaces it with one from a newer commit. The schema migrations so far
+  only add nullable columns, so an older app runs on a newer database. For an instant app-only
+  rollback: pause, then `docker tag dash-nodes:previous dash-nodes:local && docker compose up -d app bench`.
+  The tree and `app-commit` then still say the newer commit, so stay paused until `deploy` sorts it
+  out. `npx wrangler rollback` (from `worker/`, with a token) puts back the previous Worker version.
+- **Bench vantages on other hosts** (`deploy/bench-vantage/`) don't update themselves: a 1 GB box can't
+  build the image, and they take no inbound connections. When a deploy changes the bench code
+  (`src/bench/`, `src/p2p.rs`, `src/transport.rs`), the updater logs a reminder; copy the image over
+  by hand as described there. The compose stack's own `bench` service runs the app image, so it
+  updates with the app.
+- **Redeploy by hand** (the fallback, when CD is paused or the host has none): `git archive` or tar
+  the tree (without `target/`, `deploy/secrets`, `deploy/.env`), unpack it over the old one, run
+  `scripts/init.sh` (it adds any new secret placeholders; compose won't start a service whose secret
+  file is missing), then `docker compose build && docker compose up -d`, and `docker compose restart`
+  every service whose bind-mounted files changed (running containers keep the old ones): the
+  publisher for `worker/src` and `worker/scripts`, the dashds for `deploy/dashd/`, i2pd for
+  `deploy/i2pd/`, cjdns for `deploy/cjdns/peers.json`. Then update `DEPLOYED_COMMIT`. When the app's API gained fields the pages use, wait for the publisher
+  to upload a crawl from the new app before deploying the Worker (`cd worker && npm run deploy`;
+  plain `wrangler deploy` skips copying `web/` and ships stale pages). With CD installed, record a hand
+  deploy in `/var/lib/dash-nodes-cd/app-commit` and `worker-commit` (full hashes), or CD will
+  redeploy over it. Restarting the app abandons a crawl in progress; the next one starts right away.
 - **Seeding dashd:** a cold sync takes many hours. Copying `blocks chainstate evodb llmq` (and
   `indexes` without `txindex`) from another synced node with the same dashd version into the
   `dash-nodes_dashd-{mainnet,testnet}` volumes (owned by the container's uid 1000, as mapped on
