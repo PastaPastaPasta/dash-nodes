@@ -378,8 +378,9 @@ td small.under { display: block; font-size: 12px; color: var(--muted); }
 .hero-inner > * { max-width: 520px; }
 .hero h1 { font-size: clamp(30px, 4.2vw, 48px); line-height: 1.06; font-weight: 680; font-stretch: 118%; letter-spacing: -0.02em; text-wrap: balance; }
 .hero-sub { margin: 16px 0 0; font-size: 17px; color: var(--ink-2); text-wrap: pretty; }
-/* Six figures: two rows of three, or three of two where three won't fit (a column is at least a third). */
-.hero-inner > .hero-stats { max-width: 700px; display: grid; grid-template-columns: repeat(auto-fill, minmax(max(122px, (100% - 48px) / 3), 1fr)); gap: 18px 24px; margin: 30px 0 0; }
+/* Six figures: two rows of three, or three of two where three won't fit. A column is at least a third,
+   and at most 122px or half, so the narrowest phones still get two. */
+.hero-inner > .hero-stats { max-width: 700px; display: grid; grid-template-columns: repeat(auto-fill, minmax(max(min(122px, (100% - 24px) / 2), (100% - 48px) / 3), 1fr)); gap: 18px 24px; margin: 30px 0 0; }
 .hero-stats div { border-left: 2px solid var(--grid); padding-left: 12px; }
 .hero-stats dt { color: var(--muted); font-size: 13px; }
 .hero-stats dd { margin: 2px 0 0; font-size: 24px; font-weight: 650; font-stretch: 110%; line-height: 1.2; }

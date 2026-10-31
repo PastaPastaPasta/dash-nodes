@@ -263,6 +263,7 @@ function dkgSection(m) {
     el("p", { class: "muted small" },
       "When a DKG starts, each quorum member votes against members it can't reach or that fail these checks on their masternode connections. ",
       `Reachability and Platform bans count already; ${rules.release} raises the minimum protocol and adds the relay and filter checks. `,
+      rules.protocol_check === false ? `The version check starts once ${rules.release} is released. ` : null,
       "We see the handshake this node sends our crawler, an ordinary inbound connection, so relay and services can differ only if the operator set something unusual. ",
       "Rules from Dash Core ", el("a", { href: `https://github.com/dashpay/dash/blob/${rules.core_commit}/src/active/dkgsession.cpp`, text: `develop at ${rules.core_commit}` }), "."));
 }
