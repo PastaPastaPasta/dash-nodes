@@ -16,7 +16,7 @@ if [ $# -eq 0 ]; then
   set -- "$dir/icons/radar-master.png" "$dir/icons/radar-og.png" "$dir/icons/radar-master-small.png"
 fi
 master=$1 og=${2:-} small=${3:-$1}
-for f in "$master" $og "$small"; do [ -f "$f" ] || { echo "no such file: $f" >&2; exit 1; }; done
+for f in "$master" "$small" ${og:+"$og"}; do [ -f "$f" ] || { echo "no such file: $f" >&2; exit 1; }; done
 out=$dir/../web/assets/icons
 # The site's dark page color, behind the preview fallback; and the tile's navy, behind the iOS icon
 # (which can't be transparent), so its corners match the tile.
