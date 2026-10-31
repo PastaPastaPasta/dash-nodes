@@ -22,21 +22,42 @@ function uptimeBadge(u) {
   return badge(uptimeKind(u), uptimePct(u));
 }
 
+/**
+ * A value in a row that narrows the current search to it, keeping the other filters. A plain click
+ * applies it in place; the href carries the same filters, so a new tab gets the same list.
+ */
+function filterLink(name, value, content) {
+  return el("a", { class: "quiet", href: href(`/masternodes${filterQuery({ ...state, [name]: value })}`),
+    onclick: (e) => {
+      if (e.button || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+      e.preventDefault();
+      state[name] = value;
+      state.page = 0;
+      renderFilters();
+      render();
+    } }, content);
+}
+
 const COLUMNS = [
   { key: "protx", label: "ProTx", get: (m) => m.protx,
     cell: (m) => el("td", {}, el("a", { class: "mono", href: href(`/mn/${m.protx}`), text: shortHash(m.protx) }), " ",
-      evoPill(m)) },
+      m.type === "Evo" ? filterLink("type", m.type, evoPill(m)) : null) },
   { key: "service", label: "Address", get: (m) => m.service || "", cell: (m) => el("td", { class: "mono", text: m.service || "–" }) },
   { key: "country", label: "Country", get: (m) => countryName(m.country),
-    cell: (m) => el("td", { title: countryName(m.country), text: m.country ? `${flag(m.country)} ${m.country}` : "–" }) },
+    cell: (m) => el("td", { title: countryName(m.country) }, m.country ? filterLink("country", m.country, `${flag(m.country)} ${m.country}`) : "–") },
   { key: "as_org", label: "Hosting", get: (m) => m.as_org || "",
     cell: (m) => el("td", { title: m.asn ? `AS${m.asn} ${m.as_org || ""}` : "", style: { maxWidth: "180px", overflow: "hidden", textOverflow: "ellipsis" } },
-      m.as_org ? el("a", { class: "quiet", href: href(`/masternodes?host=${encodeURIComponent(m.as_org)}`), text: m.as_org }) : "–") },
+      m.as_org ? filterLink("host", m.as_org, m.as_org) : "–") },
   { key: "version", label: "Version", get: (m) => m.version || "",
-    cell: (m) => el("td", { title: m.user_agent || "", text: m.version || "–" }) },
+    cell: (m) => el("td", { title: m.user_agent || "" }, m.version ? filterLink("version", m.version, m.version) : "–") },
   { key: "protocol", label: "Protocol", r: true, get: (m) => m.protocol ?? -1, cell: (m) => el("td", { class: "r", text: m.protocol ?? "–" }) },
   { key: "state", label: "Status", get: (m) => `${nodeStatus(m)[1]} ${registration(m)}`,
-    cell: (m) => { const [k, l] = nodeStatus(m); return el("td", { title: m.last_error || (m.last_seen ? `last answered ${ago(m.last_seen)}` : "") }, badge(k, l), " ", poseBadge(m)); } },
+    cell: (m) => {
+      const [k, l] = nodeStatus(m);
+      const pose = poseBadge(m);
+      return el("td", { title: m.last_error || (m.last_seen ? `last answered ${ago(m.last_seen)}` : "") },
+        filterLink("reach", l, badge(k, l)), " ", pose ? filterLink("status", registration(m), pose) : null);
+    } },
   { key: "uptime_7d", label: "Uptime 7d", r: true, get: (m) => m.uptime_7d ?? -1, cell: (m) => el("td", { class: "r" }, uptimeBadge(m.uptime_7d)) },
   { key: "uptime_30d", label: "30d", r: true, get: (m) => m.uptime_30d ?? -1, cell: (m) => el("td", { class: "r" }, uptimeBadge(m.uptime_30d)) },
   { key: "last_paid_height", label: "Last paid", r: true, get: (m) => m.last_paid_height || 0,
