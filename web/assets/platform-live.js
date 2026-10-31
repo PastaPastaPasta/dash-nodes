@@ -1,7 +1,7 @@
 // An evonode's Platform data straight from Platform, proof-checked in the browser by Dash's SDK
 // (@dashevo/evo-sdk, served from /assets/vendor). Loaded by mn.js only on evonode pages, after the
 // rest of the page, since the SDK is a 9 MB download.
-import { el, fmt, credits, dateTime, ago, badge } from "./common.js";
+import { el, fmt, credits, dateTime, ago, badge, kv, labelled } from "./common.js";
 
 const SDK = "/assets/vendor/evo-sdk-5.0.1/evo-sdk.module.js";
 /** The withdrawals system contract and its document type. */
@@ -77,10 +77,9 @@ export async function live(box, net, protx, server) {
   ];
   const before = earlier(balance, withdrawals, server);
   if (before) rows.push(before);
-  const kv = el("table", { class: "data kv" }, el("tbody", {}, ...rows.map(([k, v]) => el("tr", {}, el("td", { text: k }), el("td", {}, v)))));
   const list = withdrawals.status === "fulfilled" ? withdrawalTable(withdrawals.value)
     : el("p", { class: "muted", text: `Couldn't list withdrawals: ${message(withdrawals.reason)}` });
-  box.replaceChildren(kv, el("h3", { class: "section", text: "Withdrawals" }), list,
+  box.replaceChildren(kv(rows), el("h3", { class: "section", text: "Withdrawals" }), list,
     el("p", { class: "muted small", text: `Checked against Platform's proofs in your browser ${ago(Date.now() / 1000)}, in ${((performance.now() - started) / 1000).toFixed(1)} s. ` +
       "Withdrawals move credits from the masternode identity to its payout address on Core; each costs a small fee." }));
 }
@@ -130,10 +129,8 @@ function withdrawalTable(list) {
       el("thead", {}, el("tr", {}, ...heads.map((h, i) => el("th", { class: i === 1 ? "r" : null, text: h })))),
       el("tbody", {}, ...list.slice(0, 50).map((w) => {
         const [kind, label] = STATUS[w.status] || ["none", `Status ${w.status}`];
-        const cells = [el("td", { text: dateTime(w.$createdAt / 1000) }), el("td", { class: "r", text: credits(Number(w.amount), 4) }),
-          el("td", {}, badge(kind, label)), el("td", { text: w.$updatedAt ? dateTime(w.$updatedAt / 1000) : "–" })];
-        cells.forEach((c, i) => { c.dataset.label = heads[i]; });
-        return el("tr", {}, ...cells);
+        return labelled(heads, el("tr", {}, el("td", { text: dateTime(w.$createdAt / 1000) }), el("td", { class: "r", text: credits(Number(w.amount)) }),
+          el("td", {}, badge(kind, label)), el("td", { text: w.$updatedAt ? dateTime(w.$updatedAt / 1000) : "–" })));
       })))));
 }
 

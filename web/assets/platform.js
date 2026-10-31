@@ -1,16 +1,16 @@
 // /platform: Platform rewards across the network (the crawler's rewards.rs, /api/v1/{net}/platform).
-import { api, chrome, currentNet, el, fmt, pct, href, ago, dateTime, amount, inAbout, shortHash, badge, segmented, searchBox, CREDITS_PER_DASH } from "./common.js";
-import { svg, sized, axisStep } from "./charts.js";
+import { api, chrome, currentNet, el, fmt, pct, href, ago, dateTime, amount, inAbout, shortHash, badge, segmented, searchBox, toDash, labelled } from "./common.js";
+import { svg, sized, axisScale, valueAxis, epochAxis } from "./charts.js";
 
 chrome("platform");
 const net = currentNet();
 const $ = (id) => document.getElementById(id);
 let doc;
 
-const dashOf = (c) => c / CREDITS_PER_DASH;
 const days = (s) => s / 86400;
 const stat = (label, value, note, tone) =>
   el("div", { class: tone ? `stat-${tone}` : null }, el("dt", { text: label }), el("dd", { class: "num" }, value, note ? el("small", { text: note }) : null));
+const noPort = (service) => service.replace(/:\d+$/, "");
 const mnLink = (protx, text = shortHash(protx)) => el("a", { class: "mono", href: href(`/mn/${protx}`), text });
 
 // ---- the current epoch ----
@@ -100,7 +100,7 @@ function renderNext() {
   $("next-list").replaceChildren(...s.next.slice(0, 12).map((x) => {
     const e = byProtx.get(x.protx);
     return el("li", {}, el("span", { class: "slot num", text: `+${x.slots}` }),
-      el("span", { class: "who" }, mnLink(x.protx), e?.service ? el("small", { class: "muted mono", text: e.service.replace(/:\d+$/, "") }) : null),
+      el("span", { class: "who" }, mnLink(x.protx), e?.service ? el("small", { class: "muted mono", text: noPort(e.service) }) : null),
       el("span", { class: "when", text: inAbout(x.eta) }));
   }));
   $("next").hidden = false;
@@ -113,22 +113,16 @@ function spreadChart(box, epochs) {
   const list = [...epochs].reverse().filter((e) => e.credits_spread.p50 != null);
   sized(box, (W) => {
     const H = 220, L = 40, B = 22, T = 8;
-    const top = Math.max(...list.map((e) => dashOf(e.credits_spread.p90))) || 1;
-    const step = axisStep(top, 4);
-    const max = Math.ceil(top / step) * step;
+    const { step, max } = axisScale(Math.max(...list.map((e) => toDash(e.credits_spread.p90))) || 1, 4);
     const slot = (W - L) / Math.max(1, list.length);
-    const y = (c) => T + (H - T - B) * (1 - dashOf(c) / max);
+    const row = (v) => T + (H - T - B) * (1 - v / max);
+    const y = (c) => row(toDash(c));
+    const center = (i) => L + slot * i + slot / 2;
     const root = svg("svg", { viewBox: `0 0 ${W} ${H}`, width: W, height: H, class: "spread", role: "img",
       "aria-label": `Per-epoch rewards of the middle 80% of evonodes, epochs ${list[0]?.epoch}–${list.at(-1)?.epoch}` });
-    for (let v = 0; v <= max + 1e-9; v += step) {
-      const yy = T + (H - T - B) * (1 - v / max);
-      root.append(svg("line", { x1: L, x2: W, y1: yy, y2: yy, class: v ? "gridline" : "baseline" }));
-      const t = svg("text", { x: L - 6, y: yy + 4, "text-anchor": "end", class: "tick" });
-      t.textContent = +v.toFixed(2);
-      root.append(t);
-    }
+    valueAxis(root, { L, W, step, max, row });
     list.forEach((e, i) => {
-      const x = L + slot * i + slot / 2, w = Math.max(2, Math.min(14, slot * 0.6));
+      const x = center(i), w = Math.max(2, Math.min(14, slot * 0.6));
       const s = e.credits_spread;
       const g = svg("g", { tabindex: 0 });
       const title = svg("title");
@@ -137,20 +131,14 @@ function spreadChart(box, epochs) {
         svg("rect", { x: x - w / 2 - 1, y: y(s.p50) - 1, width: w + 2, height: 2.5, class: "median" }));
       root.append(g);
     });
-    const every = Math.ceil(list.length / Math.max(2, Math.floor(W / 70)));
-    list.forEach((e, i) => {
-      if ((list.length - 1 - i) % every) return;
-      const t = svg("text", { x: L + slot * i + slot / 2, y: H - 6, "text-anchor": "middle", class: "tick" });
-      t.textContent = e.epoch;
-      root.append(t);
-    });
+    epochAxis(root, list, { W, x: center, y: H - 6 });
     return root;
   });
 }
 
 const EPOCH_HEADS = ["Epoch", "Started", "Length", "Blocks", "Evonodes paid", "Pool", "Per block", "Median evonode"];
 function epochRow(e) {
-  const cells = [
+  return labelled(EPOCH_HEADS, el("tr", {},
     el("td", { class: "num", text: fmt(e.epoch) }),
     el("td", { text: dateTime(e.start) }),
     el("td", { class: "r", text: e.duration >= 86400 ? `${days(e.duration).toFixed(2)} d` : `${Math.round(e.duration / 60)} min` }),
@@ -158,10 +146,7 @@ function epochRow(e) {
     el("td", { class: "r", text: fmt(e.proposers) }),
     el("td", { class: "r", title: `Core block rewards ${amount(e.core_rewards)}, fees ${amount(e.fees)}`, text: amount(e.pool) }),
     el("td", { class: "r", text: amount(e.per_block) }),
-    el("td", { class: "r", text: e.credits_spread.p50 != null ? amount(e.credits_spread.p50) : "–" }),
-  ];
-  cells.forEach((c, i) => { c.dataset.label = EPOCH_HEADS[i]; });
-  return el("tr", {}, ...cells);
+    el("td", { class: "r", text: e.credits_spread.p50 != null ? amount(e.credits_spread.p50) : "–" })));
 }
 
 function renderEpochs() {
@@ -191,7 +176,7 @@ function renderEpochs() {
 const SHOW = [["all", "All"], ["proposed", "Proposed this epoch"], ["idle", "Not in a validator set"], ["pending", "Upgraded, vote not counted"]];
 const COLUMNS = [
   { key: "protx", label: "Evonode", get: (e) => e.protx, cell: (e) => el("td", {}, mnLink(e.protx), e.status !== "enabled" ? [" ", badge("serious", "PoSe-banned")] : null,
-    e.service ? el("small", { class: "under mono", text: e.service.replace(/:\d+$/, "") }) : null) },
+    e.service ? el("small", { class: "under mono", text: noPort(e.service) }) : null) },
   { key: "epoch_blocks", label: "Blocks this epoch", r: true, get: (e) => e.epoch_blocks, cell: (e) => el("td", { class: "r", text: fmt(e.epoch_blocks) }) },
   { key: "last_epoch", label: "Last epoch", r: true, get: (e) => e.last_epoch,
     cell: (e) => el("td", { class: "r" }, amount(e.last_epoch), el("small", { class: "under", text: `${fmt(e.last_blocks)} blocks` })) },
@@ -230,11 +215,8 @@ function renderAll() {
       "aria-sort": state.sort === c.key ? (state.dir > 0 ? "ascending" : "descending") : null,
       onclick: () => sortBy(c.key), onkeydown: (ev) => (ev.key === "Enter" || ev.key === " ") && (ev.preventDefault(), sortBy(c.key)),
     })));
-    const rows = list.slice(state.page * PAGE, (state.page + 1) * PAGE).map((e) => {
-      const tr = el("tr", {}, ...COLUMNS.map((c) => c.cell(e)));
-      [...tr.children].forEach((td, i) => { td.dataset.label = COLUMNS[i].label; });
-      return tr;
-    });
+    const labels = COLUMNS.map((c) => c.label);
+    const rows = list.slice(state.page * PAGE, (state.page + 1) * PAGE).map((e) => labelled(labels, el("tr", {}, ...COLUMNS.map((c) => c.cell(e)))));
     $("all-table").replaceChildren(el("thead", {}, head), el("tbody", {}, ...(rows.length ? rows
       : [el("tr", {}, el("td", { colspan: COLUMNS.length, class: "empty", text: "No evonode matches." }))])));
     $("all-pager").replaceChildren(

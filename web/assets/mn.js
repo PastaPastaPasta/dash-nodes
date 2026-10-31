@@ -1,6 +1,6 @@
 import { api, chrome, currentNet, NETWORKS, el, fmt, pct, href, countryName, flag, place, badge, ago, dateTime, dash, nodeStatus, poseBadge, uptimeKind, tile, card,
-  changeText, changeKind, DKG_CHECKS, DKG_OVERALL, blockSpan, blocks, blocksIn, behind, heightWhen, credits, amount, inAbout, CREDITS_PER_DASH } from "./common.js";
-import { svg, sized, axisStep } from "./charts.js";
+  changeText, changeKind, DKG_CHECKS, DKG_OVERALL, blockSpan, blocks, blocksIn, behind, heightWhen, credits, amount, inAbout, toDash, labelled, kv } from "./common.js";
+import { svg, sized, axisScale, valueAxis, epochAxis } from "./charts.js";
 
 chrome("masternodes");
 const net = currentNet();
@@ -10,11 +10,6 @@ const root = document.getElementById("main");
 // Blockchair covers mainnet only; on testnet values are shown without explorer links.
 const explorer = net === "mainnet" ? "https://blockchair.com/dash" : null;
 const link = (kind, id, text = id) => (explorer && id ? el("a", { class: "mono", href: `${explorer}/${kind}/${id}`, rel: "noopener", text }) : el("span", { class: "mono", text: text ?? "–" }));
-
-function kv(rows) {
-  return el("table", { class: "data kv" }, el("tbody", {}, ...rows.filter(Boolean).map(([k, v]) =>
-    el("tr", {}, el("td", { text: k }), el("td", {}, v ?? "–")))));
-}
 
 function statusOf(m) {
   return m.removed ? ["none", "Unregistered"] : nodeStatus(m, "Not checked yet");
@@ -304,7 +299,7 @@ function earnedTile(m) {
   const p = m.platform_rewards;
   // An evonode also earns Platform rewards: Core and Platform side by side, and the yield of both.
   if (p?.totals) {
-    const platform = p.totals.d90 / CREDITS_PER_DASH, core = r.paid_90d / 1e8;
+    const platform = toDash(p.totals.d90), core = r.paid_90d / 1e8;
     const y = r.annual_yield != null && p.annual_yield != null ? `≈ ${pct(r.annual_yield + p.annual_yield)} a year on 4,000 DASH`
       : m.removed ? "no longer in the list" : "too new to tell its yield";
     return tile(label, `${(core + platform).toLocaleString("en-US", { maximumFractionDigits: 2 })} DASH`,
@@ -317,7 +312,6 @@ function earnedTile(m) {
 
 // ---- Platform rewards (evonodes) ----
 
-const toDash = (c) => c / CREDITS_PER_DASH;
 const ordinal = (n) => `${fmt(n)}${["th", "st", "nd", "rd"][(n % 100 > 10 && n % 100 < 14) || n % 10 > 3 ? 0 : n % 10]}`;
 
 /**
@@ -391,15 +385,11 @@ function rankStrip(p) {
   return wrap;
 }
 
-function rewardsKv(rows) {
-  return el("table", { class: "data kv" }, el("tbody", {}, ...rows.filter(Boolean).map(([k, v]) => el("tr", {}, el("td", { text: k }), el("td", {}, v ?? "–")))));
-}
-
 function earnedTable(m, p) {
   const t = p.totals, x = p.explorer;
   // Platform Explorer counts from the same epoch records, so it should match ours to the credit.
   const beyond = x?.before_ours > 1e8 ? x.before_ours : null;
-  return el("div", {}, el("h3", { text: "Earned on Platform" }), rewardsKv([
+  return el("div", {}, el("h3", { text: "Earned on Platform" }), kv([
     ["Last 30 days", amount(t.d30)],
     ["Last 90 days", amount(t.d90)],
     ["Last 365 days", amount(t.d365)],
@@ -419,7 +409,7 @@ function estimateTable(m, p) {
   const c = p.current;
   const watched = c?.turns;
   const missed30 = p.turns_30d;
-  return el("div", {}, el("h3", { text: "Estimates" }), rewardsKv([
+  return el("div", {}, el("h3", { text: "Estimates" }), kv([
     ["Platform, a month", el("span", {}, amount(p.monthly), el("span", { class: "muted", text: ` at its pace of the last ${Math.round(p.monthly_basis_days || 0)} days` }))],
     ["Core, a month", coreMonthly != null ? el("span", {}, `${(coreMonthly / 1e8).toFixed(2)} DASH`, el("span", { class: "muted", text: ` from its payments over ${r.window_days} days` })) : null],
     coreMonthly != null ? ["Both, a month", el("span", {}, `≈ ${(toDash(p.monthly) + coreMonthly / 1e8).toFixed(2)} DASH`)] : null,
@@ -447,19 +437,11 @@ function epochHistory(p) {
   const box = el("div", { class: "chart" });
   sized(box, (W) => {
     const H = 150, B = 20, L = 34;
-    const top = Math.max(...list.map((e) => toDash(e.credits))) || 1;
-    const step = axisStep(top);
-    const max = Math.ceil(top / step) * step;
+    const { step, max } = axisScale(Math.max(...list.map((e) => toDash(e.credits))) || 1);
     const slot = (W - L) / list.length;
     const chart = svg("svg", { viewBox: `0 0 ${W} ${H}`, width: W, height: H, class: "epoch-bars", role: "img",
       "aria-label": `Platform rewards per epoch, epochs ${list[0].epoch}–${list.at(-1).epoch}` });
-    for (let v = 0; v <= max + 1e-9; v += step) {
-      const y = (H - B) * (1 - v / max);
-      chart.append(svg("line", { x1: L, x2: W, y1: y, y2: y, class: v ? "gridline" : "baseline" }));
-      const tx = svg("text", { x: L - 6, y: y + 4, "text-anchor": "end", class: "tick" });
-      tx.textContent = +v.toFixed(2);
-      chart.append(tx);
-    }
+    valueAxis(chart, { L, W, step, max, row: (v) => (H - B) * (1 - v / max) });
     list.forEach((e, i) => {
       const h = ((H - B) * toDash(e.credits)) / max;
       const r = svg("rect", { x: L + i * slot + slot * 0.15, y: H - B - h, width: Math.max(1, slot * 0.7), height: Math.max(e.credits ? 1 : 0, h), rx: 1.5, tabindex: 0 });
@@ -468,13 +450,7 @@ function epochHistory(p) {
       r.append(tt);
       chart.append(r);
     });
-    const every = Math.ceil(list.length / Math.max(2, Math.floor(W / 70)));
-    list.forEach((e, i) => {
-      if ((list.length - 1 - i) % every) return;
-      const tx = svg("text", { x: L + i * slot + slot / 2, y: H - 4, "text-anchor": "middle", class: "tick" });
-      tx.textContent = e.epoch;
-      chart.append(tx);
-    });
+    epochAxis(chart, list, { W, x: (i) => L + i * slot + slot / 2, y: H - 4 });
     return chart;
   });
   const heads = ["Epoch", "Started", "Blocks", "Share", "Earned", "Rank"];
@@ -585,16 +561,6 @@ function platformSection(m) {
     box.append(el("p", { class: "muted small", text: `Healthy in ${pct(ok / at)} of ${n(at, "check")} over the last ${n(daily.length, "day")} (both endpoints answered, as this evonode).` }));
   }
   return box;
-}
-
-/** Gives each cell its column's name, which stacked tables show as the row label on phones. */
-function labelled(heads, tr) {
-  let i = 0;
-  for (const td of tr.children) {
-    td.dataset.label ||= heads[i];
-    i += Number(td.getAttribute("colspan") || 1);
-  }
-  return tr;
 }
 
 const GRADE_KIND = { A: "good", B: "good", C: "warning", D: "serious", F: "critical" };

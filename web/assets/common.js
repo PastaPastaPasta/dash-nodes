@@ -69,11 +69,12 @@ export const pct = (x, digits = 1) => (x == null ? "–" : `${(x * 100).toFixed(
 export const dash = (duffs) => (duffs == null ? "–" : `${(duffs / 1e8).toLocaleString("en-US", { maximumFractionDigits: 4 })} DASH`);
 
 /** Platform credits (1 DASH = 100,000,000,000 credits) as DASH: "6.4321 DASH". */
-export const CREDITS_PER_DASH = 1e11;
-export const credits = (c, digits = 4) => (c == null ? "–" : `${(c / CREDITS_PER_DASH).toLocaleString("en-US", { maximumFractionDigits: digits })} DASH`);
+const CREDITS_PER_DASH = 1e11;
+export const toDash = (c) => c / CREDITS_PER_DASH;
+export const credits = (c, digits = 4) => (c == null ? "–" : `${toDash(c).toLocaleString("en-US", { maximumFractionDigits: digits })} DASH`);
 /** Credits as DASH with as many decimals as the size needs: 2,317 DASH, 6.43 DASH, 0.0412 DASH. */
 export const amount = (c) => {
-  const d = Math.abs(c / CREDITS_PER_DASH);
+  const d = Math.abs(toDash(c));
   return credits(c, d >= 100 ? 0 : d >= 1 ? 2 : 4);
 };
 
@@ -333,6 +334,21 @@ export function tile(label, value, foot) {
 
 export function card(title, sub, body) {
   return el("section", { class: "card" }, el("div", { class: "card-head" }, el("h2", { text: title }), el("span", { class: "sub", text: sub })), body);
+}
+
+/** Gives each cell its column's name, which stacked tables show as the row label on phones. */
+export function labelled(heads, tr) {
+  let i = 0;
+  for (const td of tr.children) {
+    td.dataset.label ||= heads[i];
+    i += Number(td.getAttribute("colspan") || 1);
+  }
+  return tr;
+}
+
+/** A two-column table of [label, value] rows; falsy rows are skipped and a missing value shows "–". */
+export function kv(rows) {
+  return el("table", { class: "data kv" }, el("tbody", {}, ...rows.filter(Boolean).map(([k, v]) => el("tr", {}, el("td", { text: k }), el("td", {}, v ?? "–")))));
 }
 
 const SUN = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>`;

@@ -328,7 +328,7 @@ pub(crate) enum Field<'a> {
     Bytes(&'a [u8]),
 }
 
-pub(crate) fn varint(buf: &mut &[u8]) -> Option<u64> {
+fn varint(buf: &mut &[u8]) -> Option<u64> {
     let mut v = 0u64;
     for shift in (0..64).step_by(7) {
         let (&b, rest) = buf.split_first()?;
@@ -378,7 +378,7 @@ pub(crate) fn uint(buf: &[u8], num: u64) -> Option<u64> {
     })
 }
 
-pub(crate) fn text(buf: &[u8], num: u64) -> Option<String> {
+fn text(buf: &[u8], num: u64) -> Option<String> {
     msg(buf, num).and_then(|b| std::str::from_utf8(b).ok()).filter(|s| !s.is_empty()).map(str::to_owned)
 }
 

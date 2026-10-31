@@ -23,6 +23,7 @@ use rand::seq::SliceRandom;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::{Value, json};
 
+use crate::api::{median4, round_to, round4};
 use crate::db::{self, get_meta, query_all, set_meta};
 use crate::network::Network;
 use crate::platform::{self, Field, fields, msg, uint};
@@ -38,7 +39,7 @@ const MAX_ANSWER: usize = 16 << 20;
 /// Evonodes asked before giving up on two matching answers.
 const MAX_ASKED: usize = 6;
 /// Epoch lists published per masternode and in the network document (a testnet epoch is an hour).
-pub const EPOCHS_SHOWN: i64 = 120;
+const EPOCHS_SHOWN: i64 = 120;
 const CREDITS_PER_DASH: f64 = 1e11;
 const EVO_COLLATERAL_DASH: f64 = 4_000.0;
 const DAY: i64 = 86_400;
@@ -88,7 +89,7 @@ fn id32(b: &[u8]) -> Result<[u8; 32]> {
     b.try_into().map_err(|_| anyhow!("identifier of {} bytes", b.len()))
 }
 
-pub fn hex(b: &[u8]) -> String {
+fn hex(b: &[u8]) -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
 }
 
@@ -105,12 +106,12 @@ fn unhex(s: &str) -> Option<[u8; 32]> {
 
 /// ResponseMetadata: where the answering node's chain was.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct Meta {
-    pub height: u64,
-    pub core_height: u64,
-    pub epoch: u64,
-    pub time_ms: u64,
-    pub protocol_version: u64,
+struct Meta {
+    height: u64,
+    core_height: u64,
+    epoch: u64,
+    time_ms: u64,
+    protocol_version: u64,
 }
 
 fn meta(v0: &[u8], num: u64) -> Meta {
@@ -133,25 +134,25 @@ fn result(resp: &[u8]) -> Result<(&[u8], &[u8], Meta)> {
 
 /// One finalized epoch (FinalizedEpochInfo).
 #[derive(Clone, Debug, PartialEq)]
-pub struct Finalized {
-    pub epoch: u64,
-    pub first_block_height: u64,
-    pub first_core_height: u64,
-    pub first_block_time_ms: u64,
-    pub protocol_version: u64,
-    pub total_blocks: u64,
-    pub next_core_height: u64,
-    pub processing_fees: u64,
-    pub storage_fees: u64,
-    pub core_rewards: u64,
+struct Finalized {
+    epoch: u64,
+    first_block_height: u64,
+    first_core_height: u64,
+    first_block_time_ms: u64,
+    protocol_version: u64,
+    total_blocks: u64,
+    next_core_height: u64,
+    processing_fees: u64,
+    storage_fees: u64,
+    core_rewards: u64,
     /// (identity id = ProTx hash as displayed, blocks proposed).
-    pub proposers: Vec<([u8; 32], u64)>,
+    proposers: Vec<([u8; 32], u64)>,
 }
 
 impl Finalized {
     /// What Drive paid out for the epoch: processing fees, the epoch's share of storage fees, and
     /// the Core block rewards for its Core blocks.
-    pub fn pool(&self) -> u64 {
+    fn pool(&self) -> u64 {
         self.processing_fees + self.storage_fees + self.core_rewards
     }
 }
@@ -161,7 +162,7 @@ impl Finalized {
 /// total_blocks_in_epoch = 7, next_epoch_start_core_block_height = 8, total_processing_fees = 9,
 /// total_distributed_storage_fees = 10, core_block_rewards = 12, block_proposers = 13 [ { proposer_id
 /// = 1, block_count = 2 } ] } ] }, metadata = 3 }.
-pub fn parse_finalized(resp: &[u8]) -> Result<(Vec<Finalized>, Meta)> {
+fn parse_finalized(resp: &[u8]) -> Result<(Vec<Finalized>, Meta)> {
     let (_, epochs, meta) = result(resp)?;
     let mut out = Vec::new();
     for e in all(epochs, 1)? {
@@ -189,17 +190,17 @@ pub fn parse_finalized(resp: &[u8]) -> Result<(Vec<Finalized>, Meta)> {
 
 /// The current epoch (EpochInfo).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct Epoch {
-    pub epoch: u64,
-    pub first_block_height: u64,
-    pub first_core_height: u64,
-    pub start_ms: u64,
-    pub protocol_version: u64,
+struct Epoch {
+    epoch: u64,
+    first_block_height: u64,
+    first_core_height: u64,
+    start_ms: u64,
+    protocol_version: u64,
 }
 
 /// GetEpochsInfoResponse: v0 { epochs = 1 { epoch_infos = 1 [ { number = 1, first_block_height = 2,
 /// first_core_block_height = 3, start_time = 4, protocol_version = 6 } ] }, metadata = 3 }.
-pub fn parse_epochs(resp: &[u8]) -> Result<(Vec<Epoch>, Meta)> {
+fn parse_epochs(resp: &[u8]) -> Result<(Vec<Epoch>, Meta)> {
     let (_, epochs, meta) = result(resp)?;
     let list = all(epochs, 1)?
         .into_iter()
@@ -214,7 +215,7 @@ pub fn parse_epochs(resp: &[u8]) -> Result<(Vec<Epoch>, Meta)> {
     Ok((list, meta))
 }
 
-pub type Pairs = Vec<([u8; 32], Option<u64>)>;
+type Pairs = Vec<([u8; 32], Option<u64>)>;
 
 /// A list of (32-byte id, number) pairs, the shape of several answers: GetEvonodesProposedEpochBlocksResponse
 /// (v0 { evonodes_proposed_block_counts_info = 1 { evonodes_proposed_block_counts = 1 [ { pro_tx_hash = 1,
@@ -222,7 +223,7 @@ pub type Pairs = Vec<([u8; 32], Option<u64>)>;
 /// identity_id = 1, balance = 2 } ] } }; an identity without a balance has no field 2) and
 /// GetProtocolVersionUpgradeVoteStatusResponse (v0 { versions = 1 { version_signals = 1 [ {
 /// pro_tx_hash = 1, version = 2 } ] } }).
-pub fn parse_pairs(resp: &[u8]) -> Result<(Pairs, Meta)> {
+fn parse_pairs(resp: &[u8]) -> Result<(Pairs, Meta)> {
     let (_, list, meta) = result(resp)?;
     let mut out = Vec::new();
     for e in all(list, 1)? {
@@ -233,39 +234,39 @@ pub fn parse_pairs(resp: &[u8]) -> Result<(Pairs, Meta)> {
 
 /// GetProtocolVersionUpgradeStateResponse: v0 { versions = 1 { versions = 1 [ { version_number = 1,
 /// vote_count = 2 } ] }, metadata = 3 }. (version, votes), in the answer's order.
-pub fn parse_upgrade_state(resp: &[u8]) -> Result<(Vec<(u64, u64)>, Meta)> {
+fn parse_upgrade_state(resp: &[u8]) -> Result<(Vec<(u64, u64)>, Meta)> {
     let (_, list, meta) = result(resp)?;
     let out = all(list, 1)?.into_iter().map(|e| (uint(e, 1).unwrap_or(0), uint(e, 2).unwrap_or(0))).collect();
     Ok((out, meta))
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct Member {
+struct Member {
     /// As displayed, like every other id here: Drive's validator sets are keyed and ordered by these bytes.
-    pub pro_tx_hash: [u8; 32],
-    pub banned: bool,
+    pro_tx_hash: [u8; 32],
+    banned: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct ValidatorSet {
-    pub quorum_hash: Vec<u8>,
+struct ValidatorSet {
+    quorum_hash: Vec<u8>,
     /// Sorted by `pro_tx_hash`: Tenderdash's proposer order.
-    pub members: Vec<Member>,
+    members: Vec<Member>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct Quorums {
+struct Quorums {
     /// Every validator set's quorum hash, in Drive's rotation order.
-    pub order: Vec<Vec<u8>>,
-    pub current: Vec<u8>,
-    pub sets: Vec<ValidatorSet>,
-    pub last_proposer: [u8; 32],
+    order: Vec<Vec<u8>>,
+    current: Vec<u8>,
+    sets: Vec<ValidatorSet>,
+    last_proposer: [u8; 32],
 }
 
 /// GetCurrentQuorumsInfoResponse: v0 { quorum_hashes = 1 [], current_quorum_hash = 2, validator_sets = 3
 /// [ { quorum_hash = 1, members = 3 [ { pro_tx_hash = 1, is_banned = 3 } ] } ], last_block_proposer = 4,
 /// metadata = 5 }.
-pub fn parse_quorums(resp: &[u8]) -> Result<(Quorums, Meta)> {
+fn parse_quorums(resp: &[u8]) -> Result<(Quorums, Meta)> {
     let v0 = msg(resp, 1).ok_or_else(|| anyhow!("no v0 answer"))?;
     let mut sets = Vec::new();
     for s in all(v0, 3)? {
@@ -291,7 +292,7 @@ pub fn parse_quorums(resp: &[u8]) -> Result<(Quorums, Meta)> {
 /// (add_epoch_pool_to_proposers_payout_operations): in identifier order, `pool × blocks / total`
 /// rounded down, and the last proposer also gets what the divisions left over. Reward shares (none on
 /// mainnet) aren't deducted, so this is the evonode's gross.
-pub fn payouts(pool: u64, total_blocks: u64, proposers: &[([u8; 32], u64)]) -> Vec<([u8; 32], u64, u64)> {
+fn payouts(pool: u64, total_blocks: u64, proposers: &[([u8; 32], u64)]) -> Vec<([u8; 32], u64, u64)> {
     let mut sorted = proposers.to_vec();
     sorted.sort_by_key(|p| p.0);
     let mut remaining = pool;
@@ -315,7 +316,7 @@ pub fn payouts(pool: u64, total_blocks: u64, proposers: &[([u8; 32], u64)]) -> V
 /// Core block rewards Platform gets for Core blocks `from..=to` (rs-dpp
 /// epoch_core_reward_credits_for_distribution v0): 37.5% of the masternodes' 60% of the block subsidy,
 /// starting at 5 DASH and cut by 1/14 every `halving` blocks.
-pub fn core_rewards(from: u64, to: u64, halving: u64) -> u64 {
+fn core_rewards(from: u64, to: u64, halving: u64) -> u64 {
     const GENESIS: u64 = 112_500_000_000;
     if from > to || halving == 0 {
         return 0;
@@ -336,7 +337,7 @@ pub fn core_rewards(from: u64, to: u64, halving: u64) -> u64 {
 const CORE_HALVING: u64 = 210_240;
 
 /// Votes an upgrade needs at the epoch change: `1 + floor(active × 67 / 100)` (check_for_desired_protocol_upgrade).
-pub fn votes_required(active_evonodes: u64) -> u64 {
+fn votes_required(active_evonodes: u64) -> u64 {
     1 + active_evonodes * 67 / 100
 }
 
@@ -345,7 +346,7 @@ pub fn votes_required(active_evonodes: u64) -> u64 {
 /// rotation order (wrapping, never into the two oldest when there are more than ten), each in ProTx
 /// order. Banned members are skipped. Returns each evonode's first turn: (ProTx hash, blocks from now,
 /// 1 = the next block).
-pub fn schedule(q: &Quorums) -> Vec<([u8; 32], u64)> {
+fn schedule(q: &Quorums) -> Vec<([u8; 32], u64)> {
     let sets: HashMap<&[u8], &ValidatorSet> = q.sets.iter().map(|s| (s.quorum_hash.as_slice(), s)).collect();
     let order: Vec<&[u8]> = q.order.iter().map(Vec::as_slice).filter(|h| sets.contains_key(h)).collect();
     let mut out = Vec::new();
@@ -382,7 +383,7 @@ pub fn schedule(q: &Quorums) -> Vec<([u8; 32], u64)> {
 /// up to `to`, every unbanned member had one, and `blocks` blocks were made. If that's as many blocks
 /// as turns, everyone proposed; if it's one, only `to` did and the rest missed. Anything else can't be
 /// pinned on anyone. Returns (member, missed).
-pub fn turns_between(set: &ValidatorSet, from: &[u8; 32], to: &[u8; 32], blocks: u64) -> Option<Vec<([u8; 32], bool)>> {
+fn turns_between(set: &ValidatorSet, from: &[u8; 32], to: &[u8; 32], blocks: u64) -> Option<Vec<([u8; 32], bool)>> {
     if to <= from || blocks == 0 {
         return None;
     }
@@ -482,10 +483,8 @@ impl Peers {
         let mut error = None;
         for _ in 0..MAX_ASKED.min(self.list.len() + 1) {
             let addr = self.take();
-            let answer = match platform::unary(&self.client, addr, method, request, MAX_ANSWER).await {
-                Ok((m, _)) => parse(&m),
-                Err(e) => Err(e),
-            };
+            let answer =
+                platform::unary(&self.client, addr, method, request, MAX_ANSWER).await.and_then(|(m, _)| parse(&m));
             match answer {
                 Ok((t, m)) => {
                     if let Some((prev, pm, _)) = &last
@@ -510,18 +509,18 @@ impl Peers {
 /// The latest validator-set sample: who proposes when.
 #[derive(Clone, Debug, Default)]
 pub struct Schedule {
-    pub ts: i64,
-    pub height: u64,
-    pub epoch: u64,
+    ts: i64,
+    height: u64,
+    epoch: u64,
     /// Seconds per block the times below assume.
-    pub block_secs: f64,
+    block_secs: f64,
     /// Blocks until each evonode's next turn (ProTx as displayed → 1 for the next block).
-    pub slots: HashMap<String, u64>,
+    slots: HashMap<String, u64>,
 }
 
 impl Schedule {
     /// When `protx` is expected to propose next (unix time), if it's in a rotating validator set.
-    pub fn eta(&self, protx: &str) -> Option<i64> {
+    fn eta(&self, protx: &str) -> Option<i64> {
         self.slots.get(protx).map(|&s| self.ts + (s as f64 * self.block_secs).round() as i64)
     }
 }
@@ -569,12 +568,7 @@ async fn round(ctx: &NetCtx, client: &reqwest::Client, explorer: &reqwest::Clien
     // keeps its last values and is tried again next round.
     let stored = soft(net, "finished epochs", finalized(ctx, &mut peers, current.epoch).await);
     let blocks = soft(net, "blocks this epoch", epoch_blocks(&mut peers, current.epoch).await);
-    let ids: Vec<String> = ctx
-        .db
-        .read(|c| {
-            Ok(query_all(c, "SELECT protx FROM masternodes WHERE type = 'Evo' AND removed IS NULL", [], |r| r.get(0))?)
-        })
-        .await?;
+    let ids = ctx.db.read(registered_evonodes).await?;
     let balances = soft(net, "balances", balances(&mut peers, &ids).await);
     let versions = soft(
         net,
@@ -684,7 +678,7 @@ async fn finalized(ctx: &NetCtx, peers: &mut Peers, current: u64) -> Result<usiz
     Ok(stored)
 }
 
-pub fn store_finalized(c: &mut Connection, epochs: &[Finalized]) -> Result<()> {
+fn store_finalized(c: &mut Connection, epochs: &[Finalized]) -> Result<()> {
     let tx = c.transaction()?;
     {
         let mut ep = tx.prepare(
@@ -857,6 +851,17 @@ async fn sample(ctx: &NetCtx, client: &reqwest::Client, prev: Option<&(Quorums, 
     Ok((q, meta))
 }
 
+/// The newest finalized epoch that a later one followed: its blocks and its length in seconds.
+fn latest_span(c: &Connection) -> rusqlite::Result<Option<(i64, i64)>> {
+    c.query_row(
+        "SELECT e.total_blocks, n.first_block_time - e.first_block_time FROM platform_epochs e
+         JOIN platform_epochs n ON n.epoch = e.epoch + 1 ORDER BY e.epoch DESC LIMIT 1",
+        [],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )
+    .optional()
+}
+
 /// Seconds per Platform block: over the current epoch so far once it has some blocks, else over the
 /// latest finalized epoch, else a typical value.
 fn block_secs(c: &Connection, net: Network, height: u64, time: u64) -> Result<f64> {
@@ -867,15 +872,7 @@ fn block_secs(c: &Connection, net: Network, height: u64, time: u64) -> Result<f6
     {
         return Ok((time - start) as f64 / (height - first) as f64);
     }
-    let last: Option<(i64, i64)> = c
-        .query_row(
-            "SELECT e.total_blocks, n.first_block_time - e.first_block_time FROM platform_epochs e
-             JOIN platform_epochs n ON n.epoch = e.epoch + 1 ORDER BY e.epoch DESC LIMIT 1",
-            [],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        )
-        .optional()?;
-    Ok(match last {
+    Ok(match latest_span(c)? {
         Some((blocks, secs)) if blocks > 0 && secs > 0 => secs as f64 / blocks as f64,
         _ if net == Network::Mainnet => 140.0,
         _ => 10.0,
@@ -957,7 +954,7 @@ async fn explorer_total(client: &reqwest::Client, protx: &str) -> Result<(Option
     Ok(parse_explorer(&v))
 }
 
-pub fn parse_explorer(v: &Value) -> (Option<u64>, Option<u64>) {
+fn parse_explorer(v: &Value) -> (Option<u64>, Option<u64>) {
     // Numbers, or numeric strings for the big ones.
     let num = |x: &Value| x.as_u64().or_else(|| x.as_str().and_then(|s| s.parse().ok()));
     (num(&v["totalReward"]), num(&v["epochInfo"]["number"]))
@@ -965,8 +962,13 @@ pub fn parse_explorer(v: &Value) -> (Option<u64>, Option<u64>) {
 
 // ---- what the API serves -------------------------------------------------------------------------
 
+/// The ProTx hashes of every registered evonode.
+fn registered_evonodes(c: &Connection) -> Result<Vec<String>> {
+    Ok(query_all(c, "SELECT protx FROM masternodes WHERE type = 'Evo' AND removed IS NULL", [], |r| r.get(0))?)
+}
+
 /// The current epoch as the collector last read it (see `round`).
-pub fn current(c: &Connection) -> Result<Option<Value>> {
+fn current(c: &Connection) -> Result<Option<Value>> {
     Ok(get_meta(c, NOW_KEY)?.and_then(|s| serde_json::from_str(&s).ok()))
 }
 
@@ -1002,7 +1004,7 @@ fn first_paid_since(c: &Connection, current_start: i64, since: i64) -> Result<Op
         .optional()?;
     Ok(match next {
         Some(e) => Some(e - 1),
-        None => c.query_row("SELECT max(epoch) FROM platform_epochs", [], |r| r.get(0))?,
+        None => latest_finalized(c)?,
     })
 }
 
@@ -1058,13 +1060,30 @@ pub fn platform_yields(c: &Connection, since: i64) -> Result<(HashMap<String, f6
 }
 
 /// One evonode's Platform yield since `since`; None without finished epochs in that time.
-pub fn platform_yield(c: &Connection, protx: &str, since: i64) -> Result<Option<f64>> {
+fn platform_yield(c: &Connection, protx: &str, since: i64) -> Result<Option<f64>> {
     let (y, span) = yields(c, since, Some(protx))?;
     Ok((span > 0.0).then(|| y.get(protx).copied().unwrap_or(0.0)))
 }
 
+/// When the current epoch started (unix seconds); now, before the first read.
+fn epoch_start(now: Option<&Value>) -> i64 {
+    now.and_then(|n| n["start"].as_i64()).unwrap_or_else(db::now)
+}
+
 fn current_start(c: &Connection) -> Result<i64> {
-    Ok(current(c)?.and_then(|n| n["start"].as_i64()).unwrap_or_else(db::now))
+    Ok(epoch_start(current(c)?.as_ref()))
+}
+
+/// The newest finalized epoch.
+fn latest_finalized(c: &Connection) -> Result<Option<i64>> {
+    Ok(c.query_row("SELECT max(epoch) FROM platform_epochs", [], |r| r.get(0))?)
+}
+
+/// Blocks each evonode has proposed so far in `epoch`.
+fn blocks_in<C: FromIterator<(String, i64)>>(c: &Connection, epoch: Option<i64>) -> Result<C> {
+    Ok(query_all(c, "SELECT protx, blocks FROM platform_epoch_blocks WHERE epoch = ?1", [epoch], |r| {
+        Ok((r.get(0)?, r.get(1)?))
+    })?)
 }
 
 /// Each evonode's monthly Platform rewards at the pace of the last six finished epochs, and their span in days.
@@ -1104,17 +1123,14 @@ struct Board {
 
 fn board(c: &Connection) -> Result<Board> {
     let now = current(c)?;
-    let start = now.as_ref().and_then(|n| n["start"].as_i64()).unwrap_or_else(db::now);
-    let last_epoch: Option<i64> = c.query_row("SELECT max(epoch) FROM platform_epochs", [], |r| r.get(0))?;
-    let last =
-        query_all(c, "SELECT protx, blocks, credits FROM platform_payouts WHERE epoch = ?1", [last_epoch], |r| {
-            Ok((r.get(0)?, (r.get(1)?, r.get(2)?)))
-        })?;
-    let cur_epoch = now.as_ref().and_then(|n| n["epoch"].as_i64());
-    let epoch_blocks: HashMap<String, i64> =
-        query_all(c, "SELECT protx, blocks FROM platform_epoch_blocks WHERE epoch = ?1", [cur_epoch], |r| {
-            Ok((r.get(0)?, r.get(1)?))
-        })?;
+    let start = epoch_start(now.as_ref());
+    let last = query_all(
+        c,
+        "SELECT protx, blocks, credits FROM platform_payouts WHERE epoch = ?1",
+        [latest_finalized(c)?],
+        |r| Ok((r.get(0)?, (r.get(1)?, r.get(2)?))),
+    )?;
+    let epoch_blocks: HashMap<String, i64> = blocks_in(c, now.as_ref().and_then(|n| n["epoch"].as_i64()))?;
     Ok(Board {
         last,
         d30: earned_since(c, start, db::now() - 30 * DAY)?,
@@ -1131,9 +1147,7 @@ fn board(c: &Connection) -> Result<Board> {
 /// days, blocks this epoch, and when it proposes next.
 pub fn list_fields(c: &Connection, schedule: Option<&Schedule>) -> Result<HashMap<String, Value>> {
     let b = board(c)?;
-    let ids: Vec<String> =
-        query_all(c, "SELECT protx FROM masternodes WHERE type = 'Evo' AND removed IS NULL", [], |r| r.get(0))?;
-    Ok(ids
+    Ok(registered_evonodes(c)?
         .into_iter()
         .map(|p| {
             let v = json!({
@@ -1292,20 +1306,17 @@ fn network_returns(c: &Connection, start: i64) -> Result<Value> {
     let mut m: Vec<i64> = monthly.into_values().collect();
     m.sort_unstable();
     let (yields, span) = platform_yields(c, db::now() - 90 * DAY)?;
-    let mut y: Vec<f64> = yields.into_values().collect();
-    y.sort_by(f64::total_cmp);
     Ok(json!({
         "median_monthly": quantile(&m, 0.5), "monthly_basis_days": basis, "evonodes_paid": m.len(),
-        "median_platform_yield": (!y.is_empty()).then(|| (y[y.len() / 2] * 1e4).round() / 1e4), "yield_span_days": span,
+        "median_platform_yield": median4(yields.into_values().collect()), "yield_span_days": span,
     }))
 }
 
 /// An evonode's Platform rewards for its page.
 pub fn mn_json(c: &Connection, protx: &str, schedule: Option<&Schedule>, window_days: i64) -> Result<Value> {
     let now = current(c)?;
-    let start = now.as_ref().and_then(|n| n["start"].as_i64()).unwrap_or_else(db::now);
-    let max_epoch: Option<i64> = c.query_row("SELECT max(epoch) FROM platform_epochs", [], |r| r.get(0))?;
-    let Some(max_epoch) = max_epoch else { return Ok(Value::Null) };
+    let start = epoch_start(now.as_ref());
+    let Some(max_epoch) = latest_finalized(c)? else { return Ok(Value::Null) };
     let from = max_epoch - EPOCHS_SHOWN + 1;
     // Each epoch's reward and its rank by credits among the epoch's proposers.
     let epochs: Vec<Value> = query_all(
@@ -1362,10 +1373,7 @@ pub fn mn_json(c: &Connection, protx: &str, schedule: Option<&Schedule>, window_
     let (monthly_map, basis) = monthly(c, start)?;
     // The current epoch so far.
     let cur_epoch = now.as_ref().and_then(|n| n["epoch"].as_i64());
-    let blocks: Vec<(String, i64)> =
-        query_all(c, "SELECT protx, blocks FROM platform_epoch_blocks WHERE epoch = ?1", [cur_epoch], |r| {
-            Ok((r.get(0)?, r.get(1)?))
-        })?;
+    let blocks: Vec<(String, i64)> = blocks_in(c, cur_epoch)?;
     let total: i64 = blocks.iter().map(|b| b.1).sum();
     let mine = blocks.iter().find(|b| b.0 == protx).map_or(0, |b| b.1);
     let rank = blocks.iter().filter(|b| b.1 > mine).count() + 1;
@@ -1390,7 +1398,7 @@ pub fn mn_json(c: &Connection, protx: &str, schedule: Option<&Schedule>, window_
         Some(e) => {
             let mut t = turns(e, e)?;
             if let Some(share) = t["expected_share"].as_f64() {
-                t["expected_blocks"] = json!((share * total as f64 * 10.0).round() / 10.0);
+                t["expected_blocks"] = json!(round_to(share * total as f64, 1));
             }
             json!({
                 "epoch": e, "blocks": mine, "blocks_total": total, "proposers": blocks.len(), "rank": (mine > 0).then_some(rank),
@@ -1399,27 +1407,6 @@ pub fn mn_json(c: &Connection, protx: &str, schedule: Option<&Schedule>, window_
         }
         None => Value::Null,
     };
-    // Finalized epochs we watched in full enough to say how many blocks it should have made.
-    let watched: Vec<Value> = query_all(
-        c,
-        "SELECT t.epoch, t.memberships, s.memberships, e.total_blocks, coalesce(p.blocks, 0), t.turns, t.missed, s.samples,
-                n.first_block_time - e.first_block_time
-         FROM platform_turns t JOIN platform_turn_samples s ON s.epoch = t.epoch JOIN platform_epochs e ON e.epoch = t.epoch
-         JOIN platform_epochs n ON n.epoch = t.epoch + 1
-         LEFT JOIN platform_payouts p ON p.epoch = t.epoch AND p.protx = t.protx
-         WHERE t.protx = ?1 ORDER BY t.epoch DESC LIMIT 12",
-        [protx],
-        |r| {
-            let (mem, all, total, actual): (i64, i64, i64, i64) = (r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?);
-            let (samples, secs): (i64, i64) = (r.get(7)?, r.get(8)?);
-            let coverage = samples as f64 * QUORUM_INTERVAL.as_secs_f64() / secs.max(1) as f64;
-            Ok(json!({
-                "epoch": r.get::<_, i64>(0)?, "expected": (all > 0).then(|| (mem as f64 / all as f64 * total as f64 * 10.0).round() / 10.0),
-                "actual": actual, "turns": r.get::<_, i64>(5)?, "missed": r.get::<_, i64>(6)?,
-                "coverage": (coverage.min(1.0) * 100.0).round() / 100.0,
-            }))
-        },
-    )?;
     let last30 = cur_epoch.map(|e| e - 30 * DAY / epoch_secs_hint(c, &now).max(1)).unwrap_or(0);
     let balance: Option<(Option<i64>, i64)> = c
         .query_row("SELECT credits, ts FROM platform_balances WHERE protx = ?1", [protx], |r| {
@@ -1435,28 +1422,6 @@ pub fn mn_json(c: &Connection, protx: &str, schedule: Option<&Schedule>, window_
     let vote: Option<(i64, i64)> = c
         .query_row("SELECT version, ts FROM platform_votes WHERE protx = ?1", [protx], |r| Ok((r.get(0)?, r.get(1)?)))
         .optional()?;
-    let explorer: Option<(Option<i64>, Option<i64>, i64)> = c
-        .query_row("SELECT total_reward, epoch, fetched FROM platform_explorer WHERE protx = ?1", [protx], |r| {
-            Ok((r.get(0)?, r.get(1)?, r.get(2)?))
-        })
-        .optional()?;
-    // Our own total over the epochs Platform Explorer had counted when asked. It reads the same epoch
-    // records, so the two should match; `before_ours` is anything it counts beyond them.
-    let explorer = match explorer {
-        Some((total, epoch, fetched)) => {
-            let ours: Option<i64> = match epoch {
-                Some(e) => c.query_row(
-                    "SELECT sum(credits) FROM platform_payouts WHERE protx = ?1 AND epoch < ?2",
-                    params![protx, e],
-                    |r| r.get(0),
-                )?,
-                None => None,
-            };
-            json!({"total_reward": total, "epoch": epoch, "fetched": fetched, "ours_to_then": ours.unwrap_or(0),
-                "before_ours": total.map(|t| (t - ours.unwrap_or(0)).max(0))})
-        }
-        None => Value::Null,
-    };
     Ok(json!({
         "first_epoch": first_epoch,
         "epochs": epochs,
@@ -1465,40 +1430,82 @@ pub fn mn_json(c: &Connection, protx: &str, schedule: Option<&Schedule>, window_
             "last_epoch_index": max_epoch,
             "d30": sum_since(30)?, "d90": sum_since(90)?, "d365": sum_since(365)?, "lifetime": lifetime, "epochs_paid": paid_epochs,
         },
-        "d30_percentile": (!all30.is_empty()).then(|| (below as f64 / all30.len() as f64 * 1000.0).round() / 1000.0),
+        "d30_percentile": (!all30.is_empty()).then(|| round_to(below as f64 / all30.len() as f64, 3)),
         "d30_of": all30.len(),
         "monthly": monthly_map.get(protx).copied().unwrap_or(0), "monthly_basis_days": basis,
-        "annual_yield": platform_yield(c, protx, db::now() - window_days * DAY)?.map(|y| (y * 1e4).round() / 1e4),
+        "annual_yield": platform_yield(c, protx, db::now() - window_days * DAY)?.map(round4),
         "current": current,
-        "watched": watched,
+        "watched": watched_json(c, protx)?,
         "turns_30d": turns(last30, cur_epoch.unwrap_or(0))?,
         "next": schedule.and_then(|s| s.slots.get(protx).map(|slot| json!({"slots": slot, "eta": s.eta(protx), "sampled": s.ts}))),
         "in_validator_sets": schedule.map(|s| s.slots.contains_key(protx)),
         "balance": balance.map(|(credits, ts)| json!({"credits": credits, "ts": ts})),
         "balance_history": history,
         "vote": vote.map(|(v, ts)| json!({"version": v, "ts": ts})),
-        "explorer": explorer,
+        "explorer": explorer_json(c, protx)?,
     }))
+}
+
+/// Platform Explorer's lifetime total for an evonode (third party), against our own total over the
+/// epochs it had counted when asked. It reads the same epoch records, so the two should match;
+/// `before_ours` is anything it counts beyond them.
+fn explorer_json(c: &Connection, protx: &str) -> Result<Value> {
+    let row: Option<(Option<i64>, Option<i64>, i64)> = c
+        .query_row("SELECT total_reward, epoch, fetched FROM platform_explorer WHERE protx = ?1", [protx], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+        })
+        .optional()?;
+    let Some((total, epoch, fetched)) = row else { return Ok(Value::Null) };
+    let ours: i64 = match epoch {
+        Some(e) => c
+            .query_row(
+                "SELECT sum(credits) FROM platform_payouts WHERE protx = ?1 AND epoch < ?2",
+                params![protx, e],
+                |r| r.get::<_, Option<i64>>(0),
+            )?
+            .unwrap_or(0),
+        None => 0,
+    };
+    Ok(json!({"total_reward": total, "epoch": epoch, "fetched": fetched, "ours_to_then": ours,
+        "before_ours": total.map(|t| (t - ours).max(0))}))
+}
+
+/// The finalized epochs we watched in full enough to say how many blocks the evonode should have made.
+fn watched_json(c: &Connection, protx: &str) -> Result<Vec<Value>> {
+    Ok(query_all(
+        c,
+        "SELECT t.epoch, t.memberships, s.memberships, e.total_blocks, coalesce(p.blocks, 0), t.turns, t.missed, s.samples,
+                n.first_block_time - e.first_block_time
+         FROM platform_turns t JOIN platform_turn_samples s ON s.epoch = t.epoch JOIN platform_epochs e ON e.epoch = t.epoch
+         JOIN platform_epochs n ON n.epoch = t.epoch + 1
+         LEFT JOIN platform_payouts p ON p.epoch = t.epoch AND p.protx = t.protx
+         WHERE t.protx = ?1 ORDER BY t.epoch DESC LIMIT 12",
+        [protx],
+        |r| {
+            let (mem, all, total, actual): (i64, i64, i64, i64) = (r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?);
+            let (samples, secs): (i64, i64) = (r.get(7)?, r.get(8)?);
+            let coverage = samples as f64 * QUORUM_INTERVAL.as_secs_f64() / secs.max(1) as f64;
+            Ok(json!({
+                "epoch": r.get::<_, i64>(0)?, "expected": (all > 0).then(|| round_to(mem as f64 / all as f64 * total as f64, 1)),
+                "actual": actual, "turns": r.get::<_, i64>(5)?, "missed": r.get::<_, i64>(6)?,
+                "coverage": round_to(coverage.min(1.0), 2),
+            }))
+        },
+    )?)
 }
 
 /// Seconds per epoch, for turning "30 days" into epochs: the latest finalized one's, or the network's.
 fn epoch_secs_hint(c: &Connection, now: &Option<Value>) -> i64 {
-    let last: Option<i64> = c
-        .query_row(
-            "SELECT n.first_block_time - e.first_block_time FROM platform_epochs e JOIN platform_epochs n ON n.epoch = e.epoch + 1
-             ORDER BY e.epoch DESC LIMIT 1",
-            [],
-            |r| r.get(0),
-        )
-        .optional()
+    latest_span(c)
         .ok()
-        .flatten();
-    last.or_else(|| {
-        let n = now.as_ref()?;
-        Some(n["time"].as_i64()? - n["start"].as_i64()?)
-    })
-    .filter(|s| *s > 0)
-    .unwrap_or(788_400)
+        .flatten()
+        .map(|(_, secs)| secs)
+        .or_else(|| {
+            let n = now.as_ref()?;
+            Some(n["time"].as_i64()? - n["start"].as_i64()?)
+        })
+        .filter(|s| *s > 0)
+        .unwrap_or(788_400)
 }
 
 #[cfg(test)]

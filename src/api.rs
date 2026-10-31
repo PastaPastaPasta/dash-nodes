@@ -708,8 +708,20 @@ fn mn_returns(c: &Connection, protx: &str, evo: bool, removed: bool) -> Result<V
     }))
 }
 
-fn round4(x: f64) -> f64 {
-    (x * 1e4).round() / 1e4
+/// `x` rounded to `places` decimals.
+pub(crate) fn round_to(x: f64, places: i32) -> f64 {
+    let k = 10f64.powi(places);
+    (x * k).round() / k
+}
+
+pub(crate) fn round4(x: f64) -> f64 {
+    round_to(x, 4)
+}
+
+/// The median of `ys` (the upper one of two middles), to four decimals; None when there are none.
+pub(crate) fn median4(mut ys: Vec<f64>) -> Option<f64> {
+    ys.sort_by(f64::total_cmp);
+    (!ys.is_empty()).then(|| round4(ys[ys.len() / 2]))
 }
 
 /// The median annualized yield of enabled masternodes registered for the whole window, by type, and
@@ -731,29 +743,25 @@ fn network_returns(c: &Connection) -> Result<Value> {
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )?,
     };
-    let median = |mut ys: Vec<f64>| {
-        ys.sort_by(f64::total_cmp);
-        (!ys.is_empty()).then(|| round4(ys[ys.len() / 2]))
-    };
     let core = |evo: bool| {
         rows.iter()
             .filter(move |(t, _, _)| (t == "Evo") == evo)
             .map(move |(_, paid, p)| (p, annualized(*paid, RETURN_WINDOW, evo)))
     };
-    let n = |evo: bool| core(evo).count();
     // Evonodes also earn Platform rewards: annualized over the finalized epochs in the same window.
     let (platform, span) = rewards::platform_yields(c, since)?;
     let with_platform = span > 0.0;
-    let evo_platform: Vec<f64> = core(true).map(|(p, _)| platform.get(p).copied().unwrap_or(0.0)).collect();
-    let evo_total: Vec<f64> = core(true).map(|(p, y)| y + platform.get(p).copied().unwrap_or(0.0)).collect();
+    let regular: Vec<f64> = core(false).map(|(_, y)| y).collect();
+    // (Core yield, Platform yield) of each evonode.
+    let evo: Vec<(f64, f64)> = core(true).map(|(p, y)| (y, platform.get(p).copied().unwrap_or(0.0))).collect();
     Ok(json!({
         "window_days": RETURN_WINDOW,
-        "regular": {"masternodes": n(false), "median_annual_yield": median(core(false).map(|x| x.1).collect())},
+        "regular": {"masternodes": regular.len(), "median_annual_yield": median4(regular)},
         "evo": {
-            "masternodes": n(true), "median_annual_yield": median(core(true).map(|x| x.1).collect()),
-            "median_platform_yield": if with_platform { median(evo_platform) } else { None },
-            "median_total_yield": if with_platform { median(evo_total) } else { None },
-            "platform_span_days": with_platform.then(|| (span * 10.0).round() / 10.0),
+            "masternodes": evo.len(), "median_annual_yield": median4(evo.iter().map(|y| y.0).collect()),
+            "median_platform_yield": if with_platform { median4(evo.iter().map(|y| y.1).collect()) } else { None },
+            "median_total_yield": if with_platform { median4(evo.iter().map(|y| y.0 + y.1).collect()) } else { None },
+            "platform_span_days": with_platform.then(|| round_to(span, 1)),
         },
     }))
 }
