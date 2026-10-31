@@ -46,7 +46,7 @@ dashd ×2 ─ app (crawler, SQLite, API :8080) ─ publisher ──S3 PUT──�
 - `worker/scripts/publish.mjs` (the `publisher` compose service) reads the app's API inside the
   compose network and uploads those documents straight to the R2 bucket over its S3 API
   (`R2_ENDPOINT` and the `r2_*` secrets): status every minute, the rest after each crawl, skipping
-  unchanged ones. Without R2 credentials it uses the Worker's authenticated `PUT /_ingest/<key>`
+  unchanged ones. Without `R2_ENDPOINT` it uses the Worker's authenticated `PUT /_ingest/<key>`
   instead (that's how a local `wrangler dev` gets seeded), but in production every upload would then
   be a Worker request, and a full republish (a new host, or a payments backfill) is ~26k of them.
 - Speed-test vantages upload through `/_ingest` with their own tokens, which the Worker limits to
@@ -253,7 +253,7 @@ from its `deploy/` directory.
 - **Redeploy:** `git archive` or tar the tree (without `target/`, `deploy/secrets`, `deploy/.env`),
   unpack it over the old one, run `scripts/init.sh` (it adds any new secret placeholders; compose
   won't start a service whose secret file is missing), then `docker compose build app && docker
-  compose up -d app`.
+  compose up -d app publisher` (the publisher runs the tree's `worker/` scripts).
   Restarting the app abandons a crawl in progress; the next one starts right away.
 - **Seeding dashd:** a cold sync takes many hours. Copying `blocks chainstate evodb llmq` (and
   `indexes` without `txindex`) from another synced node with the same dashd version into the

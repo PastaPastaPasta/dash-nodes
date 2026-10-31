@@ -7,8 +7,8 @@
 //
 // Env: SOURCE (the app, e.g. http://app:8080), NETWORKS (default "mainnet testnet"),
 //      STATE_FILE (optional: remembers what was uploaded across restarts), and where to:
-//      - R2_ENDPOINT (https://<account id>.r2.cloudflarestorage.com), R2_BUCKET (default dash-nodes-data),
-//        R2_ACCESS_KEY_ID(_FILE), R2_SECRET_ACCESS_KEY(_FILE): straight into the bucket over R2's S3 API.
+//      - R2_ENDPOINT (https://<account id>.r2.cloudflarestorage.com), R2_ACCESS_KEY_ID(_FILE),
+//        R2_SECRET_ACCESS_KEY(_FILE): straight into the data bucket over R2's S3 API.
 //        Production does this: each upload through the Worker is a Worker request, and the Free plan
 //        allows 100k a day.
 //      - otherwise TARGET (e.g. http://127.0.0.1:8787 for `wrangler dev`) and INGEST_TOKEN(_FILE): the
@@ -24,6 +24,10 @@ import { bucket } from "./r2.mjs";
 const SOURCE = process.env.SOURCE || "http://127.0.0.1:8080";
 const TARGET = process.env.TARGET || "http://127.0.0.1:8788";
 const R2_ENDPOINT = process.env.R2_ENDPOINT || "";
+/** The Worker's DATA binding (wrangler.jsonc); not configurable, so the two can't drift apart. */
+const R2_BUCKET = "dash-nodes-data";
+/** Where uploads go; what was uploaded is remembered per destination (see loadState). */
+const DESTINATION = R2_ENDPOINT ? `r2:${R2_ENDPOINT}/${R2_BUCKET}` : `ingest:${TARGET}`;
 const NETS = (process.env.NETWORKS || "mainnet testnet").split(/\s+/).filter(Boolean);
 const STATE_FILE = process.env.STATE_FILE || "";
 /** A network is republished at least this often even without a new crawl (list and payments move). */
@@ -48,7 +52,7 @@ function uploader() {
     const accessKeyId = readSecret("R2_ACCESS_KEY_ID", "/run/secrets/r2_access_key_id");
     const secretAccessKey = readSecret("R2_SECRET_ACCESS_KEY", "/run/secrets/r2_secret_access_key");
     if (!accessKeyId || !secretAccessKey) return null;
-    const b = bucket({ endpoint: R2_ENDPOINT, name: process.env.R2_BUCKET || "dash-nodes-data", accessKeyId, secretAccessKey });
+    const b = bucket({ endpoint: R2_ENDPOINT, name: R2_BUCKET, accessKeyId, secretAccessKey });
     return (key, body) => b.put(key, body);
   }
   const token = readSecret("INGEST_TOKEN", "/run/secrets/ingest_token");
@@ -59,7 +63,7 @@ function uploader() {
   });
 }
 let send = null;
-const destination = R2_ENDPOINT ? "R2 credentials (R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY)" : "ingest token (INGEST_TOKEN / INGEST_TOKEN_FILE)";
+const needs = R2_ENDPOINT ? "R2 credentials (R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY)" : "ingest token (INGEST_TOKEN / INGEST_TOKEN_FILE)";
 
 const log = (...a) => console.log(new Date().toISOString(), ...a);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -90,9 +94,15 @@ function loadState() {
   if (!STATE_FILE) return;
   try {
     const st = JSON.parse(readFileSync(STATE_FILE, "utf8"));
+    known = new Map(Object.entries(st.known || {}).map(([net, list]) => [net, new Set(list)]));
+    // Uploads to another destination say nothing about this one. (State from before destinations were
+    // recorded went through the Worker into the same bucket.)
+    if (st.destination && st.destination !== DESTINATION) {
+      log(`state is for ${st.destination}, not ${DESTINATION}; republishing everything`);
+      return;
+    }
     sentHash = new Map(Object.entries(st.sentHash || {}));
     paymentCounts = new Map(Object.entries(st.paymentCounts || {}));
-    known = new Map(Object.entries(st.known || {}).map(([net, list]) => [net, new Set(list)]));
     log(`state: ${sentHash.size} documents already published`);
   } catch (e) {
     if (e.code !== "ENOENT") log(`state file unreadable (${e.message}); republishing everything`);
@@ -101,7 +111,7 @@ function loadState() {
 
 function saveState() {
   if (!STATE_FILE) return;
-  const st = { sentHash: Object.fromEntries(sentHash), paymentCounts: Object.fromEntries(paymentCounts),
+  const st = { destination: DESTINATION, sentHash: Object.fromEntries(sentHash), paymentCounts: Object.fromEntries(paymentCounts),
     known: Object.fromEntries([...known].map(([net, set]) => [net, [...set]])) };
   writeFileSync(`${STATE_FILE}.tmp`, JSON.stringify(st));
   renameSync(`${STATE_FILE}.tmp`, STATE_FILE);
@@ -198,9 +208,9 @@ async function publishNetwork(net) {
 
 async function main() {
   send = uploader();
-  if (!send && once) { log(`no ${destination}`); process.exit(1); }
+  if (!send && once) { log(`no ${needs}`); process.exit(1); }
   // Not configured yet: stay up quietly rather than crash-loop, and start once the secrets appear.
-  if (!send) log(`no ${destination} yet; waiting`);
+  if (!send) log(`no ${needs} yet; waiting`);
   while (!send) { await sleep(60_000); send = uploader(); }
   log(R2_ENDPOINT ? `publishing straight to R2 (${new URL(R2_ENDPOINT).host})` : `publishing through ${TARGET}/_ingest`);
   loadState();

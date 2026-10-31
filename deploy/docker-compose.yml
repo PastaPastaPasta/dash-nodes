@@ -247,7 +247,6 @@ services:
       # Set (in .env), uploads go straight to R2 with the r2_* secrets instead of through the Worker,
       # whose every request counts against the Workers plan's daily limit.
       R2_ENDPOINT: ${R2_ENDPOINT:-}
-      R2_BUCKET: ${R2_BUCKET:-dash-nodes-data}
       R2_ACCESS_KEY_ID_FILE: /run/secrets/r2_access_key_id
       R2_SECRET_ACCESS_KEY_FILE: /run/secrets/r2_secret_access_key
       STATE_FILE: /home/node/publisher.json
