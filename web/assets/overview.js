@@ -134,9 +134,11 @@ function renderHero() {
     (diff ? `That's ${fmt(Math.abs(diff))} ${diff > 0 ? "more" : "fewer"} nodes than a day ago. ` : "") +
     `Crawled ${ago(c.finished)}, at block ${fmt(c.tip_height)}.`;
   // Every stat leads somewhere: the list it counts, or the section that explains it.
-  const stat = (value, label, note, to, tone) => el("div", { class: tone ? `stat-${tone}` : null },
+  const stat = (value, label, note, to, tone, onclick) => el("div", { class: tone ? `stat-${tone}` : null },
     el("dt", { text: label }),
-    el("dd", { class: "num" }, el("a", { href: to, class: "stat-link" }, value), note ? el("small", { text: note }) : null));
+    el("dd", { class: "num" }, el("a", { href: to, class: "stat-link", onclick }, value), note ? el("small", { text: note }) : null));
+  // These three count every node, not just masternodes: their sections switch to "All nodes" to match.
+  const showAll = () => { if (scope !== "all") { scope = "all"; remember(); renderControls(); renderSections(); loadHistorySafely(); } };
   const reach = Object.fromEntries(mn.reachable || []);
   const answered = reach.yes || 0, silent = reach.no || 0;
   const share = answered + silent ? answered / (answered + silent) : null;
@@ -146,9 +148,9 @@ function renderHero() {
       href(silent ? "/masternodes?reach=Unreachable&status=Enabled" : "/masternodes?status=Enabled"), share == null ? null : share >= 0.98 ? "good" : share >= 0.9 ? "warning" : "critical"),
     stat(fmt(c.mn_total), "Enabled masternodes", type.Evo ? `${fmt(type.Evo)} of them evonodes` : null, href("/masternodes?status=Enabled")),
     stat(fmt(status.pose_banned || 0), "PoSe-banned", null, href("/masternodes?status=PoSe-banned")),
-    stat(fmt((all.country || []).filter(([k]) => k !== "Unknown").length), "Countries", null, "#where"),
-    stat(fmt(byOrg(all.asn || []).filter(([k]) => k !== "Unknown").length), "Hosting providers", null, "#where"),
-    stat(fmt(c.tried), "Addresses tried", null, "#reach"),
+    stat(fmt((all.country || []).filter(([k]) => k !== "Unknown").length), "Countries", "all nodes", "#where", null, showAll),
+    stat(fmt(byOrg(all.asn || []).filter(([k]) => k !== "Unknown").length), "Hosting providers", "all nodes", "#where", null, showAll),
+    stat(fmt(c.tried), "Addresses tried", null, "#reach", null, showAll),
   );
   $("to-map").href = href("/map");
   $("to-list").href = href("/masternodes");
