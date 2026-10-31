@@ -496,13 +496,13 @@ fn uptime(ok: Option<i64>, attempts: Option<i64>) -> Value {
 
 async fn masternodes(State(nets): State<Nets>, UrlPath(net): UrlPath<String>) -> ApiResult {
     let ctx = net_ctx(&nets, &net)?;
-    let schedule = ctx.platform_schedule.read().unwrap().clone();
+    let view = rewards::view(&ctx);
     let body = ctx
         .db
         .read(move |c| {
             let latest = latest_crawl(c)?;
             let now = db::now();
-            let mut platform = rewards::list_fields(c, schedule.as_deref())?;
+            let mut platform = rewards::list_fields(c, &view)?;
             let sql = format!(
                 "SELECT {MN_COLUMNS}, u7.ok AS ok7, u7.a AS a7, u30.ok AS ok30, u30.a AS a30
                  FROM masternodes m LEFT JOIN nodes n ON n.addr = m.service AND m.removed IS NULL
@@ -541,7 +541,7 @@ async fn masternode(State(nets): State<Nets>, UrlPath((net, protx)): UrlPath<(St
     let ctx = net_ctx(&nets, &net)?;
     let protx = parse_protx(&protx)?;
     let range = payments_range(&ctx).await?;
-    let schedule = ctx.platform_schedule.read().unwrap().clone();
+    let view = rewards::view(&ctx);
     let body = ctx
         .db
         .read(move |c| {
@@ -617,7 +617,7 @@ async fn masternode(State(nets): State<Nets>, UrlPath((net, protx)): UrlPath<(St
                 )?;
                 mn["platform"] = json!({"latest": latest, "daily": daily});
                 let window = mn["returns"]["window_days"].as_i64().unwrap_or(RETURN_WINDOW);
-                mn["platform_rewards"] = rewards::mn_json(c, &protx, schedule.as_deref(), window)?;
+                mn["platform_rewards"] = rewards::mn_json(c, &protx, &view, window)?;
             }
             let changes: Vec<Value> = query_all(
                 c,
@@ -853,9 +853,9 @@ async fn changes(State(nets): State<Nets>, UrlPath(net): UrlPath<String>) -> Api
 /// schedule and one row per evonode.
 async fn platform_rewards(State(nets): State<Nets>, UrlPath(net): UrlPath<String>) -> ApiResult {
     let ctx = net_ctx(&nets, &net)?;
-    let schedule = ctx.platform_schedule.read().unwrap().clone();
+    let view = rewards::view(&ctx);
     let network = ctx.net;
-    let body = ctx.db.read(move |c| rewards::network_json(c, schedule.as_deref(), network)).await?;
+    let body = ctx.db.read(move |c| rewards::network_json(c, &view, network)).await?;
     Ok(Json(body))
 }
 

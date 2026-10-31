@@ -30,6 +30,8 @@ pub struct NetCtx {
     pub reference: RwLock<Option<Reference>>,
     /// When each evonode proposes next, from the latest validator-set sample (see rewards.rs).
     pub platform_schedule: RwLock<Option<std::sync::Arc<crate::rewards::Schedule>>>,
+    /// Platform rewards per evonode, built once per collector round (see rewards.rs).
+    pub platform_board: RwLock<Option<std::sync::Arc<crate::rewards::Board>>>,
 }
 
 #[derive(Clone, Debug)]

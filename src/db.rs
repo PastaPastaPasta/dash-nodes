@@ -223,6 +223,7 @@ CREATE TABLE IF NOT EXISTS platform_turns (
     missed      INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (epoch, protx)
 ) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS platform_turns_protx ON platform_turns(protx, epoch);
 -- Per epoch: quorum samples taken and the sum of every member's memberships over them.
 CREATE TABLE IF NOT EXISTS platform_turn_samples (
     epoch       INTEGER PRIMARY KEY,

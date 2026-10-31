@@ -92,9 +92,10 @@
         <code>lat</code>/<code>lon</code>, <code>asn</code> and <code>as_org</code>; <code>network</code> is the service address's network.
         <code>dkg_readiness</code> is <code>{overall, checks}</code>, each <code>pass</code>, <code>fail</code> or <code>unknown</code>
         (see <code>summary</code>), or <code>null</code> for a removed masternode. Evonodes have <code>platform</code>:
-        <code>{last_epoch, d30, epoch_blocks, next}</code>, the credits they earned in the last finished epoch and over 30 days, the
+        <code>{last_epoch, d30, epoch_blocks, next, in_sets}</code>, the credits they earned in the last finished epoch and over 30 days, the
         blocks they proposed so far this epoch and when their next turn to propose is due (unix time, an estimate; <code>null</code> when
-        they're in no validator set that takes turns). The map page is drawn from this endpoint.</p>
+        they're in no validator set that takes turns, or when <code>in_sets</code>, whether they are, is <code>null</code> too: the
+        validator sets haven't been read lately). The map page is drawn from this endpoint.</p>
     </div>
     <div class="api-ep">
       <h3>GET /api/v1/{net}/masternodes/{protx}</h3>
@@ -150,7 +151,7 @@
         <code>{epoch, start, end, duration, first_height, blocks, proposers, pool, core_rewards, fees, per_block, protocol_version,
         blocks_spread, credits_spread}</code>, the spreads as <code>{p10, p50, p90, min, max}</code> over the evonodes that proposed.
         <code>schedule</code>: who proposes next, from validator sets sampled every 90 seconds (<code>{ts, height, epoch, block_secs,
-        next: [{protx, slots, eta}]}</code>, an estimate). <code>evonodes</code>: every registered evonode as
+        next: [{protx, slots, eta}]}</code>, an estimate; <code>null</code> when none could be read for 5 minutes). <code>evonodes</code>: every registered evonode as
         <code>{protx, service, status, drive, supports, vote, epoch_blocks, last_blocks, last_epoch, d30, monthly, balance, next}</code>
         (<code>supports</code> is the newest protocol its Drive supports; <code>balance</code> its masternode identity's credits).</p>
       <pre class="code">curl https://radar.dashhq.org/api/v1/mainnet/platform | jq '.upgrade'</pre>

@@ -341,38 +341,82 @@ fn varint(buf: &mut &[u8]) -> Option<u64> {
     None
 }
 
-/// The fields of a protobuf message, in order (fixed-width fields are skipped).
-pub(crate) fn fields(mut buf: &[u8]) -> Result<Vec<(u64, Field<'_>)>> {
-    let bad = || anyhow!("bad protobuf");
-    let mut out = Vec::new();
-    while !buf.is_empty() {
-        let key = varint(&mut buf).ok_or_else(bad)?;
-        let (num, wire) = (key >> 3, key & 7);
-        match wire {
-            0 => out.push((num, Field::Varint(varint(&mut buf).ok_or_else(bad)?))),
-            2 => {
-                let len = varint(&mut buf).ok_or_else(bad)? as usize;
-                let b = buf.get(..len).ok_or_else(bad)?;
-                out.push((num, Field::Bytes(b)));
-                buf = &buf[len..];
+/// The fields of a protobuf message, in order (fixed-width fields are skipped), read as they're
+/// iterated so a big answer isn't copied into a list first. A malformed field ends it with an error.
+pub(crate) fn fields(buf: &[u8]) -> Fields<'_> {
+    Fields { buf }
+}
+
+pub(crate) struct Fields<'a> {
+    buf: &'a [u8],
+}
+
+impl<'a> Iterator for Fields<'a> {
+    type Item = Result<(u64, Field<'a>)>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while !self.buf.is_empty() {
+            match self.step() {
+                Ok(Some(f)) => return Some(Ok(f)),
+                Ok(None) => {}
+                Err(e) => {
+                    self.buf = &[];
+                    return Some(Err(e));
+                }
             }
-            1 => buf = buf.get(8..).ok_or_else(bad)?,
-            5 => buf = buf.get(4..).ok_or_else(bad)?,
+        }
+        None
+    }
+}
+
+impl<'a> Fields<'a> {
+    /// Reads one field; None for a fixed-width one, which is skipped.
+    fn step(&mut self) -> Result<Option<(u64, Field<'a>)>> {
+        let bad = || anyhow!("bad protobuf");
+        let key = varint(&mut self.buf).ok_or_else(bad)?;
+        let (num, wire) = (key >> 3, key & 7);
+        Ok(match wire {
+            0 => Some((num, Field::Varint(varint(&mut self.buf).ok_or_else(bad)?))),
+            2 => {
+                let len = varint(&mut self.buf).ok_or_else(bad)? as usize;
+                let b = self.buf.get(..len).ok_or_else(bad)?;
+                self.buf = &self.buf[len..];
+                Some((num, Field::Bytes(b)))
+            }
+            1 => {
+                self.buf = self.buf.get(8..).ok_or_else(bad)?;
+                None
+            }
+            5 => {
+                self.buf = self.buf.get(4..).ok_or_else(bad)?;
+                None
+            }
             _ => return Err(bad()),
+        })
+    }
+}
+
+/// The first field `num` that `pick` accepts, if the whole message is well formed.
+fn first<'a, T>(buf: &'a [u8], pick: impl Fn(u64, Field<'a>) -> Option<T>) -> Option<T> {
+    let mut found = None;
+    for f in fields(buf) {
+        let (n, f) = f.ok()?;
+        if found.is_none() {
+            found = pick(n, f);
         }
     }
-    Ok(out)
+    found
 }
 
 pub(crate) fn msg(buf: &[u8], num: u64) -> Option<&[u8]> {
-    fields(buf).ok()?.into_iter().find_map(|(n, f)| match f {
+    first(buf, |n, f| match f {
         Field::Bytes(b) if n == num => Some(b),
         _ => None,
     })
 }
 
 pub(crate) fn uint(buf: &[u8], num: u64) -> Option<u64> {
-    fields(buf).ok()?.into_iter().find_map(|(n, f)| match f {
+    first(buf, |n, f| match f {
         Field::Varint(v) if n == num => Some(v),
         _ => None,
     })

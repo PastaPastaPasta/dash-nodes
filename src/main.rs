@@ -311,6 +311,7 @@ async fn serve(args: ServeArgs) -> Result<()> {
             pay_lock: tokio::sync::Mutex::new(()),
             reference: RwLock::default(),
             platform_schedule: RwLock::default(),
+            platform_board: RwLock::default(),
         });
         let floor = floor.unwrap_or(net.dip3_enforcement_height());
         supervise("collector", &ctx, collector::run);
