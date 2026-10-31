@@ -92,8 +92,6 @@ nav.main a[aria-current="page"] { color: var(--ink); background: var(--surface-2
 /* Phones and small tablets: one header row (logo, nav, menu button); the rest drops down from the
    button. Same breakpoint as the map's bottom sheet, so the map never gets a two-row header. */
 @media (max-width: 900px) {
-  /* 16px keeps iOS from zooming the page when a field gets focus. */
-  input[type="search"], select { font-size: 16px; }
   .top-inner { flex-wrap: nowrap; gap: 6px; padding: 6px 10px; position: relative; }
   .brand span, .brand small { display: none; }
   .brand svg { width: 26px; height: 26px; }
@@ -113,6 +111,7 @@ nav.main a[aria-current="page"] { color: var(--ink); background: var(--surface-2
   .top-right .theme-toggle { align-self: flex-start; }
   .top-right .menu-only { display: block; }
   nav.main a.nav-api { display: none; }
+}
 }
 .chain-status { color: var(--muted); font-size: 12.5px; white-space: nowrap; }
 .chain-status .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 6px; vertical-align: 1px; background: var(--muted); }
@@ -216,6 +215,11 @@ input[type="search"], select {
 }
 input[type="search"] { min-width: 280px; }
 input[type="search"]:focus, select:focus, button:focus-visible { outline: 2px solid var(--brand); outline-offset: 1px; }
+/* 16px on phones and touch screens: iOS zooms the page into any smaller field that gets focus. After
+   the rules above, which would otherwise win. */
+@media (max-width: 900px), (pointer: coarse) {
+  input[type="search"], select, .mp-head input[type="search"] { font-size: 16px; }
+}
 .btn { font: inherit; font-size: 13px; border: 0; border-radius: 7px; padding: 6px 12px; cursor: pointer; background: var(--surface); color: var(--ink); box-shadow: 0 0 0 1px var(--ring); }
 .btn:hover { background: var(--surface-2); }
 .btn:disabled { opacity: .5; cursor: default; }
@@ -279,10 +283,12 @@ pre.code { background: var(--surface-2); padding: 10px 12px; border-radius: 8px;
 @media (max-width: 760px) {
   .page-head .actions .btn { padding: 8px 12px; }
   .filters-toggle { display: block; width: 100%; margin: 0 0 10px; padding: 10px 12px; text-align: left; }
-  .filters { display: none; flex-direction: column; align-items: stretch; gap: 10px; margin: 0 0 14px; }
+  /* nowrap: in a wrapping column every row is as wide as the widest one, here the hosting select. */
+  .filters { display: none; flex-direction: column; flex-wrap: nowrap; align-items: stretch; gap: 10px; margin: 0 0 14px; }
   .filters.open { display: flex; }
   .filters label { justify-content: space-between; }
-  .filters select { flex: 1; max-width: 65%; }
+  /* min-width 0: a select is otherwise as wide as its longest option, wider than the screen. */
+  .filters select { flex: 1; min-width: 0; max-width: 65%; }
   .filters .sort-select { display: flex; }
   .table-wrap:has(#table) { display: none; }
   .mn-cards { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; list-style: none; margin: 0; padding: 0; }
