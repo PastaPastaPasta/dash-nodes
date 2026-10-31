@@ -1,0 +1,11 @@
+[Unit]
+Description=dash-nodes: deploy new signed commits on main (deploy/cd/update.sh)
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/lib/dash-nodes-cd/update.sh run
+# A cold app build takes ~7 min on 2 vCPUs; the health wait adds up to 4 min.
+TimeoutStartSec=45min
