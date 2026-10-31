@@ -31,6 +31,12 @@ pub mod core {
     pub const RELEASE: &str = "Dash Core 24";
 }
 
+/// Whether the protocol check counts. Off until RELEASE is out: before then no masternode can run
+/// MIN_MASTERNODE_PROTO_VERSION, so it would fail them all. Off, a masternode's result leaves it out
+/// and the summary keeps only its counts (pages from before this flag read them), with
+/// `rules.protocol_check` false.
+pub const PROTOCOL_CHECK: bool = false;
+
 /// Port checks missed in a row before we call reachability failed. Core judges repeated failed
 /// connections (above MASTERNODE_MAX_FAILED_OUTBOUND_ATTEMPTS, reset by any success), not one miss;
 /// our check runs every crawl from one place, so a few misses in a row is our stand-in.
@@ -119,9 +125,13 @@ impl Readiness {
         [Some(self.protocol), Some(self.relay), Some(self.filters), Some(self.reachable), self.platform_ban]
     }
 
-    /// Every check by name, the ones that don't apply left out.
+    /// Every check that counts by name, the ones that don't apply left out.
     pub fn checks(&self) -> impl Iterator<Item = (&'static str, Check)> {
-        CHECKS.into_iter().zip(self.slots()).filter_map(|(k, c)| Some((k, c?)))
+        CHECKS
+            .into_iter()
+            .zip(self.slots())
+            .filter_map(|(k, c)| Some((k, c?)))
+            .filter(|(k, _)| PROTOCOL_CHECK || *k != "protocol")
     }
 
     /// Fails if any check fails; passes only if all pass.
@@ -152,6 +162,7 @@ pub fn rules_json() -> Value {
         "reach_failures": SUSTAINED_FAILURES,
         "core_max_failed_outbound": core::MASTERNODE_MAX_FAILED_OUTBOUND_ATTEMPTS,
         "core_commit": core::COMMIT,
+        "protocol_check": PROTOCOL_CHECK,
     })
 }
 
@@ -188,7 +199,7 @@ impl Tally {
     pub fn add(&mut self, r: &Readiness) {
         self.masternodes += 1;
         self.overall.add(r.overall());
-        if r.protocol == Check::Fail && r.checks().filter(|(_, c)| *c != Check::Pass).count() == 1 {
+        if PROTOCOL_CHECK && r.protocol == Check::Fail && r.checks().filter(|(_, c)| *c != Check::Pass).count() == 1 {
             self.version_only += 1;
         }
         if [r.relay, r.filters, r.reachable].contains(&Check::Fail) || r.platform_ban == Some(Check::Fail) {
@@ -246,7 +257,9 @@ mod tests {
         assert_eq!(evaluate(&i).overall(), Check::Pass);
         i.handshake.as_mut().unwrap().protocol = Some(MIN - 1);
         assert_eq!(evaluate(&i).protocol, Check::Fail);
-        assert_eq!(evaluate(&i).overall(), Check::Fail);
+        // It only decides once it counts.
+        assert_eq!(evaluate(&i).overall(), if PROTOCOL_CHECK { Check::Fail } else { Check::Pass });
+        assert_eq!(evaluate(&i).json()["checks"].get("protocol").is_some(), PROTOCOL_CHECK);
         i.handshake.as_mut().unwrap().protocol = Some(MIN + 1);
         assert_eq!(evaluate(&i).protocol, Check::Pass);
     }
@@ -282,7 +295,7 @@ mod tests {
             assert_eq!(c, Check::Unknown);
         }
         assert_eq!(r.overall(), Check::Unknown);
-        assert_eq!(r.json()["checks"].as_object().unwrap().len(), 4);
+        assert_eq!(r.json()["checks"].as_object().unwrap().len(), if PROTOCOL_CHECK { 4 } else { 3 });
         // One known failure decides, whatever is unknown.
         let r = evaluate(&Input { reachable: Some(false), fail_streak: SUSTAINED_FAILURES, ..i });
         assert_eq!(r.overall(), Check::Fail);
@@ -322,11 +335,19 @@ mod tests {
         t.add(&evaluate(&old));
         let v = t.to_json();
         assert_eq!(v["masternodes"], 5);
-        assert_eq!(v["version_only"], 1);
         // The unreachable one and the one with relay off.
         assert_eq!(v["beyond_version"], 2);
-        assert_eq!(v["overall"], json!({"pass": 1, "fail": 4, "unknown": 0}));
+        // Counted either way, so pages from before the flag still find it.
         assert_eq!(v["checks"]["protocol"], json!({"pass": 1, "fail": 3, "unknown": 1}));
+        assert_eq!(v["rules"]["protocol_check"], PROTOCOL_CHECK);
+        if PROTOCOL_CHECK {
+            assert_eq!(v["version_only"], 1);
+            assert_eq!(v["overall"], json!({"pass": 1, "fail": 4, "unknown": 0}));
+        } else {
+            // The old ones are judged on the other checks alone: one passes, one is unknown, one fails.
+            assert_eq!(v["version_only"], 0);
+            assert_eq!(v["overall"], json!({"pass": 2, "fail": 2, "unknown": 1}));
+        }
         assert_eq!(v["checks"]["relay"], json!({"pass": 2, "fail": 1, "unknown": 2}));
         assert_eq!(v["checks"]["platform_ban"], json!({"pass": 1, "fail": 0, "unknown": 0}));
         assert_eq!(v["rules"]["min_protocol"], MIN);

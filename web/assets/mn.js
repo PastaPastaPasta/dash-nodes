@@ -191,7 +191,8 @@ function dkgTexts(m, d) {
       pass: ["Relays transactions."],
       fail: ["Relay is off, so it won't have the transactions it must sign InstantSend locks for.",
         `Remove blocksonly=1 from dash.conf. ${rules.release} won't start a masternode with it.`],
-      unknown: [d.checks.protocol !== "unknown" ? "Not recorded yet; the next crawl will tell." : noHandshake],
+      // Filters come from the same handshake: known filters mean only the relay flag is missing.
+      unknown: [d.checks.filters !== "unknown" ? "Not recorded yet; the next crawl will tell." : noHandshake],
     },
     filters: {
       pass: [`Serves compact block filters (${bit}).`],

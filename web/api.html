@@ -57,7 +57,8 @@
         <code>beyond_version</code> (failing a check other than the version); and <code>rules</code> (the <code>release</code>,
         <code>min_protocol</code>, <code>compact_filters_bit</code>, <code>reach_failures</code> (port checks missed in a row before
         reachability fails) and the Dash Core commit they come from). It's an estimate from the handshake each masternode sends our
-        crawler.</p>
+        crawler. Until that release is out the <code>protocol</code> check doesn't count (<code>rules.protocol_check</code> is
+        false): it's left out of each masternode's result and of <code>overall</code>, and <code>version_only</code> is 0.</p>
       <pre class="code">curl https://radar.dashhq.org/api/v1/mainnet/summary | jq '.dists.mn.version'</pre>
     </div>
     <div class="api-ep">
