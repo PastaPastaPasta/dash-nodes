@@ -342,11 +342,11 @@ const handle = document.getElementById("panel-handle");
 // Phones: the panel is a bottom sheet (sheet.js). What it shows is its mode: "peek" (search and
 // headline), "open" (all the controls) or "detail" (one place or masternode). How far it's pulled up is
 // its rest: collapsed, half or full. Tap the handle to open or fold it; drag or flick it anywhere.
+const restFor = () => (panel.dataset.mode === "peek" ? "collapsed" : "half");
 const sheet = bottomSheet({
-  panel, handle, head, body, active: phone,
+  panel, handle, head, body, active: phone, restFor,
   // Dragged down to the edge, it folds to the search; pulled up from there, the controls show.
-  onRest: (rest, byUser) => {
-    if (!byUser) return;
+  onDragEnd: (rest) => {
     if (rest === "collapsed" && panel.dataset.mode !== "peek") setMode("peek", false);
     else if (rest !== "collapsed" && panel.dataset.mode === "peek") setMode("open", false);
   },
@@ -363,7 +363,7 @@ function setMode(mode, move = true) {
   }
   panel.dataset.mode = mode;
   handle.setAttribute("aria-expanded", String(mode !== "peek"));
-  if (move) sheet.snap(mode === "peek" ? "collapsed" : "half");
+  if (move) sheet.snap(restFor());
 }
 panel.addEventListener("keydown", (e) => { if (e.key === "Escape" && phone() && panel.dataset.mode !== "peek") { setMode("peek"); handle.focus(); } });
 
@@ -472,8 +472,8 @@ function renderHeadline() {
   // The same masternodes the Reachable chip counts (PoSe-banned ones answer too, sometimes), then split.
   const list = filtered();
   const answered = (ms) => ms.filter((m) => m.reachable === true).length;
-  const enabled = list.filter((m) => m.status === "enabled");
-  const banned = list.filter((m) => m.status !== "enabled");
+  const banned = list.filter((m) => registration(m) === "PoSe-banned");
+  const enabled = list.filter((m) => registration(m) !== "PoSe-banned");
   headline.replaceChildren(el("b", { class: "num", text: fmt(answered(list)) }), ` of ${fmt(list.length)} masternodes answered the latest crawl`,
     banned.length
       ? `: ${fmt(answered(enabled))} of ${fmt(enabled.length)} enabled and ${fmt(answered(banned))} of ${fmt(banned.length)} PoSe-banned.`

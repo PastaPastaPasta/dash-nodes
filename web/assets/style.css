@@ -545,16 +545,22 @@ button.link { font: inherit; font-size: 13px; background: none; border: 0; paddi
   .mp {
     top: auto; left: 0; right: 0; bottom: 0; width: auto; max-height: none;
     border-radius: 18px 18px 0 0; padding-bottom: env(safe-area-inset-bottom);
-    background: var(--surface); backdrop-filter: none;
-    touch-action: none; overscroll-behavior: contain; will-change: transform;
+    background: var(--surface); backdrop-filter: none; z-index: 3; /* over the map's own controls */
+    touch-action: none; will-change: transform;
     transition: transform .32s cubic-bezier(.2, .9, .3, 1);
   }
   .mp.dragging { transition: none; }
-  .mp-body { flex: 0 1 auto; min-height: 0; overflow-y: hidden; }
-  .mp[data-snap="full"] .mp-body { overflow-y: auto; touch-action: pan-y; overscroll-behavior: contain; }
-  .mp[data-snap="collapsed"]:not(.dragging) .mp-body { visibility: hidden; }
+  /* The sheet's translated part would make the page scrollable (a focused control scrolls it, out
+     of reach); clip, not hidden, which scripts and focus can still scroll. */
+  main.map-app { overflow: clip; }
+  .mp-handle, .mp-head { flex: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+  .mp-head input { -webkit-user-select: text; user-select: text; }
+  .mp-body { flex: 0 1 auto; min-height: 0; overflow-y: hidden; touch-action: none; padding: 0 14px 14px; }
+  .mp[data-scrolls="true"] .mp-body { overflow-y: auto; touch-action: pan-y; overscroll-behavior: contain; }
+  /* Folded away: hidden once it has slid down (visibility switches after the slide), shown at once. */
+  .mp[data-snap="collapsed"]:not(.dragging) .mp-body { visibility: hidden; transition: visibility 0s .32s; }
   /* A tall touch target: the whole top strip grabs the sheet. */
-  .mp-handle { display: grid; place-items: center; height: 32px; border: 0; background: none; cursor: grab; padding: 0; touch-action: none; }
+  .mp-handle { display: grid; place-items: center; height: 32px; border: 0; background: none; cursor: grab; padding: 0; }
   .mp-grip { width: 44px; height: 5px; border-radius: 3px; background: var(--axis); }
   .mp-head { padding: 0 14px 10px; }
   .mp-search-row { display: flex; gap: 8px; }
@@ -562,7 +568,6 @@ button.link { font: inherit; font-size: 13px; background: none; border: 0; paddi
   .mp-search-row .mp-filters-button { display: block; flex: none; }
   .mp-headline { margin-top: 8px; font-size: 13.5px; }
   .mp-headline b { font-size: 15px; }
-  .mp-body { padding: 0 14px 14px; }
   .mp[data-mode="open"] .mp-filters-button { display: none; }
   .mp[data-mode="detail"] .mp-head { display: none; }
   .mp[data-mode="detail"] .mp-body > :not(.mp-group):not(.mp-node) { display: none; }
