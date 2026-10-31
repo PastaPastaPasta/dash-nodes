@@ -20,6 +20,12 @@
   "ratelimits": [{ "name": "CHECK_LIMIT", "namespace_id": "1001", "simple": { "limit": 5, "period": 60 } }],
   // Speed-test vantage points whose results are combined (each writes with its own BENCH_TOKENS entry).
   "vars": { "BENCH_VANTAGES": "us-east,eu-west,ap-southeast" },
-  "routes": [{ "pattern": "nodes.dashhq.org", "custom_domain": true }],
+  // radar.dashhq.org is the site's name (DashHQ Radar); nodes.dashhq.org keeps serving the same Worker.
+  // `wrangler deploy` makes the Worker's Custom Domains exactly this list: one added in the dashboard
+  // but missing here is removed by the next deploy.
+  "routes": [
+    { "pattern": "radar.dashhq.org", "custom_domain": true },
+    { "pattern": "nodes.dashhq.org", "custom_domain": true }
+  ],
   "observability": { "enabled": true }
 }

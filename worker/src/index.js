@@ -1,4 +1,4 @@
-// nodes.dashhq.org: the static site (Workers static assets), the public API answered from R2, and an
+// DashHQ Radar (radar.dashhq.org, and nodes.dashhq.org as before): the static site (Workers static assets), the public API answered from R2, and an
 // authenticated ingest speed-test vantages push their results to (the crawler's publisher writes to R2
 // directly, see scripts/publish.mjs). The crawler's host takes no inbound traffic.
 import { connect } from "cloudflare:sockets";

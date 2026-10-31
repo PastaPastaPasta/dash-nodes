@@ -311,7 +311,7 @@ export function chrome(page, { footer = true } = {}) {
   paintTheme();
   const brand = el("a", { class: "brand", href: href("/") });
   brand.innerHTML = LOGO;
-  brand.append(el("span", { text: "Dash Nodes" }), el("small", { text: "nodes.dashhq.org" }));
+  brand.append(el("span", { text: "DashHQ Radar" }), el("small", { text: "radar.dashhq.org" }));
   if (net === "testnet") brand.append(el("b", { class: "net-badge", text: "Testnet" }));
   // Phones: the network switch, theme and status fold into a menu behind one button.
   const more = el("button", { class: "more-toggle", type: "button", "aria-label": "Network and display settings", "aria-expanded": "false", "aria-controls": "top-right" });
@@ -339,7 +339,7 @@ export function chrome(page, { footer = true } = {}) {
 
   matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { if (!localStorage.getItem("theme")) themeChanged(); });
   if (footer) document.body.append(el("footer", { class: "bottom" }, el("div", { class: "inner" },
-    el("span", {}, "An independent Dash network monitor. Crawls the P2P network every 15 minutes from one vantage point; reachability is as seen from there."),
+    el("span", {}, "DashHQ Radar, an independent Dash network monitor. It crawls the P2P network every 15 minutes from one vantage point; reachability is as seen from there."),
     el("span", {},
       el("a", { href: href("/api"), text: "API" }), " · ",
       "IP geolocation by ", el("a", { href: "https://db-ip.com", text: "DB-IP" }), " (CC BY 4.0)"))));

@@ -81,7 +81,7 @@ async function main() {
     root.append(el("div", { class: "banner", text: `Couldn't load this masternode: ${e.message}` }));
     return;
   }
-  document.title = `Dash Nodes: masternode ${protx.slice(0, 8)}${net === "testnet" ? " · testnet" : ""}`;
+  document.title = `DashHQ Radar: masternode ${protx.slice(0, 8)}${net === "testnet" ? " · testnet" : ""}`;
   const [sk, sl] = statusOf(m);
   const banned = m.removed ? null : poseBadge(m);
   root.querySelector("h1").replaceChildren(...[m.type === "Evo" ? "Evonode " : "Masternode ", badge(sk, sl), banned && " ", banned].filter(Boolean));

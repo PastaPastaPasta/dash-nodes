@@ -1,0 +1,14 @@
+{
+  "name": "DashHQ Radar",
+  "short_name": "Radar",
+  "description": "Live census of the Dash network: every reachable node and masternode, what they run, where they're hosted and how reachable they are.",
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
+  "display": "minimal-ui",
+  "background_color": "#0a1321",
+  "theme_color": "#0a1321",
+  "icons": [
+    { "src": "/assets/favicon.svg", "sizes": "any", "type": "image/svg+xml" }
+  ]
+}

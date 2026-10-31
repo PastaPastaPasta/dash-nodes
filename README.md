@@ -1,6 +1,8 @@
-# dash-nodes
+# DashHQ Radar (dash-nodes)
 
-The Dash network and masternode monitor behind **nodes.dashhq.org**. It's a from-scratch take on
+**DashHQ Radar** is the Dash network and masternode monitor at **[radar.dashhq.org](https://radar.dashhq.org)**
+(it started as Dash Nodes; nodes.dashhq.org keeps serving the same site). The code, binary, images
+and services keep the `dash-nodes` name. It's a from-scratch take on
 mnowatch.org/user-agents and the old dashninja.pl:
 
 - **Network crawl:** every 15 minutes it handshakes with every registered masternode, every node that
@@ -35,7 +37,7 @@ The public site doesn't talk to the crawler host:
 crawler host (no inbound)                          Cloudflare
 dashd ×2 ─ app (crawler, SQLite, API :8080) ─ publisher ──S3 PUT──────────────▶ R2 (dash-nodes-data)
                                              bench ──PUT /_ingest──▶ Worker ─▶ R2       │
-                                         nodes.dashhq.org ◀── Worker: static assets + /api/v1/* from R2
+                       radar.dashhq.org, nodes.dashhq.org ◀── Worker: static assets + /api/v1/* from R2
 ```
 
 - `worker/` is a Cloudflare Worker that serves `web/` as static assets and answers `/api/v1/*` from
@@ -52,6 +54,14 @@ dashd ×2 ─ app (crawler, SQLite, API :8080) ─ publisher ──S3 PUT──�
 - Speed-test vantages upload through `/_ingest` with their own tokens, which the Worker limits to
   their own documents (R2 tokens can't be limited to a key prefix); that's a few dozen an hour.
 - If the crawler host is down, the site keeps serving the last published data and says how old it is.
+- **Hostnames:** both are Workers Custom Domains of the `dash-nodes` Worker (`routes` in
+  `worker/wrangler.jsonc`), so they serve the same site and API. radar.dashhq.org is the canonical
+  one (`<link rel="canonical">`, `og:url`, the user agents); nodes.dashhq.org stays for old links and
+  for the machines: the publisher, the bench and the snapshots still use it (`PUBLISH_TARGET`,
+  `SOURCE`, `TARGET`), since the publisher keys its state on the destination and a new one republishes
+  everything. `wrangler deploy` makes the Worker's Custom Domains exactly that list, so a hostname
+  added in the dashboard but not there is dropped by the next deploy, and adding one there needs a
+  token that can create its DNS record (the CD token can't: add it in the dashboard first).
 
 Deploying the Worker (needs a Cloudflare API token with Workers Scripts and R2 edit on the account,
 and Workers Routes and DNS edit on the zone):

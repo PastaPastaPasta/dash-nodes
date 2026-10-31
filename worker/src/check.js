@@ -4,7 +4,7 @@
 
 export const MAGIC = { mainnet: [0xbf, 0x0c, 0x6b, 0xbd], testnet: [0xce, 0xe2, 0xca, 0xff] };
 const PROTOCOL = 70242;
-const UA = "/dash-nodes:check(nodes.dashhq.org)/";
+const UA = "/dash-nodes:check(radar.dashhq.org)/";
 const MAX_PAYLOAD = 64 * 1024;
 const TIMEOUT_MS = 8000;
 

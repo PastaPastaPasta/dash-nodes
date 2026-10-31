@@ -3,9 +3,19 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <title>Dash Nodes: network map</title>
+  <title>DashHQ Radar: network map</title>
   <meta name="description" content="Live map of the Dash network: every masternode and reachable node by city, from a crawl every 15 minutes.">
+  <link rel="canonical" href="https://radar.dashhq.org/map">
+  <meta property="og:site_name" content="DashHQ Radar">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="DashHQ Radar: network map">
+  <meta property="og:description" content="Live map of the Dash network: every masternode and reachable node by city, from a crawl every 15 minutes.">
+  <meta property="og:url" content="https://radar.dashhq.org/map">
+  <meta name="twitter:card" content="summary">
   <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
+  <!-- TODO(icon): worker/scripts/build.mjs puts the PNG icon set and og:image here once
+       web/assets/icons/ has it (see the README there). Until then favicon.svg is the icon. -->
+  <link rel="manifest" href="/assets/site.webmanifest">
   <link rel="stylesheet" href="/assets/vendor/maplibre-gl.css">
   <link rel="stylesheet" href="/assets/style.css">
   <script type="module" src="/assets/map.js"></script>

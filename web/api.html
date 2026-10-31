@@ -3,8 +3,19 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Dash Nodes: API</title>
+  <title>DashHQ Radar: API</title>
+  <meta name="description" content="The public JSON API behind DashHQ Radar: crawl summaries, masternode lists, history and payments for Dash mainnet and testnet.">
+  <link rel="canonical" href="https://radar.dashhq.org/api">
+  <meta property="og:site_name" content="DashHQ Radar">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="DashHQ Radar: API">
+  <meta property="og:description" content="The public JSON API behind DashHQ Radar: crawl summaries, masternode lists, history and payments for Dash mainnet and testnet.">
+  <meta property="og:url" content="https://radar.dashhq.org/api">
+  <meta name="twitter:card" content="summary">
   <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
+  <!-- TODO(icon): worker/scripts/build.mjs puts the PNG icon set and og:image here once
+       web/assets/icons/ has it (see the README there). Until then favicon.svg is the icon. -->
+  <link rel="manifest" href="/assets/site.webmanifest">
   <link rel="stylesheet" href="/assets/style.css">
   <script type="module" src="/assets/page.js"></script>
 </head>
@@ -47,7 +58,7 @@
         <code>min_protocol</code>, <code>compact_filters_bit</code>, <code>reach_failures</code> (port checks missed in a row before
         reachability fails) and the Dash Core commit they come from). It's an estimate from the handshake each masternode sends our
         crawler.</p>
-      <pre class="code">curl https://nodes.dashhq.org/api/v1/mainnet/summary | jq '.dists.mn.version'</pre>
+      <pre class="code">curl https://radar.dashhq.org/api/v1/mainnet/summary | jq '.dists.mn.version'</pre>
     </div>
     <div class="api-ep">
       <h3>GET /api/v1/{net}/history?scope=mn&amp;dim=version&amp;days=30&amp;top=8</h3>
@@ -111,7 +122,7 @@
       node that answered in the past week, and to new addresses learned from our dashd and from other nodes' <code>getaddr</code>
       replies (in <code>addrv2</code>, so including Tor, I2P and CJDNS addresses). Onion peers are reached through Tor, I2P peers
       through I2P and CJDNS peers through a cjdns node; IPv6 only when our host has an IPv6 route. It completes the <code>version</code> handshake and disconnects. It announces itself as
-      <code>/dash-nodes:…(nodes.dashhq.org)/</code>, doesn't relay transactions and keeps nothing but what the node announces.
+      <code>/dash-nodes:…(radar.dashhq.org)/</code>, doesn't relay transactions and keeps nothing but what the node announces.
       Masternode registration data and payments come from our own dashd. Reachability is measured from one vantage point, so a
       node that blocks or rate-limits us shows as unreachable even when others can reach it.</p>
     <p class="sub">Non-masternode IP addresses are never published, only counted.</p>
