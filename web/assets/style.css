@@ -17,7 +17,7 @@
   --surface-2: #e4eaf2;
   --ink: #0e1a2b;
   --ink-2: #43536a;
-  --muted: #687990;
+  --muted: #58697f;
   --grid: #dae2ec;
   --axis: #b9c6d5;
   --ring: rgba(14, 26, 43, 0.11);
@@ -37,7 +37,7 @@
   :root:where(:not([data-theme="light"])) {
     color-scheme: dark;
     --page: #0a1321; --surface: #101c2e; --surface-2: #172740;
-    --ink: #e8eef6; --ink-2: #a8b7ca; --muted: #7488a2; --grid: #1d2e46; --axis: #2d4262;
+    --ink: #e8eef6; --ink-2: #a8b7ca; --muted: #7e92ac; --grid: #1d2e46; --axis: #2d4262;
     --ring: rgba(170, 200, 235, 0.13); --brand: #3ba3f2; --brand-ink: #06111f;
     --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181; --s6: #008300;
     --other: #4d607a; --good: #22b04b; --none: #1d2e46;
@@ -48,7 +48,7 @@
 :root[data-theme="dark"] {
   color-scheme: dark;
   --page: #0a1321; --surface: #101c2e; --surface-2: #172740;
-  --ink: #e8eef6; --ink-2: #a8b7ca; --muted: #7488a2; --grid: #1d2e46; --axis: #2d4262;
+  --ink: #e8eef6; --ink-2: #a8b7ca; --muted: #7e92ac; --grid: #1d2e46; --axis: #2d4262;
   --ring: rgba(170, 200, 235, 0.13); --brand: #3ba3f2; --brand-ink: #06111f;
   --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181; --s6: #008300;
   --other: #4d607a; --good: #22b04b; --none: #1d2e46;
@@ -233,6 +233,7 @@ input[type="search"]:focus, select:focus, button:focus-visible { outline: 2px so
 .btn { font: inherit; font-size: 13px; border: 0; border-radius: 7px; padding: 6px 12px; cursor: pointer; background: var(--surface); color: var(--ink); box-shadow: 0 0 0 1px var(--ring); }
 .btn:hover { background: var(--surface-2); }
 .btn:disabled { opacity: .5; cursor: default; }
+#cards, #table { scroll-margin-top: 64px; } /* clear of the sticky header */
 .pager { display: flex; align-items: center; gap: 10px; justify-content: flex-end; margin-top: 10px; color: var(--ink-2); font-size: 12.5px; }
 
 /* uptime strip */

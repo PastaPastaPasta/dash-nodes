@@ -1,4 +1,4 @@
-import { api, chrome, currentNet, el, fmt, pct, href, countryName, flag, place, badge, ago, dateTime, dash, nodeStatus, poseBadge, uptimeKind, tile, card,
+import { api, chrome, currentNet, NETWORKS, el, fmt, pct, href, countryName, flag, place, badge, ago, dateTime, dash, nodeStatus, poseBadge, uptimeKind, tile, card,
   changeText, changeKind, DKG_CHECKS, DKG_OVERALL } from "./common.js";
 
 chrome("masternodes");
@@ -77,6 +77,7 @@ async function main() {
   try {
     m = await api(`${net}/masternodes/${protx}`);
   } catch (e) {
+    if (e.message === "unknown protx") return notFound();
     root.append(el("div", { class: "banner", text: `Couldn't load this masternode: ${e.message}` }));
     return;
   }
@@ -259,6 +260,26 @@ function dkgSection(m) {
       `Reachability and Platform bans count already; ${rules.release} raises the minimum protocol and adds the relay and filter checks. `,
       "We see the handshake this node sends our crawler, an ordinary inbound connection, so relay and services can differ only if the operator set something unusual. ",
       "Rules from Dash Core ", el("a", { href: `https://github.com/dashpay/dash/blob/${rules.core_commit}/src/active/dkgsession.cpp`, text: `develop at ${rules.core_commit}` }), "."));
+}
+
+/**
+ * No masternode with this ProTx on this network. A link without ?net opens on the network picked
+ * last, so a shared mainnet link can land on testnet: if the other network has it, go there.
+ */
+async function notFound() {
+  const other = NETWORKS.find((n) => n !== net);
+  if (!NETWORKS.includes(new URLSearchParams(location.search).get("net"))) {
+    const there = await api(`${other}/masternodes/${protx}`).then(() => true, () => false);
+    if (there) {
+      const u = new URL(location.href);
+      u.searchParams.set("net", other);
+      location.replace(u);
+      return;
+    }
+  }
+  root.querySelector("h1").textContent = "Masternode not found";
+  root.append(el("div", { class: "banner" }, `No ${net} masternode has this ProTx hash. It may have been registered moments ago, or the link may be cut short. `,
+    el("a", { href: href(`/masternodes?q=${encodeURIComponent(protx.slice(0, 16))}`), text: "Search the list" }), "."));
 }
 
 /** What it earned over the last year, and the yield on its collateral that works out to. */
