@@ -482,16 +482,17 @@ button.link { font: inherit; font-size: 13px; background: none; border: 0; paddi
 .t-s1 { --tone: var(--s1); } .t-s2 { --tone: var(--s2); } .t-s3 { --tone: var(--s3); }
 .t-s4 { --tone: var(--s4); } .t-s5 { --tone: var(--s5); }
 
-/* Cluster donuts: tone shares around the count. */
-.donut {
+/* Map cluster donuts: tone shares around the count. Not `.donut`: that's the overview's SVG charts,
+   whose display/size rules would knock the count off-center. */
+.map-donut {
   display: grid; place-items: center; padding: 0; border: 0; border-radius: 50%; cursor: pointer;
   box-shadow: 0 0 0 1.5px var(--land), 0 2px 8px rgba(0, 0, 0, .25);
 }
-.donut span {
+.map-donut span {
   width: calc(100% - 8px); height: calc(100% - 8px); border-radius: 50%; display: grid; place-items: center;
   background: var(--surface); color: var(--ink); font: 650 12px/1 var(--sans); font-stretch: 105%; font-variant-numeric: tabular-nums;
 }
-.donut:hover span, .donut:focus-visible span { background: var(--surface-2); }
+.map-donut:hover span, .map-donut:focus-visible span { background: var(--surface-2); }
 
 /* MapLibre, restyled to the page. */
 .maplibregl-map { font: inherit; }
@@ -550,7 +551,7 @@ button.link { font: inherit; font-size: 13px; background: none; border: 0; paddi
 
 @media (max-width: 640px) { input[type="search"] { min-width: 0; width: 100%; } }
 @media (forced-colors: active) {
-  .sharebar div, .ranked i, .share-legend i, .chip i, .donut, .wm-dots circle { forced-color-adjust: none; }
+  .sharebar div, .ranked i, .share-legend i, .chip i, .map-donut, .wm-dots circle { forced-color-adjust: none; }
   .strip div, .legend i { forced-color-adjust: none; }
 }
 .ov-section:has(+ .ov-section[hidden]) { border-bottom: 0; }

@@ -236,7 +236,7 @@ function donut(segments, total, label, onClick) {
     return s;
   });
   return el("button", {
-    type: "button", class: "donut", "aria-label": label, title: label,
+    type: "button", class: "map-donut", "aria-label": label, title: label,
     style: { width: `${size}px`, height: `${size}px`, background: `conic-gradient(${stops.join(", ")})` },
     onclick: (e) => { e.stopPropagation(); Promise.resolve(onClick()).catch(() => {}); },
   }, el("span", { text: compact(total) }));
@@ -266,7 +266,7 @@ async function zoomInto(src, id, center, atBottom) {
   if (zoom > map.getMaxZoom()) return atBottom();
   map.easeTo({ center, zoom, duration: 450 });
   // From the keyboard, the focused donut is about to be replaced: keep focus on the map instead.
-  if (document.activeElement?.matches(".donut:focus-visible")) map.getCanvas().focus();
+  if (document.activeElement?.matches(".map-donut:focus-visible")) map.getCanvas().focus();
 }
 
 function openCluster(f) {
