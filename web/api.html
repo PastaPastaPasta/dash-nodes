@@ -83,7 +83,8 @@
     </div>
     <div class="api-ep">
       <h3>GET /api/v1/{net}/changes</h3>
-      <p class="sub">The 300 latest registration changes, newest first: <code>{ts, height, protx, type, field, old, new}</code>.
+      <p class="sub">The 300 latest registration changes, newest first, in <code>changes</code>: <code>{ts, height, protx, type, field, old, new}</code>,
+        and <code>since</code>, when recording started.
         <code>field</code> is <code>registered</code>, <code>removed</code>, <code>pose</code> (enabled or banned at a height) or the
         changed field (<code>service</code>, <code>payout_address</code>, <code>pubkey_operator</code>, …). Recorded since 30 Oct 2026.</p>
     </div>

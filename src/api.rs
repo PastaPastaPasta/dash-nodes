@@ -23,7 +23,7 @@ use tower_http::set_header::SetResponseHeaderLayer;
 use crate::addr::net_of;
 use crate::collector::{payments_range, pose_status};
 use crate::crawler::network_stats;
-use crate::db::{self, day_of, query_all};
+use crate::db::{self, day_of, get_meta, query_all};
 use crate::network::Network;
 use crate::state::NetCtx;
 
@@ -750,7 +750,8 @@ async fn changes(State(nets): State<Nets>, UrlPath(net): UrlPath<String>) -> Api
                     Ok(v)
                 },
             )?;
-            Ok(json!({"changes": changes}))
+            let since = get_meta(c, "changes_since")?.and_then(|v| v.parse::<i64>().ok());
+            Ok(json!({"since": since, "changes": changes}))
         })
         .await?;
     Ok(Json(body))

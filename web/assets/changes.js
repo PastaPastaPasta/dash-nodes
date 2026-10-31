@@ -5,6 +5,7 @@ const net = currentNet();
 const params = new URLSearchParams(location.search);
 let kind = CHANGE_KINDS.some(([k]) => k === params.get("kind")) ? params.get("kind") : "";
 let changes = [];
+let since = null;
 
 function render() {
   const match = CHANGE_KINDS.find(([k]) => k === kind)?.[2];
@@ -22,7 +23,8 @@ function render() {
   document.getElementById("changes-table").replaceChildren(
     el("thead", {}, el("tr", {}, ...heads.map((h) => el("th", { text: h })))),
     el("tbody", {}, ...(list.length ? list.map(row)
-      : [el("tr", {}, el("td", { colspan: 3, class: "empty", text: changes.length ? "No changes of this kind lately." : "No changes recorded yet." }))])));
+      : [el("tr", {}, el("td", { colspan: 3, class: "empty", text: changes.length ? "No changes of this kind lately."
+        : since ? `Nothing has changed since recording started, ${ago(since)}.` : "No changes recorded yet." }))])));
   const u = new URL(location.href);
   if (kind) u.searchParams.set("kind", kind); else u.searchParams.delete("kind");
   history.replaceState(null, "", u);
@@ -32,9 +34,11 @@ async function main() {
   document.getElementById("filters").replaceChildren(
     segmented([["", "Everything"], ...CHANGE_KINDS.map(([k, label]) => [k, label])], kind, (v) => { kind = v; render(); }, "Kind of change"));
   try {
-    ({ changes } = await api(`${net}/changes`));
-    document.getElementById("lede").textContent =
-      `The latest ${fmt(changes.length)} changes to masternode registrations, newest first: new and removed masternodes, PoSe bans and revivals, changed addresses and keys.`;
+    ({ changes, since = null } = await api(`${net}/changes`));
+    const what = "new and removed masternodes, PoSe bans and revivals, changed addresses and keys";
+    document.getElementById("lede").textContent = changes.length
+      ? `The latest ${fmt(changes.length)} changes to masternode registrations, newest first: ${what}.`
+      : `Changes to masternode registrations show up here as they happen: ${what}.${since ? ` Recording since ${dateTime(since)}.` : ""}`;
   } catch (e) {
     document.getElementById("lede").textContent = `Couldn't load the changes: ${e.message}`;
   }

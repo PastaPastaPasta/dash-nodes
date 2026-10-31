@@ -297,6 +297,10 @@ async fn sync_masternodes(ctx: &NetCtx, height: i64) -> Result<()> {
                     }
                 }
             }
+            // When recording started, so an empty feed can say "nothing since …".
+            if get_meta(&tx, "changes_since")?.is_none() {
+                set_meta(&tx, "changes_since", &now.to_string())?;
+            }
             {
                 let mut up = tx.prepare_cached(
                     "INSERT INTO masternodes (protx, type, collateral, collateral_address, operator_reward, service,
