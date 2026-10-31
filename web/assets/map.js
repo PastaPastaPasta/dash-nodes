@@ -138,6 +138,9 @@ const map = new GLMap({
   touchPitch: false,
   fadeDuration: 0,
   attributionControl: false,
+  // At most 2 device pixels per CSS pixel: a 3x phone would otherwise draw 9x the pixels each frame,
+  // for borders and labels that look the same. The markers and panel are DOM, so stay sharp.
+  pixelRatio: Math.min(devicePixelRatio, 2),
 });
 map.touchZoomRotate.disableRotation();
 map.keyboard.disableRotation();
