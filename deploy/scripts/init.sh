@@ -5,7 +5,13 @@
 # newer docker-compose.yml expects exist (compose refuses to start a service whose secret file is missing).
 set -eu
 cd "$(dirname "$0")/.."
+# Run as root (by hand or by deploy/cd): a secret that's a symlink would have the writes, chown and
+# chmod below follow it anywhere.
+[ ! -L secrets ] || { echo "refusing: secrets is a symlink" >&2; exit 1; }
 mkdir -p secrets
+for f in secrets/*; do
+  [ ! -L "$f" ] || { echo "refusing: $f is a symlink" >&2; exit 1; }
+done
 if [ ! -s secrets/rpc_password ]; then
   head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' > secrets/rpc_password
   echo "generated secrets/rpc_password"
@@ -21,7 +27,7 @@ fi
 # The Worker's STATE_TOKEN, for the app's database snapshots; the app won't start without it
 # (unset STATE_TARGET in docker-compose.yml to run without snapshots).
 [ -e secrets/state_token ] || : > secrets/state_token
-chown 1000:1000 secrets/* 2>/dev/null || true
+chown -h 1000:1000 secrets/* 2>/dev/null || true
 chmod 0400 secrets/rpc_password
 chmod 0400 secrets/ingest_token secrets/bench_token secrets/state_token secrets/r2_access_key_id secrets/r2_secret_access_key
 [ -e .env ] || cp .env.example .env

@@ -39,7 +39,7 @@ install -d -m 0755 "$LIB"
 
 # Root runs init.sh, the build and this script from APP_DIR's tree: nobody else may be able to change it.
 if [ "$(id -u)" = 0 ]; then
-  bad=$(find "$APP_DIR" -path "$APP_DIR/deploy/secrets" -prune -o \( ! -user 0 -o -perm -o+w -o \( ! -group 0 -perm -g+w \) \) -print | head -5)
+  bad=$(find "$APP_DIR" -path "$APP_DIR/deploy/secrets/*" -prune -o \( ! -user 0 -o -perm -o+w -o \( ! -group 0 -perm -g+w \) \) -print | head -5)
   [ -z "$bad" ] || { echo "$APP_DIR must be root's alone; not so for: $bad" >&2; exit 1; }
 fi
 
@@ -79,6 +79,8 @@ deployed() {
 }
 deployed app "${APP_COMMIT:-}"
 deployed worker "${WORKER_COMMIT:-}"
+# The commit this updater comes from: update.sh replaces it only with one from a newer deploy.
+[ -s "$STATE/updater-commit" ] || cp "$STATE/app-commit" "$STATE/updater-commit"
 
 for img in $(cd "$APP_DIR/deploy" && docker compose config --images | grep -E '^dash-nodes(-[a-z0-9]+)?:' || true); do
   if ! docker image inspect "${img%:*}:good" >/dev/null 2>&1 && docker image inspect "$img" >/dev/null 2>&1; then

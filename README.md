@@ -261,11 +261,13 @@ from its `deploy/` directory.
      `up -d`, and restarts services whose bind-mounted files changed (the publisher's scripts, dashd's
      and i2pd's config). Then it checks that the app's `/healthz` answers from the new image and still
      does a minute later, and that every service that was running still is. If not, the last good
-     tree and images (tagged `:good`; `:previous` is the one before) go back. A commit is tried 3 times
+     tree and images (tagged `:good`; `:previous` is the one before) go back. A container that
+     restarts during that minute counts as a failure too. A commit is tried 3 times
      (a pass that dies mid-deploy counts) and then waits for a newer one. Docs-only changes just
      update the tree;
-  3. if `worker/` or `web/` changed, deploys the Worker: `npm ci`, `npm test` and the build in a
-     `node` container without the token, then `wrangler deploy` with it. It waits until every network's
+  3. if `worker/` or `web/` changed, deploys the Worker: `npm ci --ignore-scripts`, `npm test` and
+     the build in a `node` container without the token, then `wrangler deploy` with it (wrangler
+     itself is pinned by the lockfile like everything else). It waits until every network's
      published summary comes from a crawl that finished after the new app started, so pages never
      ask for fields the data doesn't have yet. The token (one that can edit Workers scripts) lives in
      `/etc/dash-nodes-cd/cf-token` (0600); without it, each pass logs that the Worker is waiting.
@@ -288,8 +290,9 @@ from its `deploy/` directory.
   ```
 
   **Rolling back:** `dash-nodes-update deploy <last good commit>`. Going back, the Worker is deployed
-  first and without waiting, since older pages work on newer data. The commit it replaced is
-  held: passes won't redeploy it, only a newer commit on `main` (the fix). The schema migrations so far
+  first and without waiting, since older pages work on newer data. Passes then skip `main`'s head
+  as it was at that moment, and deploy again once `main` moves on (the fix). The installed updater
+  stays as it is: a deploy only replaces it with one from a newer commit. The schema migrations so far
   only add nullable columns, so an older app runs on a newer database. For an instant app-only
   rollback: pause, then `docker tag dash-nodes:previous dash-nodes:local && docker compose up -d app bench`.
   The tree and `app-commit` then still say the newer commit, so stay paused until `deploy` sorts it
