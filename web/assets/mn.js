@@ -1,5 +1,5 @@
 import { api, chrome, currentNet, NETWORKS, el, fmt, pct, href, countryName, flag, place, badge, ago, dateTime, dash, nodeStatus, poseBadge, uptimeKind, tile, card,
-  changeText, changeKind, DKG_CHECKS, DKG_OVERALL } from "./common.js";
+  changeText, changeKind, DKG_CHECKS, DKG_OVERALL, blockSpan, heightWhen } from "./common.js";
 
 chrome("masternodes");
 const net = currentNet();
@@ -98,8 +98,9 @@ async function main() {
       m.last_seen ? `last answered ${ago(m.last_seen)}` : "never answered our crawler"),
     tile("Version", m.version || "–", m.protocol ? `protocol ${m.protocol}` : "no handshake yet"),
     tile("Uptime, 30 days", at30 ? pct(ok30 / at30) : "–", at30 ? `${fmt(ok30)} of ${fmt(at30)} port checks` : "no checks yet"),
-    tile("Last paid", m.last_paid_height ? (tip ? `${fmt(tip - m.last_paid_height)} blocks ago` : fmt(m.last_paid_height)) : "never",
-      m.last_paid_height ? `block ${fmt(m.last_paid_height)}` : ""),
+    tile("Last paid", !m.last_paid_height ? "never" : tip ? (tip > m.last_paid_height ? `${blockSpan(tip - m.last_paid_height)} ago` : "latest block")
+      : `block ${fmt(m.last_paid_height)}`,
+      m.last_paid_height && tip ? `${fmt(tip - m.last_paid_height)} blocks ago · block ${fmt(m.last_paid_height)}` : ""),
     earnedTile(m),
   ));
 
@@ -130,12 +131,12 @@ async function main() {
         ["Owner address", m.owner_address ? el("span", {}, ...m.owner_address.split(",").flatMap((a, i) => [i ? ", " : "", link("address", a)])) : null],
         ["Voting address", link("address", m.voting_address)],
         ["Operator public key", el("span", { class: "mono", text: m.pubkey_operator || "–" })],
-        ["Registered at block", fmt(m.registered_height)],
-        ["Last paid at block", m.last_paid_height ? fmt(m.last_paid_height) : "never"],
+        ["Registered at block", heightWhen(m.registered_height, tip)],
+        ["Last paid at block", m.last_paid_height ? heightWhen(m.last_paid_height, tip) : "never"],
         // Banned says it all; otherwise the penalty is what matters (it's what gets a node banned).
-        ["PoSe", m.pose_ban_height > 0 ? badge("serious", `Banned at block ${fmt(m.pose_ban_height)}`)
+        ["PoSe", m.pose_ban_height > 0 ? badge("serious", `Banned at block ${heightWhen(m.pose_ban_height, tip)}`)
           : m.pose_penalty ? `Penalty ${fmt(m.pose_penalty)}, not banned` : "No penalty"],
-        m.pose_revived_height > 0 && ["PoSe revived at", fmt(m.pose_revived_height)],
+        m.pose_revived_height > 0 && ["PoSe revived at block", heightWhen(m.pose_revived_height, tip)],
         m.revocation_reason ? ["Revocation reason", String(m.revocation_reason)] : null,
         m.removed && ["Left the list", dateTime(m.removed)],
       ])),
@@ -446,7 +447,7 @@ function speedSection(box, b) {
       el("thead", {}, el("tr", {}, ...SPEED_HEADS.map((h, i) =>
         el("th", { class: i > 1 ? "r" : null, text: h })))),
       el("tbody", {}, ...tested.map(speedRow))))),
-    el("p", { class: "muted small" }, "Each test downloads the latest 50,000 block headers and the masternode list from this node and checks them against our own node. Grades use the scoring of ",
+    el("p", { class: "muted small" }, `Each test downloads the latest 50,000 block headers (about ${blockSpan(50000)} of blocks) and the masternode list from this node and checks them against our own node. Grades use the scoring of `,
       el("a", { href: "https://github.com/dashpay/spv-network-health", text: "spv-network-health" }), "."));
   box.hidden = false;
 }
@@ -502,7 +503,8 @@ function paymentsSection(m) {
       more.disabled = false;
     }
   });
-  const note = ps.indexed ? `indexed blocks ${fmt(ps.indexed.from)}–${fmt(ps.indexed.to)}` : "payment index not started yet";
+  const note = ps.indexed ? `indexed blocks ${fmt(ps.indexed.from)}–${fmt(ps.indexed.to)}, about ${blockSpan(ps.indexed.to - ps.indexed.from)}`
+    : "payment index not started yet";
   // How often it gets paid lately: the spacing of its latest payment rounds. An evonode is paid several
   // blocks in a row, so a run of consecutive blocks counts as one round.
   const rounds = m.payments.filter((p, i, all) => i === 0 || all[i - 1].height - p.height > 1).slice(0, 6);

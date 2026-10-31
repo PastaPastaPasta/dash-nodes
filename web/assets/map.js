@@ -3,7 +3,7 @@
 import { Map as GLMap, Marker, Popup, NavigationControl, AttributionControl, LngLatBounds } from "/assets/vendor/maplibre-gl.mjs";
 import { api, chrome, currentNet, el, fmt, pct, compact, href, place, shortHash, badge, nodeStatus, evoPill, mnFilters, mnMatches,
   rememberParams, filterQuery, countBy, segmented, filterSelect, searchBox, REACH, REGISTRATION, registration, poseBadge, TYPE_OPTIONS, versionOptions,
-  countryOptions, hostOptions, DKG_OPTIONS } from "./common.js";
+  countryOptions, hostOptions, DKG_OPTIONS, blocksAgo } from "./common.js";
 import { bottomSheet } from "./sheet.js";
 
 chrome("map", { footer: false });
@@ -286,7 +286,7 @@ function openCluster(f) {
 let popup = null;
 
 function nodeCard(m) {
-  const paid = !m.last_paid_height ? "never" : tip ? `${fmt(tip - m.last_paid_height)} blocks ago` : `block ${fmt(m.last_paid_height)}`;
+  const paid = !m.last_paid_height ? "never" : tip ? blocksAgo(tip, m.last_paid_height) : `block ${fmt(m.last_paid_height)}`;
   const [k, l] = nodeStatus(m);
   const facts = [
     ["Address", el("span", { class: "mono", text: m.service || "–" })],

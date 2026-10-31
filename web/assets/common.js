@@ -83,6 +83,33 @@ export function ago(ts) {
   return `${Math.round(s / 86400)} d ago`;
 }
 
+// Block counts become time at the chain's average spacing, an estimate: Dash targets 2.5 minutes, but
+// since the masternode list began (block 1,028,160, February 2019) blocks have come about every 158 s.
+const BLOCK_SECONDS = 158;
+
+/** A span in seconds the way people say it: "40 min", "5 h", "12 days", "8 months", "2.4 years". */
+export function duration(s) {
+  if (s < 5400) return `${Math.max(1, Math.round(s / 60))} min`;
+  if (s < 129600) return `${Math.round(s / 3600)} h`;
+  const d = s / 86400;
+  if (d < 60) return `${Math.round(d)} days`;
+  if (d < 730) return `${Math.round(d / 30.44)} months`;
+  return `${(d / 365.25).toFixed(1)} years`;
+}
+
+/** About how long n blocks take: "8 months". */
+export const blockSpan = (n) => duration(n * BLOCK_SECONDS);
+
+/** A past height from the tip, in time and blocks: "8 months ago · 129,400 blocks". */
+export function blocksAgo(tip, height) {
+  const n = Math.max(0, tip - height);
+  return n ? `${blockSpan(n)} ago · ${fmt(n)} blocks` : "in the latest block";
+}
+
+/** A height, and about when it was if the tip is known: "2,435,262, about 8 months ago". */
+export const heightWhen = (height, tip) =>
+  tip && height <= tip ? `${fmt(height)}, ${tip - height ? `about ${blockSpan(tip - height)} ago` : "the latest block"}` : fmt(height);
+
 export function dateTime(ts) {
   return new Date(ts * 1000).toLocaleString("en-GB", { dateStyle: "medium", timeStyle: "short", timeZone: "UTC" }) + " UTC";
 }

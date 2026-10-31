@@ -369,6 +369,8 @@ pre.code { background: var(--surface-2); padding: 10px 12px; border-radius: 8px;
 
 /* ---- overview ---- */
 .small { font-size: 13px; }
+/* A table value's other unit (time under blocks, or blocks under time). */
+td small.under { display: block; font-size: 12px; color: var(--muted); }
 .btn.primary { background: var(--brand); color: var(--brand-ink); box-shadow: none; font-weight: 600; }
 .btn.primary:hover { background: color-mix(in srgb, var(--brand) 88%, var(--ink)); }
 .hero { position: relative; overflow: hidden; border-bottom: 1px solid var(--ring); }
