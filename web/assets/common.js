@@ -321,7 +321,14 @@ export function chrome(page, { footer = true } = {}) {
   const header = el("header", { class: "top" }, el("div", { class: "top-inner" }, brand, nav, more, right));
   const setMenu = (open) => { header.classList.toggle("menu-open", open); more.setAttribute("aria-expanded", String(open)); };
   more.addEventListener("click", (e) => { e.stopPropagation(); setMenu(!header.classList.contains("menu-open")); });
-  document.addEventListener("click", (e) => { if (!right.contains(e.target)) setMenu(false); });
+  // A tap outside the open menu only closes it, as with a native menu: it doesn't also follow the link
+  // or press the button underneath.
+  document.addEventListener("click", (e) => {
+    if (!header.classList.contains("menu-open") || right.contains(e.target) || more.contains(e.target)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    setMenu(false);
+  }, true);
   document.addEventListener("keydown", (e) => {
     if (e.key !== "Escape" || !header.classList.contains("menu-open")) return;
     const inside = right.contains(document.activeElement);
