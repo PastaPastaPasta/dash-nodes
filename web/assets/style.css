@@ -233,6 +233,7 @@ input[type="search"]:focus, select:focus, button:focus-visible { outline: 2px so
 .btn { font: inherit; font-size: 13px; border: 0; border-radius: 7px; padding: 6px 12px; cursor: pointer; background: var(--surface); color: var(--ink); box-shadow: 0 0 0 1px var(--ring); }
 .btn:hover { background: var(--surface-2); }
 .btn:disabled { opacity: .5; cursor: default; }
+#cards, #table { scroll-margin-top: 64px; } /* clear of the sticky header */
 .pager { display: flex; align-items: center; gap: 10px; justify-content: flex-end; margin-top: 10px; color: var(--ink-2); font-size: 12.5px; }
 
 /* uptime strip */

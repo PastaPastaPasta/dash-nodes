@@ -10,8 +10,14 @@ const state = {
   ...mnFilters(params),
   sort: params.get("sort") || "registered_height",
   dir: params.get("dir") === "desc" ? -1 : 1,
-  page: 0,
+  page: Math.max(0, (parseInt(params.get("page"), 10) || 1) - 1),
 };
+// Coming back to this list (Back from a masternode) returns to where it was: the page is in the
+// address, the scroll position in the history entry. The list renders after its data arrives, too
+// late for the browser's own restore.
+const savedY = history.state?.y;
+history.scrollRestoration = "manual";
+addEventListener("pagehide", () => history.replaceState({ y: scrollY }, ""));
 let rows = [];
 let tip = null;
 
@@ -70,8 +76,10 @@ const COLUMNS = [
 function filtered() {
   const out = rows.filter((m) => mnMatches(m, state));
   const col = COLUMNS.find((c) => c.key === state.sort) || COLUMNS[0];
+  // Rows without a value (no address, never crawled) go last whichever way the column sorts.
   out.sort((a, b) => {
     const x = col.get(a), y = col.get(b);
+    if ((x === "") !== (y === "")) return x === "" ? 1 : -1;
     return (x < y ? -1 : x > y ? 1 : 0) * state.dir || (a.protx < b.protx ? -1 : 1);
   });
   return out;
@@ -81,6 +89,7 @@ function remember() {
   rememberParams(state, {
     sort: state.sort === "registered_height" ? "" : state.sort,
     dir: state.dir < 0 ? "desc" : "",
+    page: state.page ? String(state.page + 1) : "",
   });
   document.getElementById("to-map").href = href(`/map${filterQuery(state)}`);
 }
@@ -103,12 +112,20 @@ function render() {
     : [el("tr", {}, el("td", { colspan: COLUMNS.length, class: "empty", text: emptyText }))])));
   document.getElementById("pager").replaceChildren(
     el("span", { text: `${fmt(list.length)} of ${fmt(rows.length)} masternodes` }),
-    el("button", { class: "btn", type: "button", disabled: state.page === 0, onclick: () => { state.page--; render(); }, text: "Previous" }),
+    el("button", { class: "btn", type: "button", disabled: state.page === 0, onclick: () => turn(-1), text: "Previous" }),
     el("span", { text: `Page ${state.page + 1} of ${pages}` }),
-    el("button", { class: "btn", type: "button", disabled: state.page >= pages - 1, onclick: () => { state.page++; render(); }, text: "Next" }));
+    el("button", { class: "btn", type: "button", disabled: state.page >= pages - 1, onclick: () => turn(1), text: "Next" }));
   const active = MN_FILTERS.filter((k) => state[k]).length;
   document.getElementById("filters-toggle").textContent = active ? `Filters and sort (${active} on)` : "Filters and sort";
   remember();
+}
+
+/** Next or previous page, starting from its first row (the pager sits below the last). */
+function turn(by) {
+  state.page += by;
+  render();
+  const list = document.getElementById("cards");
+  (list.offsetParent ? list : document.getElementById("table")).scrollIntoView({ block: "start" });
 }
 
 /** Phones: one card per masternode with what matters most; the whole card opens it. */
@@ -165,6 +182,9 @@ function csv() {
 
 async function main() {
   document.getElementById("csv").addEventListener("click", csv);
+  const loading = "Loading the masternode list…";
+  document.getElementById("cards").replaceChildren(el("li", { class: "empty", text: loading }));
+  document.getElementById("table").replaceChildren(el("tbody", {}, el("tr", {}, el("td", { class: "empty", text: loading }))));
   try {
     const data = await api(`${net}/masternodes`);
     rows = data.masternodes;
@@ -178,6 +198,7 @@ async function main() {
   }
   renderFilters();
   render();
+  if (savedY) scrollTo(0, savedY);
 }
 
 main();
