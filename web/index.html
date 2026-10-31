@@ -3,15 +3,28 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Dash Nodes: the Dash network, live</title>
+  <title>DashHQ Radar: the Dash network, live</title>
   <meta name="description" content="Live census of the Dash P2P network: every reachable node and masternode, the software they run, where they're hosted and how reachable they are.">
+  <link rel="canonical" href="https://radar.dashhq.org/">
+  <meta property="og:site_name" content="DashHQ Radar">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="DashHQ Radar: the Dash network, live">
+  <meta property="og:description" content="Live census of the Dash P2P network: every reachable node and masternode, the software they run, where they're hosted and how reachable they are.">
+  <meta property="og:url" content="https://radar.dashhq.org/">
+  <meta name="twitter:card" content="summary">
   <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
+  <!-- TODO(icon): worker/scripts/build.mjs puts the PNG icon set and og:image here once
+       web/assets/icons/ has it (see the README there). Until then favicon.svg is the icon. -->
+  <link rel="manifest" href="/assets/site.webmanifest">
   <link rel="stylesheet" href="/assets/style.css">
   <script type="module" src="/assets/overview.js"></script>
 </head>
 <body>
 <section class="hero" id="hero" aria-labelledby="hero-title">
-  <svg class="hero-map" id="hero-map" role="img" aria-label="Where reachable Dash nodes are, by city"></svg>
+  <div class="hero-map">
+    <svg id="hero-map" role="img" aria-label="Where reachable Dash nodes are, by city"></svg>
+    <div class="wm-pings" id="hero-pings" aria-hidden="true"></div>
+  </div>
   <div class="hero-inner">
     <h1 id="hero-title">Counting the Dash network…</h1>
     <p class="hero-sub" id="hero-sub"></p>

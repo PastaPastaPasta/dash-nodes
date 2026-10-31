@@ -33,7 +33,7 @@ const MAX_SUBVERSION_LENGTH: usize = 256;
 const MAX_ADDRS: u64 = 1000;
 
 pub fn user_agent() -> String {
-    format!("/dash-nodes:{}(nodes.dashhq.org)/", env!("CARGO_PKG_VERSION"))
+    format!("/dash-nodes:{}(radar.dashhq.org)/", env!("CARGO_PKG_VERSION"))
 }
 
 #[derive(Clone, Debug)]

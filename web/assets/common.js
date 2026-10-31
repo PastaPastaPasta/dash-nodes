@@ -270,7 +270,6 @@ export function card(title, sub, body) {
   return el("section", { class: "card" }, el("div", { class: "card-head" }, el("h2", { text: title }), el("span", { class: "sub", text: sub })), body);
 }
 
-const LOGO = `<svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="8" fill="var(--brand)"/><circle cx="10" cy="11" r="2.6" fill="var(--brand-ink)"/><circle cx="22" cy="9" r="2.6" fill="var(--brand-ink)"/><circle cx="16" cy="22" r="2.6" fill="var(--brand-ink)"/><path d="M10 11 22 9 16 22Z" fill="none" stroke="var(--brand-ink)" stroke-width="1.6" stroke-linejoin="round" opacity=".75"/></svg>`;
 const SUN = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>`;
 const MORE = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h10"/></svg>`;
 const MOON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>`;
@@ -309,9 +308,10 @@ export function chrome(page, { footer = true } = {}) {
     themeChanged();
   });
   paintTheme();
-  const brand = el("a", { class: "brand", href: href("/") });
-  brand.innerHTML = LOGO;
-  brand.append(el("span", { text: "Dash Nodes" }), el("small", { text: "nodes.dashhq.org" }));
+  // Named here because narrow screens hide the text and the logo is decoration.
+  const brand = el("a", { class: "brand", href: href("/"), "aria-label": net === "testnet" ? "DashHQ Radar, testnet" : "DashHQ Radar" });
+  brand.append(el("img", { src: "/assets/icons/mark-96.png", alt: "", width: 22, height: 22 }));
+  brand.append(el("span", { text: "DashHQ Radar" }), el("small", { text: "radar.dashhq.org" }));
   if (net === "testnet") brand.append(el("b", { class: "net-badge", text: "Testnet" }));
   // Phones: the network switch, theme and status fold into a menu behind one button.
   const more = el("button", { class: "more-toggle", type: "button", "aria-label": "Network and display settings", "aria-expanded": "false", "aria-controls": "top-right" });
@@ -339,7 +339,7 @@ export function chrome(page, { footer = true } = {}) {
 
   matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { if (!localStorage.getItem("theme")) themeChanged(); });
   if (footer) document.body.append(el("footer", { class: "bottom" }, el("div", { class: "inner" },
-    el("span", {}, "An independent Dash network monitor. Crawls the P2P network every 15 minutes from one vantage point; reachability is as seen from there."),
+    el("span", {}, "DashHQ Radar, an independent Dash network monitor. It crawls the P2P network every 15 minutes from one vantage point; reachability is as seen from there."),
     el("span", {},
       el("a", { href: href("/api"), text: "API" }), " · ",
       "IP geolocation by ", el("a", { href: "https://db-ip.com", text: "DB-IP" }), " (CC BY 4.0)"))));

@@ -81,7 +81,9 @@ async function main() {
     root.append(el("div", { class: "banner", text: `Couldn't load this masternode: ${e.message}` }));
     return;
   }
-  document.title = `Dash Nodes: masternode ${protx.slice(0, 8)}${net === "testnet" ? " · testnet" : ""}`;
+  document.title = `DashHQ Radar: masternode ${protx.slice(0, 8)}${net === "testnet" ? " · testnet" : ""}`;
+  // One page per masternode and network, on either hostname: name the radar.dashhq.org one.
+  document.head.append(el("link", { rel: "canonical", href: `https://radar.dashhq.org${href(`/mn/${protx}`)}` }));
   const [sk, sl] = statusOf(m);
   const banned = m.removed ? null : poseBadge(m);
   root.querySelector("h1").replaceChildren(...[m.type === "Evo" ? "Evonode " : "Masternode ", badge(sk, sl), banned && " ", banned].filter(Boolean));

@@ -436,7 +436,7 @@ async function main() {
     return;
   }
   renderHero();
-  heroPoints().then((points) => worldMap($("hero-map"), points)).catch(() => {});
+  heroPoints().then((points) => worldMap($("hero-map"), points, $("hero-pings"))).catch(() => {});
   renderControls();
   renderSections();
   renderDkg();

@@ -24,7 +24,7 @@ test("a version message round-trips through the stream splitter", async () => {
   assert.equal(got.command, "version");
   const v = parseVersion(got.payload);
   assert.equal(v.protocol, 70242);
-  assert.equal(v.user_agent, "/dash-nodes:check(nodes.dashhq.org)/");
+  assert.equal(v.user_agent, "/dash-nodes:check(radar.dashhq.org)/");
   assert.equal(v.height, 0);
   assert.throws(() => parseVersion(new Uint8Array(40)), /bad version message/);
   const testnet = new Messages("testnet");
@@ -50,7 +50,7 @@ test("checkNode reports the node's version, and failures as results", async () =
   const reply = await encode("testnet", "version", versionPayload(parseAddress("5.6.7.8:19999")));
   const ok = await checkNode(fakeConnect(reply), "testnet", "5.6.7.8:19999");
   assert.equal(ok.ok, true);
-  assert.equal(ok.user_agent, "/dash-nodes:check(nodes.dashhq.org)/");
+  assert.equal(ok.user_agent, "/dash-nodes:check(radar.dashhq.org)/");
   assert.ok(ok.connect_ms >= 0 && ok.handshake_ms >= 0);
   const refused = await checkNode(() => ({ opened: Promise.reject(new Error("refused")), close: async () => {} }), "mainnet", "1.2.3.4:9999");
   assert.deepEqual([refused.ok, refused.error], [false, "connect: refused"]);

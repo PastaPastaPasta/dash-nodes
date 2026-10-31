@@ -40,23 +40,52 @@ async function landPath() {
   return land;
 }
 
+const PINGS = 5; // radar pings, from the biggest clusters at least PING_GAP viewBox units apart
+const PING_GAP = 70;
+
+/**
+ * Radar pings into `box` (the .wm-pings overlay): a ring per chosen cluster, taking turns for half a
+ * minute. The rings are CSS animations; script only places them once, and pauses them while the map
+ * is off screen.
+ */
+function radarPings(box, dots) {
+  const picked = [];
+  for (const d of dots) {
+    if (picked.length === PINGS) break;
+    if (picked.every((p) => Math.hypot(p.x - d.x, p.y - d.y) >= PING_GAP)) picked.push(d);
+  }
+  const frame = document.createElement("div");
+  picked.forEach((d, i) => {
+    const ring = document.createElement("span");
+    ring.className = "wm-ping";
+    ring.style.cssText = `--x:${d.x / 10}%;--y:${d.y / 4.4}%;--r:${(d.r + 22).toFixed(1)};--d:${1200 + i * 1000}ms`;
+    frame.append(ring);
+  });
+  box.replaceChildren(frame);
+  new IntersectionObserver((es) => box.classList.toggle("paused", !es.at(-1).isIntersecting)).observe(box);
+}
+
 /**
  * Draws the map into `root` (an <svg>). points: [{lat, lon, nodes}]. Dots fade in west to east once,
- * like a crawl sweeping the globe; skipped when the reader prefers reduced motion.
+ * like a crawl sweeping the globe; skipped when the reader prefers reduced motion. Then, if `pings`
+ * (the overlay over `root`) is given, the biggest clusters send out radar pings (also off then, in CSS).
  */
-export async function worldMap(root, points) {
+export async function worldMap(root, points, pings) {
   // The whole land outline: Greenland and northern Scandinavia reach the top of the projection.
   root.setAttribute("viewBox", "0 0 1000 440");
   root.setAttribute("preserveAspectRatio", "xMidYMid meet");
   root.replaceChildren(svg("path", { class: "wm-land", d: await landPath() }));
   const dots = svg("g", { class: "wm-dots" });
   const max = Math.max(1, ...points.map((p) => p.nodes));
+  const placed = [];
   for (const p of [...points].sort((a, b) => b.nodes - a.nodes)) {
     const [x, y] = project(p.lon, p.lat);
     const r = 1.6 + Math.sqrt(p.nodes / max) * 13;
     const c = svg("circle", { cx: x.toFixed(1), cy: y.toFixed(1), r: r.toFixed(1) });
     c.style.setProperty("--d", `${Math.round((x / 1000) * 900)}ms`);
     dots.append(c);
+    placed.push({ x, y, r });
   }
   root.append(dots);
+  if (pings) radarPings(pings, placed);
 }
