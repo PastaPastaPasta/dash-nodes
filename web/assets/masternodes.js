@@ -72,8 +72,9 @@ const COLUMNS = [
     cell: (m) => {
       const h = m.last_paid_height;
       if (!h) return el("td", { class: "r", text: "never" });
-      const b = tip && behind(tip, h);
-      return tip ? blockCell(b ? b[0] : "latest block", b?.[1], `block ${fmt(h)}`) : blockCell(`block ${fmt(h)}`);
+      if (!tip) return blockCell(`block ${fmt(h)}`);
+      const b = behind(tip, h);
+      return blockCell(b ? b[0] : "latest block", b?.[1], `block ${fmt(h)}`);
     } },
   { key: "registered_height", label: "Registered", r: true, get: (m) => m.registered_height || 0,
     cell: (m) => blockCell(fmt(m.registered_height), m.registered_height > 0 && tip ? behind(tip, m.registered_height)?.[0] : null) },
@@ -82,7 +83,7 @@ const COLUMNS = [
 
 /** A cell with a value and, under it, the same in the other unit (time or blocks). */
 function blockCell(main, under, title) {
-  return el("td", { class: "r", title: title || "" }, main, under ? el("small", { class: "under", text: under }) : null);
+  return el("td", { class: "r", title }, main, under ? el("small", { class: "under", text: under }) : null);
 }
 
 function filtered() {

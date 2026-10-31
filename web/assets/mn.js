@@ -287,7 +287,6 @@ async function notFound() {
     el("a", { href: href(`/masternodes?q=${encodeURIComponent(protx.slice(0, 16))}`), text: "Search the list" }), "."));
 }
 
-/** What it earned over the last year, and the yield on its collateral that works out to. */
 /**
  * What it was paid and the yield, over one window: the last 90 days (as the home page's medians), or
  * since it registered or the payments index began, if later.

@@ -88,7 +88,7 @@ export function ago(ts) {
 const BLOCK_SECONDS = 158;
 
 /** A span in seconds the way people say it: "40 min", "5 h", "12 days", "8 months", "2.4 years". */
-export function duration(s) {
+function duration(s) {
   if (s < 5400) return `${Math.max(1, Math.round(s / 60))} min`;
   if (s < 129600) return `${Math.round(s / 3600)} h`;
   const d = s / 86400;
