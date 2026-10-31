@@ -112,6 +112,16 @@ nav.main a[aria-current="page"] { color: var(--ink); background: var(--surface-2
   .top-right .menu-only { display: block; }
   nav.main a.nav-api { display: none; }
 }
+/* Narrow phones: every tab fits without scrolling. The Overview tab links home too, so the logo gives
+   way (testnet keeps its badge) and the tabs tighten. */
+@media (max-width: 440px) {
+  .top-inner { gap: 4px; padding: 6px 8px; }
+  .more-toggle { padding: 6px 4px; }
+  .brand svg { display: none; }
+  .brand:not(:has(.net-badge)) { display: none; }
+  .net-badge { font-size: 10.5px; padding: 2px 5px; }
+  nav.main a { padding: 7px 6px; font-size: 13.5px; }
+  .brand:has(.net-badge) ~ nav.main a { padding-inline: 4px; }
 }
 .chain-status { color: var(--muted); font-size: 12.5px; white-space: nowrap; }
 .chain-status .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 6px; vertical-align: 1px; background: var(--muted); }
