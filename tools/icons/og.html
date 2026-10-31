@@ -1,0 +1,32 @@
+<!doctype html>
+<!-- The link-preview card (og.png): the icon and the wordmark in the site's type, on its night navy.
+     google-chrome --headless --hide-scrollbars --force-device-scale-factor=1 --window-size=1200,630 \
+       --screenshot=tools/icons/radar-og.png tools/icons/og.html
+     then tools/icons.sh. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<style>
+  @font-face {
+    font-family: "Archivo"; font-weight: 100 900; font-stretch: 62% 125%;
+    src: url("../../web/assets/fonts/archivo-latin.woff2") format("woff2");
+  }
+  html, body { margin: 0; width: 1200px; height: 630px; overflow: hidden; }
+  body {
+    display: flex; align-items: center; gap: 64px; padding: 0 96px; box-sizing: border-box;
+    background: #0a1321; color: #e8eef6; font-family: "Archivo", sans-serif;
+  }
+  img { width: 300px; height: 300px; flex: none; }
+  h1 { margin: 0; font-size: 96px; line-height: 1; font-weight: 680; font-stretch: 118%; letter-spacing: -0.02em; }
+  h1 span { color: #3ba3f2; }
+  p { margin: 26px 0 0; font-size: 32px; font-weight: 450; color: #a8b7ca; }
+</style>
+</head>
+<body>
+  <img src="radar-master.png" alt="">
+  <div>
+    <h1>DashHQ <span>Radar</span></h1>
+    <p>The Dash network, live<br>radar.dashhq.org</p>
+  </div>
+</body>
+</html>

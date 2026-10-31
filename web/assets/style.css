@@ -79,7 +79,7 @@ header.top {
 .top-inner { max-width: 1280px; margin: 0 auto; padding: 10px 20px; display: flex; align-items: center; gap: 22px; flex-wrap: wrap; }
 .brand { display: flex; align-items: center; gap: 9px; color: var(--ink); font-weight: 650; font-size: 15px; }
 .brand:hover { text-decoration: none; }
-.brand svg { width: 22px; height: 22px; }
+.brand img { width: 22px; height: 22px; display: block; }
 .brand small { font-weight: 450; color: var(--muted); font-size: 13px; }
 nav.main { display: flex; gap: 2px; }
 nav.main a { color: var(--ink-2); padding: 6px 10px; border-radius: 6px; font-weight: 500; }
@@ -96,7 +96,7 @@ nav.main a[aria-current="page"] { color: var(--ink); background: var(--surface-2
 @media (max-width: 900px) {
   .top-inner { flex-wrap: nowrap; gap: 6px; padding: 6px 10px; position: relative; }
   .brand span, .brand small { display: none; }
-  .brand svg { width: 26px; height: 26px; }
+  .brand img { width: 26px; height: 26px; }
   nav.main { overflow-x: auto; scrollbar-width: none; flex: 1; min-width: 0; }
   nav.main::-webkit-scrollbar { display: none; }
   nav.main a { padding: 7px 8px; white-space: nowrap; font-size: 14px; }
@@ -119,7 +119,7 @@ nav.main a[aria-current="page"] { color: var(--ink); background: var(--surface-2
 @media (max-width: 440px) {
   .top-inner { gap: 4px; padding: 6px 8px; }
   .more-toggle { padding: 6px 4px; }
-  .brand svg { display: none; }
+  .brand img { display: none; }
   .brand:not(:has(.net-badge)) { display: none; }
   .net-badge { font-size: 10.5px; padding: 2px 5px; }
   nav.main a { padding: 7px 6px; font-size: 13.5px; }
