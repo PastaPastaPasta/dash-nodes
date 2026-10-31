@@ -402,20 +402,19 @@ pre.code { background: var(--surface-2); padding: 10px 12px; border-radius: 8px;
 @keyframes dot-in { from { opacity: 0; transform: scale(0.2); } }
 /* Radar pings from the biggest clusters: HTML rings over the SVG so the browser runs them on the
    compositor (transform and opacity only). The frame is the map's viewBox (1000 x 440) as the SVG
-   fits it into the box ("meet"), so --x/--y (percent) and --r (viewBox units) line up with the dots. */
+   fits it into the box ("meet"), so --x/--y (percent) and --r (viewBox units) line up with the dots.
+   Six rounds (about half a minute), then the map is still. */
 .wm-pings { position: absolute; inset: 0; container-type: size; --u: min(0.1cqw, 100cqh / 440); }
 .wm-pings > div { position: absolute; inset: 0; margin: auto; width: min(100cqw, 100cqh * 1000 / 440); height: min(100cqh, 100cqw * 440 / 1000); }
 .wm-ping {
-  --s: calc(var(--r) * 2 * var(--u));
-  position: absolute; left: var(--x); top: var(--y); width: var(--s); height: var(--s); margin: calc(var(--s) / -2) 0 0 calc(var(--s) / -2);
+  position: absolute; left: var(--x); top: var(--y); width: calc(var(--r) * 2 * var(--u)); aspect-ratio: 1; translate: -50% -50%;
   border: 1.5px solid var(--brand); border-radius: 50%;
   background: radial-gradient(closest-side, transparent 60%, color-mix(in srgb, var(--brand) 22%, transparent));
-  opacity: 0; transform: scale(0.2); will-change: transform, opacity;
-  animation: wm-ping 5s cubic-bezier(.2, .6, .35, 1) var(--d, 0ms) infinite both;
+  opacity: 0; transform: scale(0.2);
+  animation: wm-ping 5s cubic-bezier(.2, .6, .35, 1) var(--d, 0ms) 6;
 }
 .wm-pings.paused .wm-ping { animation-play-state: paused; }
 @keyframes wm-ping {
-  0% { opacity: 0; transform: scale(0.2); }
   8% { opacity: 0.7; }
   56%, 100% { opacity: 0; transform: scale(1); }
 }

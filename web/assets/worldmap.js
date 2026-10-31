@@ -44,8 +44,9 @@ const PINGS = 5; // radar pings, from the biggest clusters at least PING_GAP vie
 const PING_GAP = 70;
 
 /**
- * Radar pings into `box` (the .wm-pings overlay): a ring per chosen cluster, taking turns. The rings
- * are CSS animations; script only places them once, and pauses them while the map is off screen.
+ * Radar pings into `box` (the .wm-pings overlay): a ring per chosen cluster, taking turns for half a
+ * minute. The rings are CSS animations; script only places them once, and pauses them while the map
+ * is off screen.
  */
 function radarPings(box, dots) {
   const picked = [];
@@ -61,7 +62,7 @@ function radarPings(box, dots) {
     frame.append(ring);
   });
   box.replaceChildren(frame);
-  new IntersectionObserver(([e]) => box.classList.toggle("paused", !e.isIntersecting)).observe(box);
+  new IntersectionObserver((es) => box.classList.toggle("paused", !es.at(-1).isIntersecting)).observe(box);
 }
 
 /**

@@ -61,7 +61,9 @@ dashd ×2 ─ app (crawler, SQLite, API :8080) ─ publisher ──S3 PUT──�
   `SOURCE`, `TARGET`), since the publisher keys its state on the destination and a new one republishes
   everything. `wrangler deploy` makes the Worker's Custom Domains exactly that list, so a hostname
   added in the dashboard but not there is dropped by the next deploy, and adding one there needs a
-  token that can create its DNS record (the CD token can't: add it in the dashboard first).
+  token that can create its DNS record (the CD token can't: add it in the dashboard first). Going
+  back to a commit from before radar.dashhq.org was in that list removes it (and its DNS record):
+  add it again in the dashboard afterwards.
 
 Deploying the Worker (needs a Cloudflare API token with Workers Scripts and R2 edit on the account,
 and Workers Routes and DNS edit on the zone):

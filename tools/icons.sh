@@ -12,8 +12,8 @@ out=$(dirname "$0")/../web/assets/icons
 # The site's dark page color, behind the iOS icon (which can't be transparent) and the preview.
 bg='#0a1321'
 
-if command -v magick >/dev/null 2>&1; then im=magick; else im=convert; fi
-size=$($im identify -format '%w %h' "$master" 2>/dev/null || identify -format '%w %h' "$master")
+if command -v magick >/dev/null 2>&1; then im=magick; id="magick identify"; else im=convert; id=identify; fi
+size=$($id -format '%w %h' "$master[0]")
 set -- $size
 [ "$1" = "$2" ] || { echo "$master is $1 x $2: the master must be square" >&2; exit 1; }
 [ "$1" -ge 512 ] || echo "warning: $master is only $1 px; 1024 or more looks best at 512" >&2

@@ -33,18 +33,21 @@ writeFileSync(new URL("_headers", out), `/*
 console.log("built public/");
 
 /**
- * The icon slot (web/assets/icons/README.md). Once every file of the set is there, each page's
- * favicon.svg link and TODO(icon) comment become links to the set (plus og:image on pages with Open
- * Graph tags), the manifest lists the PNGs and /favicon.ico is served. Until then nothing points at
- * a missing file; part of a set fails the build.
+ * The icon slot (web/assets/icons/README.md): every page has one. Once every file of the set is there,
+ * each page's favicon.svg link and TODO(icon) comment become links to the set (plus og:image on pages
+ * with Open Graph tags), the manifest lists the PNGs and /favicon.ico is served. Until then nothing
+ * points at a missing file; part of a set fails the build.
  */
 function iconSet() {
   const SITE = "https://radar.dashhq.org";
   const FILES = ["favicon.ico", "favicon-16.png", "favicon-32.png", "apple-touch-icon.png", "icon-192.png", "icon-512.png", "og.png"];
+  const SLOT = /  <link rel="icon" href="\/assets\/favicon.svg" type="image\/svg\+xml">\n  <!-- TODO\(icon\):[\s\S]*?-->\n/;
   const dir = new URL("assets/icons/", out);
   const missing = FILES.filter((f) => !existsSync(new URL(f, dir)));
-  if (missing.length === FILES.length) return;
-  if (missing.length) throw new Error(`web/assets/icons/ lacks ${missing.join(", ")}: add the whole set (tools/icons.sh) or none`);
+  if (missing.length && missing.length < FILES.length) {
+    throw new Error(`web/assets/icons/ lacks ${missing.join(", ")}: add the whole set (tools/icons.sh) or none`);
+  }
+  const ready = !missing.length;
 
   const links = [
     '<link rel="icon" href="/assets/icons/favicon.ico" sizes="16x16 32x32 48x48">',
@@ -60,14 +63,14 @@ function iconSet() {
   ];
   for (const name of readdirSync(out).filter((f) => f.endsWith(".html"))) {
     const file = new URL(name, out);
-    let html = readFileSync(file, "utf8");
+    const html = readFileSync(file, "utf8");
+    if (!SLOT.test(html)) throw new Error(`${name}: no icon slot (copy the favicon.svg link and TODO(icon) comment from index.html)`);
+    if (!ready) continue;
     const hasOg = html.includes('property="og:site_name"');
-    const slot = /  <link rel="icon" href="\/assets\/favicon.svg" type="image\/svg\+xml">\n  <!-- TODO\(icon\):[\s\S]*?-->\n/;
-    if (!slot.test(html)) throw new Error(`${name}: no icon slot`);
-    html = html.replace(slot, [...links, ...(hasOg ? og : [])].map((l) => `  ${l}\n`).join(""))
-      .replace('<meta name="twitter:card" content="summary">', '<meta name="twitter:card" content="summary_large_image">');
-    writeFileSync(file, html);
+    writeFileSync(file, html.replace(SLOT, [...links, ...(hasOg ? og : [])].map((l) => `  ${l}\n`).join(""))
+      .replace('<meta name="twitter:card" content="summary">', '<meta name="twitter:card" content="summary_large_image">'));
   }
+  if (!ready) return;
   const manifest = new URL("assets/site.webmanifest", out);
   const m = JSON.parse(readFileSync(manifest, "utf8"));
   m.icons = [192, 512].map((s) => ({ src: `/assets/icons/icon-${s}.png`, sizes: `${s}x${s}`, type: "image/png" }));
