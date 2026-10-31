@@ -33,6 +33,12 @@
       <p class="sub">Our dashd's sync state, the crawler's state and the payment index range, per network.</p>
     </div>
     <div class="api-ep">
+      <h3>GET /api/v1/releases</h3>
+      <p class="sub">Dash Core's published releases from GitHub, refreshed hourly: <code>releases</code> as
+        <code>[{tag, version, prerelease, published}]</code>, newest first. A release candidate's <code>version</code> is the
+        version it reports (<code>v24.0.0-rc.5</code> is <code>24.0.0</code>).</p>
+    </div>
+    <div class="api-ep">
       <h3>GET /api/v1/{net}/summary</h3>
       <p class="sub">The latest finished crawl, the crawl about 24 hours before it, every distribution from the latest crawl
         (<code>dists[scope][dim] = [[key, count], …]</code>, largest first) and <code>networks</code>: per address network

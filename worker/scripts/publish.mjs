@@ -145,6 +145,8 @@ async function put(key, doc) {
 async function publishReleases() {
   const r = await fetch("https://api.github.com/repos/dashpay/dash/releases?per_page=100", {
     headers: { accept: "application/vnd.github+json", "user-agent": "dash-nodes (radar.dashhq.org)" },
+    // A stalled connection would hold up the whole loop (status and every network).
+    signal: AbortSignal.timeout(20_000),
   });
   if (!r.ok) throw new Error(`GitHub releases: ${r.status}`);
   const releases = (await r.json()).filter((x) => !x.draft && x.published_at).map((x) => ({
