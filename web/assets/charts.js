@@ -229,3 +229,23 @@ export function timeChart(container, data, opts) {
     loading() { container.classList.add("loading"); },
   };
 }
+
+/**
+ * Fills `container` with `draw(width)` (an svg drawn at that many pixels, so text stays its real size)
+ * and draws again when its width changes.
+ */
+export function sized(container, draw) {
+  let last = 0;
+  const paint = () => {
+    const w = Math.round(container.clientWidth);
+    if (w && w !== last) { last = w; container.replaceChildren(draw(w)); }
+  };
+  new ResizeObserver(paint).observe(container);
+}
+
+/** A round gridline step (1, 2 or 5 × 10^k, fractions allowed) for about `n` lines up to `max`. */
+export function axisStep(max, n = 3) {
+  const raw = max / n || 1;
+  const p = 10 ** Math.floor(Math.log10(raw));
+  return [1, 2, 5, 10].map((m) => m * p).find((s) => s >= raw);
+}

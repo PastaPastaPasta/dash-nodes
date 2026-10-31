@@ -1,5 +1,5 @@
 import { api, chrome, currentNet, el, fmt, pct, href, countryName, flag, shortHash, badge, ago, nodeStatus, registration, poseBadge, uptimeKind, evoPill,
-  MN_FILTERS, mnFilters, mnMatches, rememberParams, filterQuery, filterControls, blocksAgo, behind, listTip } from "./common.js";
+  MN_FILTERS, mnFilters, mnMatches, rememberParams, filterQuery, filterControls, blocksAgo, behind, listTip, credits, inAbout, blocks } from "./common.js";
 
 chrome("masternodes");
 const net = currentNet();
@@ -79,7 +79,16 @@ const COLUMNS = [
   { key: "registered_height", label: "Registered", r: true, get: (m) => m.registered_height || 0,
     cell: (m) => blockCell(fmt(m.registered_height), m.registered_height > 0 && tip ? behind(tip, m.registered_height)?.[0] : null) },
   { key: "pose_penalty", label: "PoSe", r: true, get: (m) => m.pose_penalty || 0, cell: (m) => el("td", { class: "r", text: m.pose_penalty ?? "–" }) },
+  // Evonodes' Platform rewards (rewards.rs): shown when the list is narrowed to evonodes.
+  { key: "platform_d30", label: "Platform 30d", r: true, evo: true, get: (m) => m.platform?.d30 ?? -1,
+    cell: (m) => el("td", { class: "r", title: m.platform ? `Last epoch: ${credits(m.platform.last_epoch)}` : "" },
+      m.platform ? credits(m.platform.d30, 2) : "–", m.platform ? el("small", { class: "under", text: `${blocks(m.platform.epoch_blocks)} this epoch` }) : null) },
+  { key: "platform_next", label: "Next block", r: true, evo: true, get: (m) => m.platform?.next ?? Infinity,
+    cell: (m) => el("td", { class: "r", title: m.platform?.next ? "When its turn to propose a Platform block comes, an estimate" : "Not in a validator set that takes turns now" },
+      m.platform?.next ? inAbout(m.platform.next) : "–") },
 ];
+/** The columns for the current filters: the Platform ones only for a list of evonodes. */
+const columns = () => COLUMNS.filter((c) => !c.evo || state.type === "Evo");
 
 /** A cell with a value and, under it, the same in the other unit (time or blocks). */
 function blockCell(main, under, title) {
@@ -88,7 +97,7 @@ function blockCell(main, under, title) {
 
 function filtered() {
   const out = rows.filter((m) => mnMatches(m, state));
-  const col = COLUMNS.find((c) => c.key === state.sort) || COLUMNS[0];
+  const col = columns().find((c) => c.key === state.sort) || COLUMNS[0];
   // Rows without a value (no address, never crawled) go last whichever way the column sorts.
   out.sort((a, b) => {
     const x = col.get(a), y = col.get(b);
@@ -111,7 +120,8 @@ function render() {
   const list = filtered();
   const pages = Math.max(1, Math.ceil(list.length / PAGE));
   state.page = Math.min(state.page, pages - 1);
-  const head = el("tr", {}, ...COLUMNS.map((c) => el("th", {
+  const cols = columns();
+  const head = el("tr", {}, ...cols.map((c) => el("th", {
     class: `sortable${c.r ? " r" : ""}`, scope: "col", tabindex: 0,
     "aria-sort": state.sort === c.key ? (state.dir > 0 ? "ascending" : "descending") : null,
     onclick: () => sortBy(c.key), onkeydown: (e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), sortBy(c.key)),
@@ -121,8 +131,8 @@ function render() {
   const emptyText = rows.length ? "No masternode matches these filters." : "No masternode list yet.";
   document.getElementById("cards").replaceChildren(...(pageRows.length ? pageRows.map(cardFor) : [el("li", { class: "empty", text: emptyText })]));
   document.getElementById("table").replaceChildren(el("thead", {}, head), el("tbody", {}, ...(pageRows.length
-    ? pageRows.map((m) => el("tr", {}, ...COLUMNS.map((c) => c.cell(m))))
-    : [el("tr", {}, el("td", { colspan: COLUMNS.length, class: "empty", text: emptyText }))])));
+    ? pageRows.map((m) => el("tr", {}, ...cols.map((c) => c.cell(m))))
+    : [el("tr", {}, el("td", { colspan: cols.length, class: "empty", text: emptyText }))])));
   document.getElementById("pager").replaceChildren(
     el("span", { text: `${fmt(list.length)} of ${fmt(rows.length)} masternodes` }),
     el("button", { class: "btn", type: "button", disabled: state.page === 0, onclick: () => turn(-1), text: "Previous" }),
@@ -154,7 +164,9 @@ function cardFor(m) {
       [m.country ? `${flag(m.country)} ${m.country}` : null, m.as_org, m.uptime_7d != null ? `${uptimePct(m.uptime_7d)} up 7d` : null]
         .filter(Boolean).join(" · ")),
     // Its own line: time and blocks don't fit beside the rest on a phone.
-    el("div", { class: "mn-card-sub", text: paid })));
+    el("div", { class: "mn-card-sub", text: paid }),
+    m.platform ? el("div", { class: "mn-card-sub", text: `Platform: ${credits(m.platform.d30, 2)} in 30 days` +
+      (m.platform.next ? `, next block ${inAbout(m.platform.next)}` : "") }) : null));
 }
 
 function sortBy(key) {
@@ -164,15 +176,24 @@ function sortBy(key) {
   render();
 }
 
-function renderFilters() {
-  // Phones have no column headers to click, so sorting is a select there (hidden on wide screens).
+/** Phones have no column headers to click, so sorting is a select there (hidden on wide screens). */
+function sortSelect() {
   const sort = el("select", { "aria-label": "Sort by", onchange: () => {
     const [key, dir] = sort.value.split(":");
     state.sort = key; state.dir = Number(dir); state.page = 0; render();
-  } }, ...COLUMNS.flatMap((c) => [1, -1].map((d) => el("option", { value: `${c.key}:${d}`, text: `${c.label} ${d > 0 ? "↑" : "↓"}` }))));
+  } }, ...columns().flatMap((c) => [1, -1].map((d) => el("option", { value: `${c.key}:${d}`, text: `${c.label} ${d > 0 ? "↑" : "↓"}` }))));
   sort.value = `${state.sort}:${state.dir}`;
-  document.getElementById("filters").replaceChildren(...filterControls(rows, state, () => { state.page = 0; render(); }),
-    el("label", { class: "sort-select" }, "Sort", sort));
+  return el("label", { class: "sort-select" }, "Sort", sort);
+}
+
+function renderFilters() {
+  let sort = sortSelect(), type = state.type;
+  document.getElementById("filters").replaceChildren(...filterControls(rows, state, () => {
+    state.page = 0;
+    // Narrowing to evonodes (or back) adds or drops the Platform columns, so the sort choices follow.
+    if (state.type !== type) { type = state.type; const next = sortSelect(); sort.replaceWith(next); sort = next; }
+    render();
+  }), sort);
   const toggle = document.getElementById("filters-toggle");
   const box = document.getElementById("filters");
   toggle.onclick = () => toggle.setAttribute("aria-expanded", String(box.classList.toggle("open")));
@@ -181,7 +202,7 @@ function renderFilters() {
 function csv() {
   const cols = ["protx", "type", "status", "service", "reachable", "version", "user_agent", "protocol", "country", "asn", "as_org",
     "uptime_7d", "uptime_30d", "last_seen", "registered_height", "last_paid_height", "pose_penalty", "pose_ban_height", "payout_address", "platform_node_id",
-    "dkg_readiness"];
+    "dkg_readiness", "platform_d30_credits", "platform_last_epoch_credits", "platform_epoch_blocks", "platform_next_block"];
   // Operators choose their user agent: neutralize spreadsheet formulas, then quote.
   const esc = (v) => {
     if (v == null) return "";
@@ -190,7 +211,8 @@ function csv() {
     return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
   };
   // DKG readiness goes in as its overall state: pass, fail or unknown.
-  const value = (m, c) => (c === "dkg_readiness" ? m.dkg_readiness?.overall : m[c]);
+  const platform = { platform_d30_credits: "d30", platform_last_epoch_credits: "last_epoch", platform_epoch_blocks: "epoch_blocks", platform_next_block: "next" };
+  const value = (m, c) => (c === "dkg_readiness" ? m.dkg_readiness?.overall : c in platform ? m.platform?.[platform[c]] : m[c]);
   const text = [cols.join(","), ...filtered().map((m) => cols.map((c) => esc(value(m, c))).join(","))].join("\n");
   const a = el("a", { href: URL.createObjectURL(new Blob([text], { type: "text/csv" })), download: `dash-${net}-masternodes.csv` });
   a.click();

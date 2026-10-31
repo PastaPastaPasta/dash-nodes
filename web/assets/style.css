@@ -125,6 +125,9 @@ nav.main a[aria-current="page"] { color: var(--ink); background: var(--surface-2
   .net-badge { font-size: 10.5px; padding: 2px 5px; }
   nav.main a { padding: 7px 6px; font-size: 13.5px; }
   .brand:has(.net-badge) ~ nav.main a { padding-inline: 4px; }
+  /* With the testnet badge, five tabs don't fit: Changes moves into the menu. */
+  .brand:has(.net-badge) ~ nav.main a.nav-changes { display: none; }
+  header.top:has(.net-badge) .menu-narrow { display: block; }
 }
 /* 360 px phones on testnet (the badge takes ~50 px), and 320 px ones: a little smaller still. */
 @media (max-width: 380px) {
@@ -670,9 +673,56 @@ button.link { font: inherit; font-size: 13px; background: none; border: 0; paddi
 .stat-row .stat-good { border-left: 4px solid var(--good); }
 .stat-row .stat-warning { border-left: 4px solid var(--warning); }
 /* The earnings notes are sentences: give them room. */
-#earn-stats { grid-template-columns: repeat(auto-fill, minmax(min(300px, 100%), 1fr)); }
+#earn-stats { grid-template-columns: repeat(auto-fill, minmax(min(240px, 100%), 1fr)); }
 /* The change-kind filter wraps on narrow screens instead of running off the side. */
 .filters .seg { flex-wrap: wrap; max-width: 100%; }
 /* The API link moves into the menu on phones (the nav has room for four). */
-.menu-only { display: none; }
+.menu-only, .menu-narrow { display: none; }
 .menu-row { display: flex; align-items: center; gap: 12px; }
+
+/* ---- Platform rewards (/platform and evonode pages) ---- */
+.epoch-now { padding: 4px 0 8px; border-bottom: 1px solid var(--grid); }
+.epoch-now h2 { margin-bottom: 12px; }
+.epoch-now > .sub { max-width: 760px; margin: 10px 0 0; }
+.rail, .meter { position: relative; height: 12px; border-radius: 999px; background: var(--surface-2); box-shadow: inset 0 0 0 1px var(--ring); }
+.rail span, .meter span { position: absolute; inset: 0 auto 0 0; border-radius: 999px; background: var(--s1); }
+.rail-axis, .meter-axis { position: relative; display: flex; justify-content: space-between; gap: 12px; margin-top: 6px; color: var(--muted); font-size: 12.5px; }
+.vote-meter { max-width: 760px; margin-bottom: 6px; }
+.meter span.met { background: var(--good); }
+/* The threshold: a mark across the bar, labelled under it. */
+.meter i { position: absolute; top: -5px; bottom: -5px; width: 2px; margin-left: -1px; background: var(--ink); border-radius: 1px; }
+.meter-axis span:nth-child(2) { position: absolute; transform: translateX(-50%); white-space: nowrap; color: var(--ink-2); }
+.meter-axis span:first-child, .meter-axis span:last-child { position: static; }
+.meter-axis { min-height: 1.5em; }
+.next-list { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 0 28px; }
+.next-list li { display: grid; grid-template-columns: 44px 1fr auto; align-items: baseline; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--grid); }
+.next-list .slot { color: var(--muted); font-size: 13px; }
+.next-list .who small { display: block; font-size: 12px; }
+.next-list .when { color: var(--ink-2); font-size: 13.5px; white-space: nowrap; }
+svg.spread, svg.epoch-bars { width: 100%; height: auto; display: block; }
+svg.spread .band { fill: color-mix(in srgb, var(--s1) 30%, transparent); }
+svg.spread .median { fill: var(--s1); }
+svg.spread g:focus { outline: none; }
+svg.spread g:focus .band, svg.spread g:hover .band { fill: color-mix(in srgb, var(--s1) 55%, transparent); }
+svg.epoch-bars rect { fill: var(--s1); }
+svg.epoch-bars rect:hover, svg.epoch-bars rect:focus { fill: var(--brand); outline: none; }
+.card.rewards { margin-bottom: 18px; }
+.card.rewards .tiles { margin-bottom: 14px; }
+.card.rewards .tile { box-shadow: none; background: var(--surface-2); }
+.card.rewards h3 { margin-top: 4px; }
+.rewards-where { margin: 4px 0 18px; }
+.rank-strip svg.ticks { width: 100%; height: 44px; display: block; }
+.rank-strip .tick { fill: color-mix(in srgb, var(--ink-2) 55%, transparent); }
+.rank-strip .mid { fill: var(--surface-2); }
+.rank-strip .median { fill: var(--ink-2); }
+.rank-strip .me { fill: var(--brand); }
+.rank-strip .strip-axis { margin-top: 4px; }
+.rank-strip .sub { margin: 8px 0 0; }
+.card.rewards .live { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--grid); }
+.card.rewards .live .card-head { margin-bottom: 6px; }
+.card.rewards .live h3 { margin: 0; color: var(--ink); font-size: 15px; }
+.card.rewards .live h3.section { margin-top: 16px; color: var(--ink-2); font-size: 14px; }
+@media (max-width: 760px) {
+  .next-list li { grid-template-columns: 36px 1fr auto; }
+  .rail-axis, .meter-axis { font-size: 12px; }
+}

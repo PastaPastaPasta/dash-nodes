@@ -68,6 +68,10 @@ export const fmt = (n) => (n == null ? "–" : nf.format(Math.round(n)));
 export const pct = (x, digits = 1) => (x == null ? "–" : `${(x * 100).toFixed(digits)}%`);
 export const dash = (duffs) => (duffs == null ? "–" : `${(duffs / 1e8).toLocaleString("en-US", { maximumFractionDigits: 4 })} DASH`);
 
+/** Platform credits (1 DASH = 100,000,000,000 credits) as DASH: "6.4321 DASH". */
+export const CREDITS_PER_DASH = 1e11;
+export const credits = (c, digits = 4) => (c == null ? "–" : `${(c / CREDITS_PER_DASH).toLocaleString("en-US", { maximumFractionDigits: digits })} DASH`);
+
 export function compact(n) {
   if (Math.abs(n) >= 1e6) return `${+(n / 1e6).toFixed(1)}M`;
   if (Math.abs(n) >= 1e3) return `${+(n / 1e3).toFixed(1)}K`;
@@ -96,6 +100,12 @@ function duration(s) {
   if (d < 365) return `${Math.round(d / 30.44)} months`;
   const y = Number((d / 365.25).toFixed(1));
   return `${y} year${y === 1 ? "" : "s"}`;
+}
+
+/** A time to come, roughly: "in 40 min", "in 5 h", "in 3 days"; "any moment" when it's due or past. */
+export function inAbout(ts) {
+  const s = ts - Date.now() / 1000;
+  return s < 60 ? "any moment" : `in ${duration(s)}`;
 }
 
 export const blocks = (n) => `${fmt(n)} block${n === 1 ? "" : "s"}`;
@@ -340,8 +350,8 @@ export function chrome(page, { footer = true } = {}) {
   const net = currentNet();
   document.title = `${document.title}${net === "testnet" ? " · testnet" : ""}`;
   const nav = el("nav", { class: "main" },
-    ...[["overview", "/", "Overview"], ["masternodes", "/masternodes", "Masternodes"], ["changes", "/changes", "Changes"], ["map", "/map", "Map"], ["api", "/api", "API"]].map(([id, path, label]) =>
-      el("a", { href: href(path), class: id === "api" ? "nav-api" : null, "aria-current": id === page ? "page" : null, text: label })));
+    ...[["overview", "/", "Overview"], ["masternodes", "/masternodes", "Masternodes"], ["platform", "/platform", "Platform"], ["changes", "/changes", "Changes"], ["map", "/map", "Map"], ["api", "/api", "API"]].map(([id, path, label]) =>
+      el("a", { href: href(path), class: id === "api" || id === "changes" ? `nav-${id}` : null, "aria-current": id === page ? "page" : null, text: label })));
   const seg = el("div", { class: "seg net", role: "group", "aria-label": "Network" },
     ...NETWORKS.map((n) => el("button", {
       type: "button", "data-net": n, "aria-pressed": String(n === net),
@@ -367,7 +377,8 @@ export function chrome(page, { footer = true } = {}) {
   const more = el("button", { class: "more-toggle", type: "button", "aria-label": "Network and display settings", "aria-expanded": "false", "aria-controls": "top-right" });
   more.innerHTML = MORE;
   const right = el("div", { class: "top-right", id: "top-right" }, status, seg,
-    el("div", { class: "menu-row" }, theme, el("a", { class: "menu-only", href: href("/api"), text: "API" })));
+    el("div", { class: "menu-row" }, theme, el("a", { class: "menu-only", href: href("/api"), text: "API" }),
+      el("a", { class: "menu-narrow", href: href("/changes"), text: "Changes" })));
   const header = el("header", { class: "top" }, el("div", { class: "top-inner" }, brand, nav, more, right));
   const setMenu = (open) => { header.classList.toggle("menu-open", open); more.setAttribute("aria-expanded", String(open)); };
   more.addEventListener("click", (e) => { e.stopPropagation(); setMenu(!header.classList.contains("menu-open")); });
