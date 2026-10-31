@@ -385,7 +385,9 @@ function refilter() {
   render();
 }
 
-const pick = (name, label, options) => filterSelect(state, name, label, options, refilter, `Any ${label.toLowerCase()}`);
+// "Any country", but "Any DKG readiness": an acronym keeps its capitals.
+const any = (label) => `Any ${/^[A-Z]{2}/.test(label) ? label : label[0].toLowerCase() + label.slice(1)}`;
+const pick = (name, label, options) => filterSelect(state, name, label, options, refilter, any(label));
 
 function buildPanel() {
   const filtersButton = el("button", { class: "btn mp-filters-button", type: "button", onclick: () => setMode("open"), text: "Filters" });
