@@ -1,15 +1,21 @@
 // Copies the site (../web) into public/ for Workers static assets, with the headers the Rust server
 // sets on its own pages.
-import { cpSync, existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 
 const out = new URL("../public/", import.meta.url);
 rmSync(out, { recursive: true, force: true });
 cpSync(new URL("../../web/", import.meta.url), out, { recursive: true });
 iconSet();
+const sdk = evoSdk();
 // Cloudflare Web Analytics, if the zone has it on, injects its beacon; that is the only outside source.
 const csp = "default-src 'self'; script-src 'self' https://static.cloudflareinsights.com; style-src 'self'; img-src 'self' data:; " +
   "connect-src 'self' https://cloudflareinsights.com; " +
   "worker-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
+// Masternode pages load the Dash Platform SDK, which runs WebAssembly (in a worker it starts from a blob)
+// and asks evonodes directly, by IP over HTTPS (any of them, and the list changes), plus
+// quorums.*.networks.dash.org for quorum keys.
+const mnCsp = csp.replace("script-src 'self'", "script-src 'self' 'wasm-unsafe-eval'").replace("connect-src 'self'", "connect-src 'self' https:")
+  .replace("worker-src 'self'", "worker-src 'self' blob:");
 // Assets aren't content-hashed, so lifetimes stay short enough that a deploy shows up within a day;
 // each specific block detaches the default Cache-Control rather than adding a second one.
 writeFileSync(new URL("_headers", out), `/*
@@ -18,9 +24,17 @@ writeFileSync(new URL("_headers", out), `/*
   Referrer-Policy: strict-origin-when-cross-origin
   Cache-Control: public, max-age=300
 
+/mn/*
+  ! Content-Security-Policy
+  Content-Security-Policy: ${mnCsp}
+
 /assets/vendor/*
   ! Cache-Control
   Cache-Control: public, max-age=86400
+
+/assets/vendor/${sdk}/*
+  ! Cache-Control
+  Cache-Control: public, max-age=31536000, immutable
 
 /assets/fonts/*
   ! Cache-Control
@@ -31,6 +45,22 @@ writeFileSync(new URL("_headers", out), `/*
   Cache-Control: public, max-age=86400
 `);
 console.log("built public/");
+
+/**
+ * The Dash Platform SDK (@dashevo/evo-sdk, pinned in package.json), served from this origin under a
+ * versioned path so it can be cached for good. Workers static assets take files up to 25 MiB.
+ */
+function evoSdk() {
+  const pkg = new URL("../node_modules/@dashevo/evo-sdk/", import.meta.url);
+  const { version } = JSON.parse(readFileSync(new URL("package.json", pkg), "utf8"));
+  const from = new URL("dist/evo-sdk.module.js", pkg);
+  const size = statSync(from).size;
+  if (size > 25 * 1024 * 1024) throw new Error(`evo-sdk.module.js is ${size} bytes, over Workers' 25 MiB asset limit`);
+  const dir = `evo-sdk-${version}`;
+  mkdirSync(new URL(`assets/vendor/${dir}/`, out), { recursive: true });
+  cpSync(from, new URL(`assets/vendor/${dir}/evo-sdk.module.js`, out));
+  return dir;
+}
 
 /**
  * The icon slot (web/assets/icons/README.md): every page has one. Once every file of the set is there,

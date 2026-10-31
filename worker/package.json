@@ -9,6 +9,7 @@
     "test": "node --test test/api.test.mjs test/check.test.mjs test/r2.test.mjs"
   },
   "devDependencies": {
+    "@dashevo/evo-sdk": "5.0.1",
     "wrangler": "^4.40.0"
   },
   "license": "MIT"

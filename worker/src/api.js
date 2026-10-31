@@ -2,8 +2,11 @@
 // that returns parsed JSON (or null), so they can be tested without a Worker runtime.
 
 export const NETWORKS = ["mainnet", "testnet"];
-/** Per-network documents served as published. `reference` holds the block hashes speed tests check against. */
-export const DOCS = ["summary", "geo", "masternodes", "reference", "changes"];
+/**
+ * Per-network documents served as published. `reference` holds the block hashes speed tests check against;
+ * `platform` is evonodes' Platform rewards (epochs, the upgrade vote, the proposer schedule, every evonode).
+ */
+export const DOCS = ["summary", "geo", "masternodes", "reference", "changes", "platform"];
 /** A speed-test vantage point's id (e.g. home, nyc, ams, sgp). */
 export const VANTAGE = "[a-z0-9-]{2,16}";
 export const SCOPES = ["all", "mn", "evo", "nonmn"];
