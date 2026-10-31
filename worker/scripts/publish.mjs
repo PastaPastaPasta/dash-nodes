@@ -87,6 +87,11 @@ async function get(path) {
 // What's already in R2, so unchanged documents aren't uploaded again (kept in STATE_FILE across restarts).
 let sentHash = new Map(); // key -> sha256 of the last upload
 let paymentCounts = new Map(); // `${net}/${protx}` -> payment count last published
+/**
+ * Bumped when the crawler rewrites past payments (2: they no longer count the platform share), so every
+ * payment history is published again once; unchanged buckets are still skipped by their hash.
+ */
+const PAYMENTS_REVISION = 2;
 let known = new Map(); // net -> protx hashes ever published, so removed masternodes keep their page
 let puts = 0;
 
@@ -102,7 +107,8 @@ function loadState() {
       return;
     }
     sentHash = new Map(Object.entries(st.sentHash || {}));
-    paymentCounts = new Map(Object.entries(st.paymentCounts || {}));
+    if (st.paymentsRevision === PAYMENTS_REVISION) paymentCounts = new Map(Object.entries(st.paymentCounts || {}));
+    else log(`payments revision ${st.paymentsRevision ?? 1} → ${PAYMENTS_REVISION}; republishing payment histories`);
     log(`state: ${sentHash.size} documents already published`);
   } catch (e) {
     if (e.code !== "ENOENT") log(`state file unreadable (${e.message}); republishing everything`);
@@ -112,6 +118,7 @@ function loadState() {
 function saveState() {
   if (!STATE_FILE) return;
   const st = { destination: DESTINATION, sentHash: Object.fromEntries(sentHash), paymentCounts: Object.fromEntries(paymentCounts),
+    paymentsRevision: PAYMENTS_REVISION,
     known: Object.fromEntries([...known].map(([net, set]) => [net, [...set]])) };
   writeFileSync(`${STATE_FILE}.tmp`, JSON.stringify(st));
   renameSync(`${STATE_FILE}.tmp`, STATE_FILE);
