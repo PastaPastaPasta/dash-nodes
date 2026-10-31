@@ -2,16 +2,21 @@
 
 export const NETWORKS = ["mainnet", "testnet"];
 
-export function currentNet() {
+// The page's network, settled once on load. A link that names its network is a choice too: remember
+// it, or the next page (whose links leave ?net out for mainnet) would switch back to the network
+// picked before. Only on load, so a tab left open doesn't keep overriding a later switch in another.
+const NET = (() => {
   const q = new URLSearchParams(location.search).get("net");
-  // A link that names its network is a choice too: remember it, or the next page (whose links leave
-  // ?net out for mainnet) would switch back to the network picked before.
   if (NETWORKS.includes(q)) {
     localStorage.setItem("net", q);
     return q;
   }
   const saved = localStorage.getItem("net");
   return NETWORKS.includes(saved) ? saved : "mainnet";
+})();
+
+export function currentNet() {
+  return NET;
 }
 
 export function setNet(net) {

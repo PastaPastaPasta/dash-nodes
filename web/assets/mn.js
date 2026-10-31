@@ -268,7 +268,7 @@ function dkgSection(m) {
  */
 async function notFound() {
   const other = NETWORKS.find((n) => n !== net);
-  if (!new URLSearchParams(location.search).has("net")) {
+  if (!NETWORKS.includes(new URLSearchParams(location.search).get("net"))) {
     const there = await api(`${other}/masternodes/${protx}`).then(() => true, () => false);
     if (there) {
       const u = new URL(location.href);

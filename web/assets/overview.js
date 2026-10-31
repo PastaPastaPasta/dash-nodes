@@ -138,7 +138,10 @@ function renderHero() {
     el("dt", { text: label }),
     el("dd", { class: "num" }, el("a", { href: to, class: "stat-link", onclick }, value), note ? el("small", { text: note }) : null));
   // These three count every node, not just masternodes: their sections switch to "All nodes" to match.
-  const showAll = () => { if (scope !== "all") { scope = "all"; remember(); renderControls(); renderSections(); loadHistorySafely(); } };
+  const showAll = (e) => {
+    if (e.button || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return; // a new tab keeps this one as it is
+    if (scope !== "all") { scope = "all"; remember(); renderControls(); renderSections(); loadHistorySafely(); }
+  };
   const reach = Object.fromEntries(mn.reachable || []);
   const answered = reach.yes || 0, silent = reach.no || 0;
   const share = answered + silent ? answered / (answered + silent) : null;

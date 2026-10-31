@@ -17,7 +17,9 @@ const state = {
 // late for the browser's own restore.
 const savedY = history.state?.y;
 history.scrollRestoration = "manual";
-addEventListener("pagehide", () => history.replaceState({ y: scrollY }, ""));
+const saveScroll = () => history.replaceState({ y: scrollY }, "");
+addEventListener("pagehide", saveScroll);
+addEventListener("click", (e) => { if (e.target.closest("a[href]")) saveScroll(); }, true);
 let rows = [];
 let tip = null;
 
@@ -117,7 +119,8 @@ function render() {
     el("button", { class: "btn", type: "button", disabled: state.page >= pages - 1, onclick: () => turn(1), text: "Next" }));
   const active = MN_FILTERS.filter((k) => state[k]).length;
   document.getElementById("filters-toggle").textContent = active ? `Filters and sort (${active} on)` : "Filters and sort";
-  remember();
+  // Without the list (it failed to load) the page was clamped to 1: keep the address for a reload.
+  if (rows.length) remember();
 }
 
 /** Next or previous page, starting from its first row (the pager sits below the last). */
@@ -144,6 +147,7 @@ function cardFor(m) {
 function sortBy(key) {
   if (state.sort === key) state.dir = -state.dir;
   else { state.sort = key; state.dir = key.startsWith("uptime") || key === "pose_penalty" ? -1 : 1; }
+  state.page = 0;
   render();
 }
 
