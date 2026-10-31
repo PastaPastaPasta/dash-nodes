@@ -4,6 +4,7 @@ import { Map as GLMap, Marker, Popup, NavigationControl, AttributionControl, Lng
 import { api, chrome, currentNet, el, fmt, pct, compact, href, place, shortHash, badge, nodeStatus, evoPill, mnFilters, mnMatches,
   rememberParams, filterQuery, countBy, segmented, filterSelect, searchBox, REACH, REGISTRATION, registration, poseBadge, TYPE_OPTIONS, versionOptions,
   countryOptions, hostOptions, DKG_OPTIONS } from "./common.js";
+import { bottomSheet } from "./sheet.js";
 
 chrome("map", { footer: false });
 const net = currentNet();
@@ -316,7 +317,7 @@ function openPopup(m) {
     select(m.protx);
     backButton.focus({ preventScroll: true });
     // Keep the node in view above the sheet.
-    map.easeTo({ center: [m.lon, m.lat], zoom: Math.max(map.getZoom(), 5), offset: [0, -panel.offsetHeight / 2], duration: 400 });
+    map.easeTo({ center: [m.lon, m.lat], zoom: Math.max(map.getZoom(), 5), offset: [0, -sheet.visible() / 2], duration: 400 });
     return;
   }
   const p = new Popup({ offset: 12, maxWidth: "320px", className: "mp-popup", focusAfterOpen: false })
@@ -338,40 +339,22 @@ const panel = document.getElementById("panel");
 const head = document.getElementById("panel-head");
 const body = document.getElementById("panel-body");
 const handle = document.getElementById("panel-handle");
-// Phones: the panel is a bottom sheet with three states: "peek" (search and headline), "open" (all the
-// controls) and "detail" (one place or masternode). Tap or drag the handle to move between them.
-let dragged = false;
-handle.addEventListener("click", () => {
-  if (dragged) { dragged = false; return; }
-  setMode(panel.dataset.mode === "peek" ? "open" : "peek");
+// Phones: the panel is a bottom sheet (sheet.js). What it shows is its mode: "peek" (search and
+// headline), "open" (all the controls) or "detail" (one place or masternode). How far it's pulled up is
+// its rest: collapsed, half or full. Tap the handle to open or fold it; drag or flick it anywhere.
+const restFor = () => (panel.dataset.mode === "peek" ? "collapsed" : "half");
+const sheet = bottomSheet({
+  panel, handle, head, body, active: phone, restFor,
+  // Dragged down to the edge, it folds to the search; pulled up from there, the controls show.
+  onDragEnd: (rest) => {
+    if (rest === "collapsed" && panel.dataset.mode !== "peek") setMode("peek", false);
+    else if (rest !== "collapsed" && panel.dataset.mode === "peek") setMode("open", false);
+  },
 });
-handle.addEventListener("pointerdown", (e) => {
-  // A touch drag fires no click afterwards, so a flag left from the last drag would eat the next tap.
-  dragged = false;
-  const y0 = e.clientY;
-  handle.setPointerCapture(e.pointerId);
-  const move = (ev) => {
-    const dy = ev.clientY - y0;
-    if (Math.abs(dy) > 6) dragged = true;
-    panel.style.transform = dy > 0 ? `translateY(${dy}px)` : "";
-  };
-  const drag = new AbortController();
-  const up = (ev) => {
-    const dy = ev.clientY - y0;
-    panel.style.transform = "";
-    drag.abort();
-    if (dy > 50) setMode("peek");
-    else if (dy < -40) setMode("open");
-  };
-  handle.addEventListener("pointermove", move, { signal: drag.signal });
-  handle.addEventListener("pointerup", up, { signal: drag.signal });
-  handle.addEventListener("pointercancel", up, { signal: drag.signal });
-});
+handle.addEventListener("click", () => setMode(panel.dataset.mode === "peek" ? "open" : "peek"));
 
-// Phones: the map controls sit just above the bottom sheet, whatever its height.
-new ResizeObserver(() => document.documentElement.style.setProperty("--sheet-h", `${panel.offsetHeight}px`)).observe(panel);
-
-function setMode(mode) {
+/** Shows `mode`; on phones the sheet moves to its usual rest for it, unless `move` is false. */
+function setMode(mode, move = true) {
   // Leaving a masternode's details drops its selection, and the place list it came from shows again.
   if (mode !== "detail" && !nodeBox.hidden) {
     nodeBox.hidden = true;
@@ -380,6 +363,7 @@ function setMode(mode) {
   }
   panel.dataset.mode = mode;
   handle.setAttribute("aria-expanded", String(mode !== "peek"));
+  if (move) sheet.snap(restFor());
 }
 panel.addEventListener("keydown", (e) => { if (e.key === "Escape" && phone() && panel.dataset.mode !== "peek") { setMode("peek"); handle.focus(); } });
 
@@ -485,12 +469,16 @@ function renderHeadline() {
     foot.textContent = geo?.unlocated ? `${fmt(geo.unlocated)} reachable nodes on Tor or I2P have no location, so they aren't drawn.` : "";
     return;
   }
-  const list = filtered();
-  const enabled = list.filter((m) => m.status === "enabled");
-  const reach = enabled.filter((m) => m.reachable === true).length;
-  const banned = list.length - enabled.length;
-  headline.replaceChildren(el("b", { class: "num", text: fmt(reach) }), ` of ${fmt(enabled.length)} enabled masternodes answered the latest crawl`,
-    banned ? `; ${fmt(banned)} more are PoSe-banned.` : ".");
+  // What's drawn: the filters, less the hidden chips. With no chip hidden, the same masternodes the
+  // Reachable chip counts (PoSe-banned ones answer too, sometimes); then split by registration.
+  const list = visible();
+  const answered = (ms) => ms.filter((m) => m.reachable === true).length;
+  const banned = list.filter((m) => registration(m) === "PoSe-banned");
+  const enabled = list.filter((m) => registration(m) !== "PoSe-banned");
+  headline.replaceChildren(el("b", { class: "num", text: fmt(answered(list)) }), ` of ${fmt(list.length)} masternodes answered the latest crawl`,
+    banned.length
+      ? `: ${fmt(answered(enabled))} of ${fmt(enabled.length)} enabled and ${fmt(answered(banned))} of ${fmt(banned.length)} PoSe-banned.`
+      : ".");
   const missing = list.filter((m) => m.lat == null).length;
   // On the list, one visible chip of the reachability or PoSe mode is that filter.
   const only = (mode) => {

@@ -539,14 +539,28 @@ button.link { font: inherit; font-size: 13px; background: none; border: 0; paddi
 .pop .btn { width: 100%; text-align: center; }
 
 @media (max-width: 900px) {
+  /* The bottom sheet (sheet.js sets its height and moves it by transform). A vertical drag anywhere
+     on it moves it; the body scrolls natively only at the top rest. No backdrop blur: re-blurring the
+     map under a moving sheet costs frames on phones, and the sheet covers the map anyway. */
   .mp {
-    top: auto; left: 0; right: 0; bottom: 0; width: auto; max-height: 75%;
+    top: auto; left: 0; right: 0; bottom: 0; width: auto; max-height: none;
     border-radius: 18px 18px 0 0; padding-bottom: env(safe-area-inset-bottom);
-    transition: transform .18s ease-out;
+    background: var(--surface); backdrop-filter: none; z-index: 3; /* over the map's own controls */
+    touch-action: none; will-change: transform;
+    transition: transform .32s cubic-bezier(.2, .9, .3, 1);
   }
-  .mp[data-mode="detail"] { max-height: 62%; }
+  .mp.dragging { transition: none; }
+  /* The sheet's translated part would make the page scrollable (a focused control scrolls it, out
+     of reach); clip, not hidden, which scripts and focus can still scroll. */
+  main.map-app { overflow: hidden; overflow: clip; } /* hidden: before iOS 16 */
+  .mp-handle, .mp-head { flex: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+  .mp-head input { -webkit-user-select: text; user-select: text; }
+  .mp-body { flex: 0 1 auto; min-height: 0; overflow-y: hidden; touch-action: none; padding: 0 14px 14px; }
+  .mp[data-scrolls="true"] .mp-body { overflow-y: auto; touch-action: pan-y; overscroll-behavior: contain; }
+  /* Folded away: hidden once it has slid down (visibility switches after the slide), shown at once. */
+  .mp[data-snap="collapsed"]:not(.dragging) .mp-body { visibility: hidden; transition: visibility 0s .32s; }
   /* A tall touch target: the whole top strip grabs the sheet. */
-  .mp-handle { display: grid; place-items: center; height: 32px; border: 0; background: none; cursor: grab; padding: 0; touch-action: none; }
+  .mp-handle { display: grid; place-items: center; height: 32px; border: 0; background: none; cursor: grab; padding: 0; }
   .mp-grip { width: 44px; height: 5px; border-radius: 3px; background: var(--axis); }
   .mp-head { padding: 0 14px 10px; }
   .mp-search-row { display: flex; gap: 8px; }
@@ -554,13 +568,12 @@ button.link { font: inherit; font-size: 13px; background: none; border: 0; paddi
   .mp-search-row .mp-filters-button { display: block; flex: none; }
   .mp-headline { margin-top: 8px; font-size: 13.5px; }
   .mp-headline b { font-size: 15px; }
-  .mp-body { padding: 0 14px 14px; }
-  .mp[data-mode="peek"] .mp-body { display: none; }
   .mp[data-mode="open"] .mp-filters-button { display: none; }
   .mp[data-mode="detail"] .mp-head { display: none; }
   .mp[data-mode="detail"] .mp-body > :not(.mp-group):not(.mp-node) { display: none; }
   .mp[data-mode="detail"] .mp-group { background: none; padding: 0; margin-top: 0; }
-  .mp[data-mode="detail"] .mn-list { max-height: none; }
+  /* One scroller in the sheet, its body, so a drag never lands in a nested list. */
+  .mp .mn-list { max-height: none; overflow: visible; }
   .mp-node:not([hidden]) { display: block; }
   .mp-node .pop { min-width: 0; }
   .mn-row { padding: 9px 6px; }
