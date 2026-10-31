@@ -1,15 +1,18 @@
 """Cleans the image-generated DashHQ Radar icon (radar-master-src.png) into the masters tools/icons.sh
-uses. Raster editing only: every shape and colour comes from the source.
+uses. Raster editing only, no vector drawing.
 
     uv run --with pillow --with numpy --with scipy tools/icons/polish.py
 
-- radar-master.png: the full mark in the source's own colours (the sweep's electric blue, the rings'
-  glow). Only the black corners go transparent and the tile's speckle flattens to one navy.
-- radar-master-mark.png: the header's logo (22 to 26 px): the same with every ring, the sweep's line
-  and the D thickened, so all four rings survive the downscale.
-- radar-master-32.png: 32 and 48 px tabs: the D, the two outer rings, the sweep and the blip.
-- radar-master-16.png: 16 px tabs: the D, the outer ring and the sweep filling up to it, which is what
-  still says radar at that size.
+- radar-master.png: the full mark in the source's own pixels and colours (the sweep's electric blue,
+  the rings' glow). Only the black corners go transparent and the tile's speckle flattens to one navy.
+- radar-master-mark.png: the header's logo (22 to 26 px): the full mark with the source's own ring
+  pixels grown to Dash blue, and its white (the D, the sweep's line, the blip) grown, so the rings
+  survive the downscale. The innermost ring is mostly behind the D, as in the source.
+- radar-master-32.png and radar-master-16.png: the tabs (32 and 48 px; 16 px). The D is the source's,
+  grown; the sweep's colours are the source's own, by bearing, stretched over a wider wedge. The rings,
+  the sweep's line and the blip are redrawn as clean shapes where the source has them (radii and the
+  blip's bearing measured from it), heavy enough to survive: the two outer rings at 32 px, the outer
+  one at 16.
 """
 from pathlib import Path
 
@@ -60,9 +63,10 @@ def save(rgb, name):
         HERE / name, optimize=True)
 
 
-# Full: pixels within a few levels of navy are the tile's noise.
+# Full: pixels within a few levels of navy are the tile's noise. On the antialiased edge the source is
+# navy blended with black, which the alpha already does: navy there.
 off_navy = np.linalg.norm(src - NAVY, axis=-1)
-full = over(NAVY, src, smoothstep(off_navy, 4, 12))
+full = np.where(inside[..., None], over(NAVY, src, smoothstep(off_navy, 4, 12)), NAVY)
 save(full, "radar-master.png")
 
 # White (the D, the sweep's line, the blip): the red channel, since the source has no red.
@@ -87,37 +91,41 @@ assert 30 < bearing < 55, "the blip isn't up and to the right: another source?"
 trail = np.arange(int(bearing) + 1, SWEEP_TAIL + 1)
 sweep = np.array([np.median(src[(np.abs(ang - a) < 0.5) & (r > 180) & (r < 420) & (white < 0.05)], axis=0)
                   for a in trail])
-assert sweep[0, 2] > 2 * NAVY[2], "no sweep behind the blip: another source?"
+assert np.isfinite(sweep).all() and sweep[0, 2] > 2 * NAVY[2], "no sweep behind the blip: another source?"
 
-# Mark: the full mark with every ring thickened to at least Dash blue, and the white grown.
-rings = np.zeros(r.shape, bool)
+# Mark: the full mark with each ring's own pixels (at least half as far from navy as that ring's
+# brightest, the white of the D left out) grown to at least Dash blue, and the white grown.
+ring_px = np.zeros(r.shape, bool)
 for rad in RINGS:
-    rings |= (np.abs(r - rad) < 3) & (off_navy > 120)
-mark = over(full, np.maximum(full, BLUE), grow(rings, 9))
+    band = (np.abs(r - rad) < 3) & (white < 0.5)
+    ring_px |= band & (off_navy > 0.5 * np.percentile(off_navy[band], 99))
+assert ring_px.sum() > 20_000, "the rings aren't where RINGS expects: another source?"
+mark = over(full, np.maximum(full, BLUE), grow(ring_px, 9))
 save(over(mark, WHITE, grow(white > 0.5, 5)), "radar-master-mark.png")
 
 
-def tab(rings, span, gain, line, name):
-    """A tab-size mark: rings as (radius, stroke), the outermost first. The sweep fills the wedge
-    `span` degrees behind the blip out to that ring, its colours from the source's own sweep made
-    `gain` times as strong; the blip sits on that ring, joined to the centre by a `line` px line."""
-    outer = rings[0][0]
+def tab(circles, span, gain, line, name):
+    """A tab-size mark: circles as (radius, half-width; drawn about 6 px wider), the outermost first.
+    The sweep fills the wedge `span` degrees behind the blip out to that circle, the source's sweep
+    profile stretched over it and made `gain` times as strong; the blip sits on that circle, joined to
+    the centre by a `line` px line."""
+    outer = circles[0][0]
     behind = ang - bearing
     t = np.clip(behind / span, 0, 1)
     color = sweep[np.round(t * (len(trail) - 1)).astype(int)]
     color = np.clip(NAVY + (color - NAVY) * gain, 0, 255)
     rgb = np.where(((behind >= 0) & (behind <= span) & (r < outer))[..., None], color, NAVY)
-    for rad, stroke in rings:
-        rgb = over(rgb, BLUE, grow(np.abs(r - rad) < 3, stroke / 2))
+    for rad, half in circles:
+        rgb = over(rgb, BLUE, grow(np.abs(r - rad) < 3, half))
     b = np.radians(bearing)
     ty, tx = C - outer * np.sin(b), C + outer * np.cos(b)
     # The line, from a quarter of the way out to the blip: distance to that segment.
     s = np.clip(((xx - C) * (tx - C) + (yy - C) * (ty - C)) / outer**2, 0.25, 1)
     to_line = np.hypot(xx - C - s * (tx - C), yy - C - s * (ty - C))
-    w = np.maximum(np.clip(line / 2 + 0.5 - to_line, 0, 1) if line else 0, grow(np.hypot(xx - tx, yy - ty) < 18, 20))
+    w = np.maximum(np.clip(line / 2 + 0.5 - to_line, 0, 1), grow(np.hypot(xx - tx, yy - ty) < 18, 20))
     save(over(rgb, WHITE, np.maximum(w, grow(d_mask, 8))), name)
 
 
-tab([(443, 38), (347, 28)], span=65, gain=1.5, line=16, name="radar-master-32.png")
-tab([(443, 44)], span=65, gain=1.5, line=16, name="radar-master-16.png")
+tab([(RINGS[3], 19), (RINGS[2], 14)], span=65, gain=1.5, line=16, name="radar-master-32.png")
+tab([(RINGS[3], 22)], span=65, gain=1.5, line=16, name="radar-master-16.png")
 print("wrote radar-master.png, radar-master-mark.png, radar-master-32.png and radar-master-16.png")

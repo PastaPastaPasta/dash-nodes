@@ -20,10 +20,11 @@ The sources are in `tools/icons/` (kept out of `web/`, since everything here is 
 
 - `radar-master-src.png`: the approved image-generated icon, as delivered.
 - `radar-master.png`, `radar-master-mark.png`, `radar-master-32.png` and `radar-master-16.png`:
-  `polish.py` makes them from the source by raster editing only. The full mark keeps the source's
-  colours, with transparent corners and one navy. The others are simplified for their sizes but keep the
-  sweep and blip that make it a radar: the header's mark has all four rings thickened, the 32 px one
-  the two outer rings, and the 16 px one the outer ring with the sweep filling up to it.
+  `polish.py` makes them from the source by raster editing only (no vector drawing). The full mark is
+  the source's own pixels and colours, with transparent corners and one navy. The header's mark grows
+  the source's ring pixels and white so they survive 22 px. The tab marks keep the source's D and sweep
+  colours, and redraw the rings, the sweep's line and the blip as heavier clean shapes where the source
+  has them: the two outer rings at 32 px, the outer one at 16.
 - `radar-og.png`: `og.html` rendered by headless Chrome (the command is in the file).
 
 Then `tools/icons.sh` (ImageMagick) writes everything above from those masters and the card.
