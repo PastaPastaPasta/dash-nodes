@@ -5,17 +5,18 @@
 #
 #   tools/icons.sh [master.png [og.png [small.png]]]
 #
-# With no arguments it uses tools/icons/radar-master.png, radar-og.png and radar-master-small.png
-# (see tools/icons/polish.py); a missing card or small master falls back to the master.
+# With no arguments it uses the committed tools/icons/radar-master.png, radar-og.png and
+# radar-master-small.png (see tools/icons/polish.py). Given a master alone, the card is the master on
+# navy and the favicons come from the master too.
 set -eu
 
 dir=$(dirname "$0")
 [ $# -le 3 ] || { echo "usage: $0 [master.png [og.png [small.png]]]" >&2; exit 2; }
-master=${1:-$dir/icons/radar-master.png}
-og=${2:-$dir/icons/radar-og.png}
-small=${3:-$dir/icons/radar-master-small.png}
-[ -f "$og" ] || og=
-[ -f "$small" ] || small=$master
+if [ $# -eq 0 ]; then
+  set -- "$dir/icons/radar-master.png" "$dir/icons/radar-og.png" "$dir/icons/radar-master-small.png"
+fi
+master=$1 og=${2:-} small=${3:-$1}
+for f in "$master" $og "$small"; do [ -f "$f" ] || { echo "no such file: $f" >&2; exit 1; }; done
 out=$dir/../web/assets/icons
 # The site's dark page color, behind the preview fallback; and the tile's navy, behind the iOS icon
 # (which can't be transparent), so its corners match the tile.
@@ -23,9 +24,11 @@ bg='#0a1321'
 tile='#001a3f'
 
 if command -v magick >/dev/null 2>&1; then im=magick; id="magick identify"; else im=convert; id=identify; fi
-size=$($id -format '%w %h' "$master[0]")
-set -- $size
-[ "$1" = "$2" ] || { echo "$master is $1 x $2: the master must be square" >&2; exit 1; }
+for f in "$master" "$small"; do
+  set -- $($id -format '%w %h' "$f[0]")
+  [ "$1" = "$2" ] || { echo "$f is $1 x $2: a master must be square" >&2; exit 1; }
+done
+set -- $($id -format '%w' "$master[0]")
 [ "$1" -ge 512 ] || echo "warning: $master is only $1 px; 1024 or more looks best at 512" >&2
 
 mkdir -p "$out"

@@ -40,7 +40,8 @@ console.log("built public/");
  */
 function iconSet() {
   const SITE = "https://radar.dashhq.org";
-  const FILES = ["favicon.ico", "favicon-16.png", "favicon-32.png", "apple-touch-icon.png", "icon-192.png", "icon-512.png", "og.png"];
+  // mark-96.png is the header's logo (assets/common.js), so it has to be there too.
+  const FILES = ["favicon.ico", "favicon-16.png", "favicon-32.png", "apple-touch-icon.png", "icon-192.png", "icon-512.png", "og.png", "mark-96.png"];
   const SLOT = /  <link rel="icon" href="\/assets\/favicon.svg" type="image\/svg\+xml">\n  <!-- TODO\(icon\):[\s\S]*?-->\n/;
   const dir = new URL("assets/icons/", out);
   const missing = FILES.filter((f) => !existsSync(new URL(f, dir)));
