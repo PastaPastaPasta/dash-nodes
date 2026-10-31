@@ -1,5 +1,6 @@
 // nodes.dashhq.org: the static site (Workers static assets), the public API answered from R2, and an
-// authenticated ingest the crawler pushes documents to. The crawler's host takes no inbound traffic.
+// authenticated ingest speed-test vantages push their results to (the crawler's publisher writes to R2
+// directly, see scripts/publish.mjs). The crawler's host takes no inbound traffic.
 import { connect } from "cloudflare:sockets";
 import { route, ApiError, KEY, NETWORKS, DOCS, PARAMS, VANTAGE, shardKey } from "./api.js";
 import { checkNode, parseAddress } from "./check.js";

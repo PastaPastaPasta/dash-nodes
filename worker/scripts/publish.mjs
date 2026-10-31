@@ -5,27 +5,35 @@
 //                                       crawls (and hourly), retrying a failed network with backoff
 //   node scripts/publish.mjs --once     one full pass, then exit (also: seeding a local `wrangler dev`)
 //
-// Env: SOURCE (the app, e.g. http://app:8080), TARGET (e.g. https://nodes.dashhq.org),
-//      INGEST_TOKEN or INGEST_TOKEN_FILE, NETWORKS (default "mainnet testnet"),
-//      STATE_FILE (optional: remembers what was uploaded across restarts).
+// Env: SOURCE (the app, e.g. http://app:8080), NETWORKS (default "mainnet testnet"),
+//      STATE_FILE (optional: remembers what was uploaded across restarts), and where to:
+//      - R2_ENDPOINT (https://<account id>.r2.cloudflarestorage.com), R2_BUCKET (default dash-nodes-data),
+//        R2_ACCESS_KEY_ID(_FILE), R2_SECRET_ACCESS_KEY(_FILE): straight into the bucket over R2's S3 API.
+//        Production does this: each upload through the Worker is a Worker request, and the Free plan
+//        allows 100k a day.
+//      - otherwise TARGET (e.g. http://127.0.0.1:8787 for `wrangler dev`) and INGEST_TOKEN(_FILE): the
+//        Worker's `PUT /_ingest/<key>`.
 // Documents whose content didn't change since the last upload are skipped. Within a network, documents
 // go up in dependency order (payments, masternode details, then the list and summaries that link to them).
 import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync, renameSync } from "node:fs";
 import { gzipSync } from "node:zlib";
-import { SCOPES, DIMS, DAYS, MAX_TOP, SHARDS, PAYMENT_BUCKET, shardKey } from "../src/api.js";
+import { KEY, SCOPES, DIMS, DAYS, MAX_TOP, SHARDS, PAYMENT_BUCKET, shardKey } from "../src/api.js";
+import { bucket } from "./r2.mjs";
 
 const SOURCE = process.env.SOURCE || "http://127.0.0.1:8080";
 const TARGET = process.env.TARGET || "http://127.0.0.1:8788";
+const R2_ENDPOINT = process.env.R2_ENDPOINT || "";
 const NETS = (process.env.NETWORKS || "mainnet testnet").split(/\s+/).filter(Boolean);
 const STATE_FILE = process.env.STATE_FILE || "";
 /** A network is republished at least this often even without a new crawl (list and payments move). */
 const REFRESH_EVERY = 60 * 60_000;
 const once = process.argv.includes("--once");
 
-function readToken() {
-  if (process.env.INGEST_TOKEN) return process.env.INGEST_TOKEN;
-  const file = process.env.INGEST_TOKEN_FILE || "/run/secrets/ingest_token";
+/** A secret from env `name`, else from the file in `${name}_FILE` (or `file`); "" if neither has one. */
+function readSecret(name, file) {
+  if (process.env[name]) return process.env[name];
+  file = process.env[`${name}_FILE`] || file;
   try {
     return readFileSync(file, "utf8").trim();
   } catch (e) {
@@ -33,15 +41,33 @@ function readToken() {
     return "";
   }
 }
-let TOKEN = "";
+
+/** Sends one document's JSON to `key`, resolving to the Response; null until its secrets are in place. */
+function uploader() {
+  if (R2_ENDPOINT) {
+    const accessKeyId = readSecret("R2_ACCESS_KEY_ID", "/run/secrets/r2_access_key_id");
+    const secretAccessKey = readSecret("R2_SECRET_ACCESS_KEY", "/run/secrets/r2_secret_access_key");
+    if (!accessKeyId || !secretAccessKey) return null;
+    const b = bucket({ endpoint: R2_ENDPOINT, name: process.env.R2_BUCKET || "dash-nodes-data", accessKeyId, secretAccessKey });
+    return (key, body) => b.put(key, body);
+  }
+  const token = readSecret("INGEST_TOKEN", "/run/secrets/ingest_token");
+  if (!token) return null;
+  return (key, body) => fetch(`${TARGET}/_ingest/${key}`, {
+    method: "PUT", body: gzipSync(body),
+    headers: { authorization: `Bearer ${token}`, "x-body-encoding": "gzip", "content-type": "application/json" },
+  });
+}
+let send = null;
+const destination = R2_ENDPOINT ? "R2 credentials (R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY)" : "ingest token (INGEST_TOKEN / INGEST_TOKEN_FILE)";
 
 const log = (...a) => console.log(new Date().toISOString(), ...a);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-/** fetch, retried up to `tries` times with a growing pause unless `permanent(status)`; returns the last response. */
-async function fetchRetry(url, init, tries, pause, permanent = () => false) {
+/** `request()`, retried up to `tries` times with a growing pause unless `permanent(status)`; returns the last response. */
+async function fetchRetry(request, tries, pause, permanent = () => false) {
   for (let n = 1; ; n++) {
-    const r = await fetch(url, init).catch((e) => ({ ok: false, status: e.message, text: async () => "" }));
+    const r = await request().catch((e) => ({ ok: false, status: e.message, text: async () => "" }));
     if (r.ok || n >= tries || permanent(r.status)) return r;
     await sleep(pause * n);
   }
@@ -49,7 +75,7 @@ async function fetchRetry(url, init, tries, pause, permanent = () => false) {
 
 async function get(path) {
   // 404 for an endpoint this build doesn't have, 400 for a parameter it doesn't know; anything else is worth a retry.
-  const r = await fetchRetry(`${SOURCE}/api/v1/${path}`, undefined, 3, 1000, (status) => status === 404 || status === 400);
+  const r = await fetchRetry(() => fetch(`${SOURCE}/api/v1/${path}`), 3, 1000, (status) => status === 404 || status === 400);
   if (!r.ok) throw Object.assign(new Error(`${path}: ${r.status}`), { status: r.status });
   return r.json();
 }
@@ -85,10 +111,9 @@ async function put(key, doc) {
   const body = JSON.stringify(doc);
   const hash = createHash("sha256").update(body).digest("hex");
   if (sentHash.get(key) === hash) return;
-  const r = await fetchRetry(`${TARGET}/_ingest/${key}`, {
-    method: "PUT", body: gzipSync(body),
-    headers: { authorization: `Bearer ${TOKEN}`, "x-body-encoding": "gzip", "content-type": "application/json" },
-  }, 4, 2000);
+  // The Worker's ingest refuses other keys; R2 doesn't, so check here what the site would serve.
+  if (!KEY.test(key)) throw new Error(`${key}: key not allowed`);
+  const r = await fetchRetry(() => send(key, body), 4, 2000);
   if (!r.ok) throw new Error(`${key}: ${r.status} ${await r.text()}`);
   sentHash.set(key, hash);
   puts++;
@@ -172,11 +197,12 @@ async function publishNetwork(net) {
 }
 
 async function main() {
-  TOKEN = readToken();
-  if (!TOKEN && once) { log("no ingest token (INGEST_TOKEN / INGEST_TOKEN_FILE)"); process.exit(1); }
-  // Not configured yet: stay up quietly rather than crash-loop, and start once the token appears.
-  if (!TOKEN) log("no ingest token yet (INGEST_TOKEN / INGEST_TOKEN_FILE); waiting for one");
-  while (!TOKEN) { await sleep(60_000); TOKEN = readToken(); }
+  send = uploader();
+  if (!send && once) { log(`no ${destination}`); process.exit(1); }
+  // Not configured yet: stay up quietly rather than crash-loop, and start once the secrets appear.
+  if (!send) log(`no ${destination} yet; waiting`);
+  while (!send) { await sleep(60_000); send = uploader(); }
+  log(R2_ENDPOINT ? `publishing straight to R2 (${new URL(R2_ENDPOINT).host})` : `publishing through ${TARGET}/_ingest`);
   loadState();
   const lastCrawl = new Map(); // net -> crawl id last published
   const lastPass = new Map(); // net -> time of the last successful pass

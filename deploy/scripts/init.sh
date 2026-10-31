@@ -11,6 +11,9 @@ if [ ! -s secrets/rpc_password ]; then
 fi
 # The Worker's INGEST_TOKEN secret; the publisher idles until it's filled in.
 [ -e secrets/ingest_token ] || : > secrets/ingest_token
+# R2 S3 credentials for the publisher (with R2_ENDPOINT in .env); empty, it uses the ingest token.
+[ -e secrets/r2_access_key_id ] || : > secrets/r2_access_key_id
+[ -e secrets/r2_secret_access_key ] || : > secrets/r2_secret_access_key
 # The bench's token for the Worker's ingest; the bench idles until it's filled in.
 [ -e secrets/bench_token ] || : > secrets/bench_token
 # The Worker's STATE_TOKEN, for the app's database snapshots; the app won't start without it
@@ -18,6 +21,6 @@ fi
 [ -e secrets/state_token ] || : > secrets/state_token
 chown 1000:1000 secrets/* 2>/dev/null || true
 chmod 0400 secrets/rpc_password
-chmod 0400 secrets/ingest_token secrets/bench_token secrets/state_token
+chmod 0400 secrets/ingest_token secrets/bench_token secrets/state_token secrets/r2_access_key_id secrets/r2_secret_access_key
 [ -e .env ] || cp .env.example .env
 echo "ok: edit .env if needed, then: docker compose up -d --build"

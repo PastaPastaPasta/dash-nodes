@@ -6,7 +6,8 @@
 #   docker compose up -d --build     everything
 #   COMPOSE_PROFILES=cjdns, CJDNS=true   also run a cjdns node (needs /dev/net/tun, see README)
 #
-# Nothing here takes inbound traffic from the internet: the publisher only connects out to the Worker.
+# Nothing here takes inbound traffic from the internet: the publisher only connects out to R2 (or the
+# Worker).
 # dashd RPC, Tor's SOCKS port and i2pd's SOCKS/SAM ports are reachable on the compose networks only;
 # the app's HTTP port is for the LAN. Tor and i2pd sit on their own `overlay` network, not on `core`,
 # so they can't reach dashd's RPC. Needs Docker Engine 28+ and Compose 2.33+ (the IPv6-only `cjdns`
@@ -243,9 +244,17 @@ services:
       SOURCE: http://app:8080
       TARGET: ${PUBLISH_TARGET:-https://nodes.dashhq.org}
       INGEST_TOKEN_FILE: /run/secrets/ingest_token
+      # Set (in .env), uploads go straight to R2 with the r2_* secrets instead of through the Worker,
+      # whose every request counts against the Workers plan's daily limit.
+      R2_ENDPOINT: ${R2_ENDPOINT:-}
+      R2_BUCKET: ${R2_BUCKET:-dash-nodes-data}
+      R2_ACCESS_KEY_ID_FILE: /run/secrets/r2_access_key_id
+      R2_SECRET_ACCESS_KEY_FILE: /run/secrets/r2_secret_access_key
       STATE_FILE: /home/node/publisher.json
     secrets:
       - ingest_token
+      - r2_access_key_id
+      - r2_secret_access_key
     volumes:
       - ../worker/src:/publisher/src:ro
       - ../worker/scripts:/publisher/scripts:ro
@@ -327,6 +336,11 @@ secrets:
     file: ./secrets/rpc_password
   ingest_token:
     file: ./secrets/ingest_token
+  # An R2 API token's S3 credentials, Object Read & Write on the data bucket only (see R2_ENDPOINT).
+  r2_access_key_id:
+    file: ./secrets/r2_access_key_id
+  r2_secret_access_key:
+    file: ./secrets/r2_secret_access_key
   bench_token:
     file: ./secrets/bench_token
   # The Worker's STATE_TOKEN: the app's database snapshots (only those; see src/snapshot.rs).
