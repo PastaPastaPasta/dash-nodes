@@ -253,6 +253,39 @@ fn migrate(c: &mut Connection) -> Result<()> {
     Ok(())
 }
 
+/// `PRAGMA user_version` once payments no longer count the platform share (see `drop_platform_share`).
+const NO_PLATFORM_SHARE: i64 = 1;
+/// Dash's block subsidy steps down every this many blocks; within one such era, after V20, the
+/// masternode share of the subsidy is fixed.
+const SUBSIDY_ERA: i64 = 210_240;
+
+/// Takes the platform share out of payments recorded before the collector stopped counting it (as
+/// `masternode payments` does), once per database. From MN_RR on, each block's coinbase sends
+/// floor(37.5% of the masternode subsidy share) to Platform's credit pool. That share is fixed within a
+/// subsidy era, and the smallest payment in an era is a block without fees, whose amount is the share
+/// itself; on mainnet and testnet every block since MN_RR has exactly one payee. Eras with too few
+/// blocks to find one fall back to 37.5% of each payment (over by 37.5% of its fees).
+fn drop_platform_share(c: &mut Connection, mn_rr: i64) -> Result<usize> {
+    let tx = c.transaction()?;
+    tx.execute_batch(&format!(
+        "CREATE TEMP TABLE share_era AS
+             SELECT (height - 1) / {SUBSIDY_ERA} AS era, min(amount) AS subsidy, count(*) AS n
+             FROM payments WHERE height >= {mn_rr} GROUP BY era;
+         CREATE TEMP TABLE platform_share (height INTEGER PRIMARY KEY, share INTEGER NOT NULL);
+         INSERT INTO platform_share
+             SELECT p.height, CASE WHEN e.n >= 100 THEN e.subsidy * 375 / 1000 ELSE p.amount * 375 / 1000 END
+             FROM payments p JOIN share_era e ON e.era = (p.height - 1) / {SUBSIDY_ERA}
+             WHERE p.height >= {mn_rr} AND NOT EXISTS (SELECT 1 FROM payments q WHERE q.height = p.height AND q.protx != p.protx);
+         UPDATE payments SET amount = amount - s.share FROM platform_share s WHERE s.height = payments.height;
+         UPDATE blocks SET mn_amount = mn_amount - s.share FROM platform_share s WHERE s.height = blocks.height;"
+    ))?;
+    let fixed: usize = tx.query_row("SELECT count(*) FROM temp.platform_share", [], |r| r.get(0))?;
+    tx.execute_batch("DROP TABLE temp.share_era; DROP TABLE temp.platform_share;")?;
+    tx.pragma_update(None, "user_version", NO_PLATFORM_SHARE)?;
+    tx.commit()?;
+    Ok(fixed)
+}
+
 /// A panic inside a closure poisons the mutex; the connection itself is still fine to use.
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
@@ -272,6 +305,20 @@ impl Db {
             readers: Arc::new(Mutex::new(Vec::new())),
             read_slots: Arc::new(tokio::sync::Semaphore::new(READERS)),
         })
+    }
+
+    /// Runs `drop_platform_share` unless this database already has (`user_version`).
+    pub async fn drop_platform_share(&self, mn_rr: i64) -> Result<()> {
+        let fixed = self
+            .write(move |c| {
+                let v: i64 = c.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+                if v >= NO_PLATFORM_SHARE { Ok(None) } else { drop_platform_share(c, mn_rr).map(Some) }
+            })
+            .await?;
+        if let Some(n) = fixed {
+            tracing::info!("{}: took the platform share out of {n} payments", self.path.display());
+        }
+        Ok(())
     }
 
     pub async fn write<F, R>(&self, f: F) -> Result<R>
@@ -463,5 +510,49 @@ mod tests {
         drop(c);
         drop(db);
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn drops_the_platform_share_once() {
+        let mut c = Connection::open_in_memory().unwrap();
+        c.execute_batch(SCHEMA).unwrap();
+        // MN_RR at 1,000. Heights 1,000 and 1,001 are in subsidy era 0, 1,051,200 in era 4, the rest in era 5.
+        let rows = [(999, 300), (1_000, 120), (1_001, 125), (1_051_200, 121), (1_051_201, 100), (1_051_202, 104)];
+        for (h, a) in rows {
+            c.execute(
+                "INSERT INTO blocks (height, hash, prev, time, mn_amount) VALUES (?1, '', '', 0, ?2)",
+                params![h, a],
+            )
+            .unwrap();
+            c.execute("INSERT INTO payments (height, protx, amount) VALUES (?1, 'p', ?2)", params![h, a]).unwrap();
+        }
+        // Few blocks per era here: 37.5% of each payment. With 100 or more, of the era's fee-free block.
+        assert_eq!(drop_platform_share(&mut c, 1_000).unwrap(), 5);
+        let paid: Vec<(i64, i64)> =
+            query_all(&c, "SELECT height, amount FROM payments ORDER BY height", [], |r| Ok((r.get(0)?, r.get(1)?)))
+                .unwrap();
+        assert_eq!(paid, [(999, 300), (1_000, 75), (1_001, 79), (1_051_200, 76), (1_051_201, 63), (1_051_202, 65)]);
+        let mn: i64 = c.query_row("SELECT sum(mn_amount) FROM blocks", [], |r| r.get(0)).unwrap();
+        assert_eq!(mn, 300 + 75 + 79 + 76 + 63 + 65);
+        let v: i64 = c.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
+        assert_eq!(v, NO_PLATFORM_SHARE);
+
+        // An era with enough blocks uses its smallest payment (no fees): 200 → 75 for every block.
+        let mut c = Connection::open_in_memory().unwrap();
+        c.execute_batch(SCHEMA).unwrap();
+        for i in 0..150 {
+            let a = if i == 7 { 200 } else { 200 + i % 5 };
+            c.execute("INSERT INTO payments (height, protx, amount) VALUES (?1, 'p', ?2)", params![2_000 + i, a])
+                .unwrap();
+        }
+        drop_platform_share(&mut c, 1_000).unwrap();
+        let wrong: i64 = c
+            .query_row(
+                "SELECT count(*) FROM payments WHERE amount != 200 + ((height - 2000) % 5) * (height != 2007) - 75",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(wrong, 0);
     }
 }
