@@ -265,7 +265,8 @@ from its `deploy/` directory.
      restarts during that minute counts as a failure too. A commit is tried 3 times
      (a pass that dies mid-deploy counts) and then waits for a newer one. Docs-only changes just
      update the tree;
-  3. if `worker/` or `web/` changed, deploys the Worker: `npm ci --ignore-scripts`, `npm test` and
+  3. if what the Worker is built from changed (`web/`, `worker/src/`, `worker/scripts/build.mjs`,
+     `worker/package*.json`, `worker/wrangler.jsonc`; not the publisher's scripts), deploys it: `npm ci --ignore-scripts`, `npm test` and
      the build in a `node` container without the token, then `wrangler deploy` with it (wrangler
      itself is pinned by the lockfile like everything else). It waits until every network's
      published summary comes from a crawl that finished after the new app started, so pages never
@@ -305,9 +306,10 @@ from its `deploy/` directory.
 - **Redeploy by hand** (the fallback, when CD is paused or the host has none): `git archive` or tar
   the tree (without `target/`, `deploy/secrets`, `deploy/.env`), unpack it over the old one, run
   `scripts/init.sh` (it adds any new secret placeholders; compose won't start a service whose secret
-  file is missing), then `docker compose build app && docker compose up -d app publisher bench` (the
-  publisher runs the tree's `worker/` scripts: if they changed, `docker compose restart publisher`),
-  and update `DEPLOYED_COMMIT`. When the app's API gained fields the pages use, wait for the publisher
+  file is missing), then `docker compose build && docker compose up -d`, and `docker compose restart`
+  every service whose bind-mounted files changed (running containers keep the old ones): the
+  publisher for `worker/src` and `worker/scripts`, the dashds for `deploy/dashd/`, i2pd for
+  `deploy/i2pd/`, cjdns for `deploy/cjdns/peers.json`. Then update `DEPLOYED_COMMIT`. When the app's API gained fields the pages use, wait for the publisher
   to upload a crawl from the new app before deploying the Worker (`cd worker && npm run deploy`;
   plain `wrangler deploy` skips copying `web/` and ships stale pages). With CD installed, record a hand
   deploy in `/var/lib/dash-nodes-cd/app-commit` and `worker-commit` (full hashes), or CD will
