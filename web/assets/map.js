@@ -469,8 +469,9 @@ function renderHeadline() {
     foot.textContent = geo?.unlocated ? `${fmt(geo.unlocated)} reachable nodes on Tor or I2P have no location, so they aren't drawn.` : "";
     return;
   }
-  // The same masternodes the Reachable chip counts (PoSe-banned ones answer too, sometimes), then split.
-  const list = filtered();
+  // What's drawn: the filters, less the hidden chips. With no chip hidden, the same masternodes the
+  // Reachable chip counts (PoSe-banned ones answer too, sometimes); then split by registration.
+  const list = visible();
   const answered = (ms) => ms.filter((m) => m.reachable === true).length;
   const banned = list.filter((m) => registration(m) === "PoSe-banned");
   const enabled = list.filter((m) => registration(m) !== "PoSe-banned");
