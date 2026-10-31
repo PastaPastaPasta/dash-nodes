@@ -84,8 +84,9 @@ const COLUMNS = [
     cell: (m) => el("td", { class: "r", title: m.platform ? `Last epoch: ${credits(m.platform.last_epoch)}` : "" },
       m.platform ? credits(m.platform.d30, 2) : "–", m.platform ? el("small", { class: "under", text: `${blocks(m.platform.epoch_blocks)} this epoch` }) : null) },
   { key: "platform_next", label: "Next block", r: true, evo: true, get: (m) => m.platform?.next ?? Infinity,
-    cell: (m) => el("td", { class: "r", title: m.platform?.next ? "When its turn to propose a Platform block comes, an estimate" : "Not in a validator set that takes turns now" },
-      m.platform?.next ? inAbout(m.platform.next) : "–") },
+    cell: (m) => el("td", { class: "r", title: m.platform?.next ? "When its turn to propose a Platform block comes, an estimate"
+      : m.platform?.in_sets === false ? "Not in a validator set that takes turns now" : "Unknown: the validator sets haven't been read lately" },
+      m.platform?.next ? inAbout(m.platform.next) : m.platform && m.platform.in_sets == null ? "unknown" : "–") },
 ];
 /** The columns for the current filters: the Platform ones only for a list of evonodes. */
 const columns = () => COLUMNS.filter((c) => !c.evo || state.type === "Evo");

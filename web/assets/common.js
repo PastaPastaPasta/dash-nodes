@@ -98,7 +98,7 @@ export function ago(ts) {
 const BLOCK_SECONDS = 158;
 
 /** A span in seconds the way people say it: "40 min", "5 h", "12 days", "8 months", "2.4 years". */
-function duration(s) {
+export function duration(s) {
   if (s < 5400) return `${Math.max(1, Math.round(s / 60))} min`;
   if (s < 129600) return `${Math.round(s / 3600)} h`;
   const d = s / 86400;
@@ -113,6 +113,9 @@ export function inAbout(ts) {
   const s = ts - Date.now() / 1000;
   return s < 60 ? "any moment" : `in ${duration(s)}`;
 }
+
+/** "the last 55 days", "the last 6 h": the span a pace is over, given in days; null when there's none. */
+export const lastSpan = (d) => (d > 0 ? `the last ${duration(d * 86400)}` : null);
 
 export const blocks = (n) => `${fmt(n)} block${n === 1 ? "" : "s"}`;
 /** About how long n blocks take: "8 months". */

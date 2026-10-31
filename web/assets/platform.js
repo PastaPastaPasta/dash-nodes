@@ -1,5 +1,5 @@
 // /platform: Platform rewards across the network (the crawler's rewards.rs, /api/v1/{net}/platform).
-import { api, chrome, currentNet, el, fmt, pct, href, ago, dateTime, amount, inAbout, shortHash, badge, segmented, searchBox, toDash, labelled } from "./common.js";
+import { api, chrome, currentNet, el, fmt, pct, href, ago, dateTime, amount, inAbout, shortHash, badge, segmented, searchBox, toDash, labelled, lastSpan } from "./common.js";
 import { svg, sized, axisScale, valueAxis, epochAxis } from "./charts.js";
 
 chrome("platform");
@@ -35,7 +35,7 @@ function renderNow(summary) {
     last ? stat("Last epoch's pool", amount(last.pool), `epoch ${fmt(last.epoch)}: ${fmt(last.blocks)} blocks by ${fmt(last.proposers)} evonodes`) : null,
     last ? stat("Per block", amount(last.per_block), "what proposing one block paid last epoch") : null,
     doc.returns.median_monthly != null ? stat("Median evonode, a month", amount(doc.returns.median_monthly),
-      `Platform only, at the pace of the last ${Math.round(doc.returns.monthly_basis_days)} days`) : null,
+      `Platform only, at the pace of ${lastSpan(doc.returns.monthly_basis_days) ?? "the last six epochs"}`) : null,
     evo?.median_total_yield != null
       ? stat("Median evonode yield", `${pct(evo.median_total_yield)} a year`, `on 4,000 DASH: ${pct(evo.median_platform_yield)} Platform, ${pct(evo.median_annual_yield)} Core`)
       : doc.returns.median_platform_yield != null ? stat("Median Platform yield", `${pct(doc.returns.median_platform_yield)} a year`, "on 4,000 DASH, Core payments not included") : null,
@@ -53,7 +53,10 @@ function renderUpgrade() {
   const rows = doc.evonodes.filter((e) => e.status === "enabled");
   if (u.phase === "active" || v == null) {
     $("upgrade-title").textContent = `Protocol ${u.current} is live`;
-    $("upgrade-lede").textContent = `No upgrade is being voted on: every vote is for the protocol Platform runs now, ${u.current}.`;
+    const older = u.versions.some(([ver, votes]) => ver !== u.current && votes > 0);
+    $("upgrade-lede").textContent = older
+      ? `No upgrade is being voted on: no evonode has voted for a protocol above ${u.current}, the one Platform runs now.`
+      : `No upgrade is being voted on: every vote is for the protocol Platform runs now, ${u.current}.`;
     $("upgrade-meter").replaceChildren();
   } else {
     const locked = u.phase === "locked_in";
@@ -113,7 +116,7 @@ function spreadChart(box, epochs) {
   const list = [...epochs].reverse().filter((e) => e.credits_spread.p50 != null);
   sized(box, (W) => {
     const H = 220, L = 40, B = 22, T = 8;
-    const { step, max } = axisScale(Math.max(...list.map((e) => toDash(e.credits_spread.p90))) || 1, 4);
+    const { step, max } = axisScale(Math.max(0, ...list.map((e) => toDash(e.credits_spread.p90))) || 1, 4);
     const slot = (W - L) / Math.max(1, list.length);
     const row = (v) => T + (H - T - B) * (1 - v / max);
     const y = (c) => row(toDash(c));
@@ -184,7 +187,8 @@ const COLUMNS = [
   { key: "monthly", label: "A month (est.)", r: true, get: (e) => e.monthly, cell: (e) => el("td", { class: "r", text: amount(e.monthly) }) },
   { key: "balance", label: "Claimable", r: true, get: (e) => e.balance ?? -1, cell: (e) => el("td", { class: "r", text: e.balance != null ? amount(e.balance) : "–" }) },
   { key: "next", label: "Next block", r: true, get: (e) => e.next ?? Infinity,
-    cell: (e) => el("td", { class: "r", title: e.next ? dateTime(e.next) : "Not in a validator set that takes turns now" }, e.next ? inAbout(e.next) : "–") },
+    cell: (e) => el("td", { class: "r", title: e.next ? dateTime(e.next) : doc.schedule ? "Not in a validator set that takes turns now" : "Unknown: the validator sets haven't been read lately" },
+      e.next ? inAbout(e.next) : doc.schedule ? "–" : "unknown") },
   { key: "vote", label: "Vote this epoch", r: true, get: (e) => e.vote ?? 0, cell: (e) => el("td", { class: "r", text: e.vote ?? "–" }) },
   { key: "drive", label: "Drive", get: (e) => e.drive || "", cell: (e) => el("td", { text: e.drive || "–" }) },
 ];
@@ -194,7 +198,7 @@ function renderAll() {
   const state = { q: "", show: "all", sort: "monthly", dir: -1, page: 0 };
   const PAGE = 50;
   $("all-lede").textContent = `Every registered evonode: what it earned, what it can withdraw, and when its next block is due. ` +
-    `"A month" is at the pace of its last ${Math.round(doc.returns.monthly_basis_days || 55)} days. Click a column to sort; open an evonode for its history.`;
+    `"A month" is at the pace of its last ${lastSpan(doc.returns.monthly_basis_days) ?? "six finished epochs, once there are six"}. Click a column to sort; open an evonode for its history.`;
   const matches = (e) => {
     if (state.show === "proposed" && !e.epoch_blocks) return false;
     if (state.show === "idle" && (e.next || e.status !== "enabled")) return false;
@@ -231,7 +235,7 @@ function renderAll() {
     state.page = 0;
     render();
   };
-  const show = SHOW.filter(([k]) => k !== "pending" || (v != null && doc.upgrade.phase === "voting"));
+  const show = SHOW.filter(([k]) => (k !== "pending" || (v != null && doc.upgrade.phase === "voting")) && (k !== "idle" || doc.schedule));
   $("all-filters").replaceChildren(searchBox(state, () => { state.page = 0; render(); }, "ProTx, IP or Drive version", "Search evonodes"),
     segmented(show, state.show, (k) => { state.show = k; state.page = 0; render(); }, "Show"));
   render();

@@ -1,5 +1,5 @@
 import { api, chrome, currentNet, NETWORKS, el, fmt, pct, href, countryName, flag, place, badge, ago, dateTime, dash, nodeStatus, poseBadge, uptimeKind, tile, card,
-  changeText, changeKind, DKG_CHECKS, DKG_OVERALL, blockSpan, blocks, blocksIn, behind, heightWhen, credits, amount, inAbout, toDash, labelled, kv } from "./common.js";
+  changeText, changeKind, DKG_CHECKS, DKG_OVERALL, blockSpan, blocks, blocksIn, behind, heightWhen, credits, amount, inAbout, toDash, labelled, kv, lastSpan } from "./common.js";
 import { svg, sized, axisScale, valueAxis, epochAxis } from "./charts.js";
 
 chrome("masternodes");
@@ -336,7 +336,7 @@ function rewardsSection(m) {
     tile("This epoch so far", c ? blocks(c.blocks) : "–", c?.accrued != null
       ? `≈ ${amount(c.accrued)} if it ended now (an estimate)` : "nothing yet"),
     tile("Next block", next?.eta ? inAbout(next.eta) : "–", next ? `its turn is ${next.slots === 1 ? "next" : `${fmt(next.slots)} blocks away`}; an estimate`
-      : p.in_validator_sets === false ? "not in a validator set that takes turns now" : "schedule not sampled yet")));
+      : p.in_validator_sets === false ? "not in a validator set that takes turns now" : "unknown: the validator sets haven't been read lately")));
   box.append(el("div", { class: "rewards-where" }, el("h3", { text: "Where it sits" }), rankStrip(p)));
   box.append(el("div", { class: "cols-2" }, earnedTable(m, p), estimateTable(m, p)));
   box.append(epochHistory(p));
@@ -395,7 +395,7 @@ function earnedTable(m, p) {
     ["Last 365 days", amount(t.d365)],
     [`Since epoch ${fmt(p.first_epoch)}`, el("span", {}, amount(t.lifetime), el("span", { class: "muted", text: ` · ${fmt(t.epochs_paid)} epochs paid` }))],
     x?.total_reward != null && ["Platform Explorer says", el("span", {}, amount(x.total_reward),
-      el("span", { class: "muted", text: beyond ? `, ${amount(beyond)} more than ours` : `, the same as ours up to epoch ${fmt(x.epoch - 1)}` }))],
+      el("span", { class: "muted", text: beyond ? `, ${amount(beyond)} more than ours` : x.epoch != null ? `, the same as ours up to epoch ${fmt(x.epoch - 1)}` : ", the same as ours" }))],
   ]), el("p", { class: "muted small" }, `Drive keeps per-evonode records only from epoch ${fmt(p.first_epoch)} on, so rewards before it can't be checked; `,
     "the live section below estimates them from its balance and withdrawals. ",
     x?.total_reward != null ? ["Platform Explorer is a third party whose numbers we haven't verified; fetched ", ago(x.fetched), " from ",
@@ -410,7 +410,7 @@ function estimateTable(m, p) {
   const watched = c?.turns;
   const missed30 = p.turns_30d;
   return el("div", {}, el("h3", { text: "Estimates" }), kv([
-    ["Platform, a month", el("span", {}, amount(p.monthly), el("span", { class: "muted", text: ` at its pace of the last ${Math.round(p.monthly_basis_days || 0)} days` }))],
+    ["Platform, a month", el("span", {}, amount(p.monthly), el("span", { class: "muted", text: lastSpan(p.monthly_basis_days) ? ` at its pace of ${lastSpan(p.monthly_basis_days)}` : " once six epochs have finished" }))],
     ["Core, a month", coreMonthly != null ? el("span", {}, `${(coreMonthly / 1e8).toFixed(2)} DASH`, el("span", { class: "muted", text: ` from its payments over ${r.window_days} days` })) : null],
     coreMonthly != null ? ["Both, a month", el("span", {}, `≈ ${(toDash(p.monthly) + coreMonthly / 1e8).toFixed(2)} DASH`)] : null,
     ["Both, a year", yearly != null ? el("span", {}, `${pct(yearly)} on 4,000 DASH`,
@@ -421,7 +421,7 @@ function estimateTable(m, p) {
     ["Upgrade vote", p.vote ? el("span", {}, `protocol ${p.vote.version}`, el("span", { class: "muted", text: " (from its blocks this epoch)" }))
       : el("span", { class: "muted", text: "none yet this epoch: it votes with the blocks it proposes" })],
   ]), el("p", { class: "muted small", text: "Expected blocks follow from how many validator sets it was in while we watched; missed turns are ones we saw skipped " +
-    "(we sample the validator sets every 90 seconds, so some turns go unseen). Platform rewards are gross: reward shares (none on mainnet today) aren't deducted." }));
+    "(we read the validator sets every few minutes, so some turns go unseen). Platform rewards are gross: reward shares (none on mainnet today) aren't deducted." }));
 }
 
 /** The latest finished epoch we watched the validator sets through: blocks made against expected. */
@@ -472,7 +472,7 @@ function startLive(box, m, p) {
   if (m.removed) { box.replaceChildren(el("p", { class: "muted", text: "It left the masternode list." })); return; }
   const go = () => import("./platform-live.js").then((x) => x.live(box, net, m.protx, p),
     (e) => box.replaceChildren(el("p", { class: "muted", text: `Couldn't load: ${e.message}` })));
-  const button = el("button", { class: "btn", type: "button", text: "Check live (downloads 9 MB once)", onclick: () => { button.disabled = true; go(); } });
+  const button = el("button", { class: "btn", type: "button", text: "Check live (a 9 MB download, once)", onclick: () => { button.disabled = true; go(); } });
   box.replaceChildren(el("p", { class: "muted small", text: "Its claimable balance, blocks this epoch and every withdrawal, read from Platform with proofs, and our epoch numbers checked against them." }), button);
   if (navigator.connection?.saveData || !("IntersectionObserver" in window)) return;
   const seen = new IntersectionObserver((entries) => {
