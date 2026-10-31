@@ -152,7 +152,8 @@ CREATE TABLE IF NOT EXISTS platform_status (
     height                 INTEGER,
     catching_up            INTEGER,
     peers                  INTEGER,
-    node_protx             TEXT
+    node_protx             TEXT,
+    drive_protocol_next    INTEGER                -- the version Drive runs from the next epoch (a locked-in upgrade)
 ) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS platform_daily (
     protx    TEXT NOT NULL,
@@ -160,6 +161,80 @@ CREATE TABLE IF NOT EXISTS platform_daily (
     attempts INTEGER NOT NULL,
     ok       INTEGER NOT NULL,
     PRIMARY KEY (protx, day)
+) WITHOUT ROWID;
+
+-- Platform rewards (rewards.rs). Credits: 1 DASH = 1e11. Every finalized epoch, as Drive recorded it
+-- when it paid the epoch out (getFinalizedEpochInfos; there are none before epoch 34 on mainnet).
+CREATE TABLE IF NOT EXISTS platform_epochs (
+    epoch              INTEGER PRIMARY KEY,
+    first_block_height INTEGER NOT NULL,
+    first_block_time   INTEGER NOT NULL,     -- unix seconds
+    first_core_height  INTEGER NOT NULL,
+    next_core_height   INTEGER NOT NULL,
+    total_blocks       INTEGER NOT NULL,
+    processing_fees    INTEGER NOT NULL,
+    storage_fees       INTEGER NOT NULL,     -- distributed storage fees (this epoch's share)
+    core_rewards       INTEGER NOT NULL,
+    protocol_version   INTEGER NOT NULL,
+    proposers          INTEGER NOT NULL
+);
+-- What each proposer was paid for an epoch, with Drive's integer rules (rewards::payouts).
+CREATE TABLE IF NOT EXISTS platform_payouts (
+    epoch   INTEGER NOT NULL,
+    protx   TEXT NOT NULL,
+    blocks  INTEGER NOT NULL,
+    credits INTEGER NOT NULL,
+    PRIMARY KEY (epoch, protx)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS platform_payouts_protx ON platform_payouts(protx, epoch);
+-- Blocks each evonode proposed so far in the current epoch (replaced every poll).
+CREATE TABLE IF NOT EXISTS platform_epoch_blocks (
+    protx  TEXT PRIMARY KEY,
+    epoch  INTEGER NOT NULL,
+    blocks INTEGER NOT NULL
+) WITHOUT ROWID;
+-- Each evonode's identity balance (claimable credits), and a row whenever it changes: a step up is a
+-- payout, a drop a withdrawal or transfer.
+CREATE TABLE IF NOT EXISTS platform_balances (
+    protx   TEXT PRIMARY KEY,
+    credits INTEGER,                         -- NULL: no identity
+    ts      INTEGER NOT NULL
+) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS platform_balance_history (
+    protx   TEXT NOT NULL,
+    ts      INTEGER NOT NULL,
+    credits INTEGER NOT NULL,
+    PRIMARY KEY (protx, ts)
+) WITHOUT ROWID;
+-- The protocol version each evonode last voted for (getProtocolVersionUpgradeVoteStatus).
+CREATE TABLE IF NOT EXISTS platform_votes (
+    protx   TEXT PRIMARY KEY,
+    version INTEGER NOT NULL,
+    ts      INTEGER NOT NULL
+) WITHOUT ROWID;
+-- Proposer turns per evonode and epoch, from sampling getCurrentQuorumsInfo: `memberships` sums, over
+-- samples, the rotating validator sets it was an active member of (its expected share of blocks);
+-- `turns` are turns we saw it take or miss, `missed` the missed ones.
+CREATE TABLE IF NOT EXISTS platform_turns (
+    epoch       INTEGER NOT NULL,
+    protx       TEXT NOT NULL,
+    memberships INTEGER NOT NULL DEFAULT 0,
+    turns       INTEGER NOT NULL DEFAULT 0,
+    missed      INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (epoch, protx)
+) WITHOUT ROWID;
+-- Per epoch: quorum samples taken and the sum of every member's memberships over them.
+CREATE TABLE IF NOT EXISTS platform_turn_samples (
+    epoch       INTEGER PRIMARY KEY,
+    samples     INTEGER NOT NULL,
+    memberships INTEGER NOT NULL
+);
+-- Platform Explorer's lifetime reward total per evonode (third party, unverified), for epochs before 34.
+CREATE TABLE IF NOT EXISTS platform_explorer (
+    protx        TEXT PRIMARY KEY,
+    total_reward INTEGER,                    -- credits; NULL: not known there
+    epoch        INTEGER,                    -- its current epoch when fetched
+    fetched      INTEGER NOT NULL
 ) WITHOUT ROWID;
 
 -- One row each time a masternode's announced user agent or protocol changes.
@@ -202,7 +277,7 @@ pub struct Db {
 }
 
 /// Columns added after the first release, for databases created before them: (table, column, type).
-const ADDED_COLUMNS: [(&str, &str, &str); 9] = [
+const ADDED_COLUMNS: [(&str, &str, &str); 10] = [
     ("nodes", "continent", "TEXT"),
     ("nodes", "city", "TEXT"),
     ("nodes", "lat", "REAL"),
@@ -212,6 +287,7 @@ const ADDED_COLUMNS: [(&str, &str, &str); 9] = [
     ("crawls", "networks", "TEXT"),
     ("nodes", "relay", "INTEGER"),
     ("masternodes", "platform_banned", "INTEGER"),
+    ("platform_status", "drive_protocol_next", "INTEGER"),
 ];
 
 /// Every core P2P address of every registered masternode (the primary `service` for rows the

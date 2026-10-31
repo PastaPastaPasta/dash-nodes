@@ -10,6 +10,7 @@ mod p2p;
 mod platform;
 mod readiness;
 mod reference;
+mod rewards;
 mod rpc;
 mod snapshot;
 mod socks5;
@@ -309,6 +310,7 @@ async fn serve(args: ServeArgs) -> Result<()> {
             backfill_pause_ms: args.backfill_pause_ms,
             pay_lock: tokio::sync::Mutex::new(()),
             reference: RwLock::default(),
+            platform_schedule: RwLock::default(),
         });
         let floor = floor.unwrap_or(net.dip3_enforcement_height());
         supervise("collector", &ctx, collector::run);
@@ -316,6 +318,8 @@ async fn serve(args: ServeArgs) -> Result<()> {
         supervise("crawler", &ctx, crawler::run);
         supervise("reference", &ctx, reference::run);
         supervise("platform", &ctx, platform::run);
+        supervise("rewards", &ctx, rewards::run);
+        supervise("validator sets", &ctx, rewards::run_quorums);
         tracing::info!("{}: dashd at {url}", net.name());
         nets.insert(net, ctx);
     }

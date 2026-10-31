@@ -26,6 +26,7 @@ use crate::crawler::network_stats;
 use crate::db::{self, day_of, get_meta, query_all};
 use crate::network::Network;
 use crate::readiness::{self, Handshake, Input, Readiness, Tally, evaluate};
+use crate::rewards;
 use crate::state::NetCtx;
 
 pub type Nets = Arc<HashMap<Network, Arc<NetCtx>>>;
@@ -41,6 +42,7 @@ pub fn router(nets: Nets, web: &Path) -> Router {
         .route("/api/v1/{net}/masternodes/{protx}", get(masternode))
         .route("/api/v1/{net}/masternodes/{protx}/payments", get(payments))
         .route("/api/v1/{net}/changes", get(changes))
+        .route("/api/v1/{net}/platform", get(platform_rewards))
         .route("/api/v1/{net}/reference", get(reference))
         .with_state(nets)
         .layer(SetResponseHeaderLayer::if_not_present(
@@ -54,6 +56,7 @@ pub fn router(nets: Nets, web: &Path) -> Router {
         .route_service("/masternodes", page("masternodes.html"))
         .route_service("/changes", page("changes.html"))
         .route_service("/map", page("map.html"))
+        .route_service("/platform", page("platform.html"))
         .route_service("/mn/{protx}", page("mn.html"))
         .route_service("/api", page("api.html"))
         .nest_service("/assets", ServeDir::new(web.join("assets")))
@@ -493,11 +496,13 @@ fn uptime(ok: Option<i64>, attempts: Option<i64>) -> Value {
 
 async fn masternodes(State(nets): State<Nets>, UrlPath(net): UrlPath<String>) -> ApiResult {
     let ctx = net_ctx(&nets, &net)?;
+    let schedule = ctx.platform_schedule.read().unwrap().clone();
     let body = ctx
         .db
-        .read(|c| {
+        .read(move |c| {
             let latest = latest_crawl(c)?;
             let now = db::now();
+            let mut platform = rewards::list_fields(c, schedule.as_deref())?;
             let sql = format!(
                 "SELECT {MN_COLUMNS}, u7.ok AS ok7, u7.a AS a7, u30.ok AS ok30, u30.a AS a30
                  FROM masternodes m LEFT JOIN nodes n ON n.addr = m.service AND m.removed IS NULL
@@ -511,6 +516,9 @@ async fn masternodes(State(nets): State<Nets>, UrlPath(net): UrlPath<String>) ->
                 let mut v = mn_json(r, latest)?;
                 v["uptime_7d"] = uptime(r.get("ok7")?, r.get("a7")?);
                 v["uptime_30d"] = uptime(r.get("ok30")?, r.get("a30")?);
+                if let Some(p) = v["protx"].as_str().and_then(|p| platform.remove(p)) {
+                    v["platform"] = p;
+                }
                 Ok(v)
             })?;
             let tip: Option<i64> = c.query_row("SELECT max(height) FROM blocks", [], |r| r.get(0))?;
@@ -533,6 +541,7 @@ async fn masternode(State(nets): State<Nets>, UrlPath((net, protx)): UrlPath<(St
     let ctx = net_ctx(&nets, &net)?;
     let protx = parse_protx(&protx)?;
     let range = payments_range(&ctx).await?;
+    let schedule = ctx.platform_schedule.read().unwrap().clone();
     let body = ctx
         .db
         .read(move |c| {
@@ -607,6 +616,8 @@ async fn masternode(State(nets): State<Nets>, UrlPath((net, protx)): UrlPath<(St
                     |r| Ok(json!({"day": r.get::<_, String>(0)?, "attempts": r.get::<_, i64>(1)?, "ok": r.get::<_, i64>(2)?})),
                 )?;
                 mn["platform"] = json!({"latest": latest, "daily": daily});
+                let window = mn["returns"]["window_days"].as_i64().unwrap_or(RETURN_WINDOW);
+                mn["platform_rewards"] = rewards::mn_json(c, &protx, schedule.as_deref(), window)?;
             }
             let changes: Vec<Value> = query_all(
                 c,
@@ -707,30 +718,44 @@ fn network_returns(c: &Connection) -> Result<Value> {
     let since = db::now() - RETURN_WINDOW * DAY;
     let covered = index_start(c)?.is_some_and(|t| t <= since);
     let from = if covered { height_at(c, since)? } else { None };
-    let rows: Vec<(String, i64)> = match from {
+    let rows: Vec<(String, i64, String)> = match from {
         None => Vec::new(),
         Some(from) => query_all(
             c,
             // A registration with no indexed block predates the index (and so the window).
-            "SELECT m.type, coalesce((SELECT sum(p.amount) FROM payments p WHERE p.protx = m.protx AND p.height >= ?2), 0)
+            "SELECT m.type, coalesce((SELECT sum(p.amount) FROM payments p WHERE p.protx = m.protx AND p.height >= ?2), 0), m.protx
              FROM masternodes m LEFT JOIN blocks rb ON rb.height = m.registered_height
              WHERE m.removed IS NULL AND (m.pose_ban_height IS NULL OR m.pose_ban_height <= 0)
                AND (rb.time < ?1 OR (rb.time IS NULL AND m.registered_height < (SELECT min(height) FROM blocks)))",
             params![since, from],
-            |r| Ok((r.get(0)?, r.get(1)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )?,
     };
-    let median_yield = |evo: bool| {
-        let mut ys: Vec<f64> = rows
-            .iter()
-            .filter(|(t, _)| (t == "Evo") == evo)
-            .map(|(_, paid)| annualized(*paid, RETURN_WINDOW, evo))
-            .collect();
+    let median = |mut ys: Vec<f64>| {
         ys.sort_by(f64::total_cmp);
-        let n = ys.len();
-        json!({"masternodes": n, "median_annual_yield": (n > 0).then(|| round4(ys[n / 2]))})
+        (!ys.is_empty()).then(|| round4(ys[ys.len() / 2]))
     };
-    Ok(json!({"window_days": RETURN_WINDOW, "regular": median_yield(false), "evo": median_yield(true)}))
+    let core = |evo: bool| {
+        rows.iter()
+            .filter(move |(t, _, _)| (t == "Evo") == evo)
+            .map(move |(_, paid, p)| (p, annualized(*paid, RETURN_WINDOW, evo)))
+    };
+    let n = |evo: bool| core(evo).count();
+    // Evonodes also earn Platform rewards: annualized over the finalized epochs in the same window.
+    let (platform, span) = rewards::platform_yields(c, since)?;
+    let with_platform = span > 0.0;
+    let evo_platform: Vec<f64> = core(true).map(|(p, _)| platform.get(p).copied().unwrap_or(0.0)).collect();
+    let evo_total: Vec<f64> = core(true).map(|(p, y)| y + platform.get(p).copied().unwrap_or(0.0)).collect();
+    Ok(json!({
+        "window_days": RETURN_WINDOW,
+        "regular": {"masternodes": n(false), "median_annual_yield": median(core(false).map(|x| x.1).collect())},
+        "evo": {
+            "masternodes": n(true), "median_annual_yield": median(core(true).map(|x| x.1).collect()),
+            "median_platform_yield": if with_platform { median(evo_platform) } else { None },
+            "median_total_yield": if with_platform { median(evo_total) } else { None },
+            "platform_span_days": with_platform.then(|| (span * 10.0).round() / 10.0),
+        },
+    }))
 }
 
 /// Evonode Platform health across the network, from the latest checks (see platform.rs): how many
@@ -813,6 +838,16 @@ async fn changes(State(nets): State<Nets>, UrlPath(net): UrlPath<String>) -> Api
             Ok(json!({"since": since, "changes": changes}))
         })
         .await?;
+    Ok(Json(body))
+}
+
+/// Platform rewards across the network (see rewards.rs): epochs, the upgrade vote, the proposer
+/// schedule and one row per evonode.
+async fn platform_rewards(State(nets): State<Nets>, UrlPath(net): UrlPath<String>) -> ApiResult {
+    let ctx = net_ctx(&nets, &net)?;
+    let schedule = ctx.platform_schedule.read().unwrap().clone();
+    let network = ctx.net;
+    let body = ctx.db.read(move |c| rewards::network_json(c, schedule.as_deref(), network)).await?;
     Ok(Json(body))
 }
 
@@ -901,6 +936,44 @@ mod tests {
         for ts in [0i64, 951_782_400, 1_793_318_400, 4_102_444_800] {
             assert_eq!(day_start(&day_of(ts)), ts);
         }
+    }
+
+    #[test]
+    fn evonode_returns_add_platform_rewards() {
+        let dir = std::env::temp_dir().join(format!("dash-nodes-returns-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("r.sqlite");
+        let _ = std::fs::remove_file(&path);
+        drop(db::Db::open(&path).unwrap());
+        let c = Connection::open(&path).unwrap();
+        let (now, day) = (db::now(), DAY);
+        // Three evonodes and a regular masternode, all registered before the 90-day window.
+        c.execute_batch(&format!(
+            "INSERT INTO blocks VALUES (1, 'a', '', {}, 0), (2, 'b', '', {}, 0), (3, 'c', '', {}, 0);
+             INSERT INTO masternodes (protx, type, registered_height, first_seen, updated) VALUES
+                ('a', 'Evo', 1, 0, 0), ('b', 'Evo', 1, 0, 0), ('c', 'Evo', 1, 0, 0), ('r', 'Regular', 1, 0, 0);
+             INSERT INTO payments VALUES (2, 'a', 1000000000), (3, 'c', 2000000000), (3, 'r', 100000000);
+             -- Two finished epochs in the window, 60 days in all; the current one started now.
+             INSERT INTO platform_epochs VALUES (10, 1, {}, 0, 0, 10, 0, 0, 0, 13, 2), (11, 2, {}, 0, 0, 10, 0, 0, 0, 13, 2);
+             INSERT INTO platform_payouts VALUES (10, 'a', 5, 2000000000000), (11, 'a', 5, 2000000000000), (11, 'c', 5, 8000000000000);
+             INSERT INTO meta VALUES ('platform_now', '{{\"epoch\": 12, \"start\": {now}}}');",
+            now - 100 * day,
+            now - 80 * day,
+            now - day,
+            now - 60 * day,
+            now - 30 * day,
+        ))
+        .unwrap();
+        let r = network_returns(&c).unwrap();
+        // Core: 10 and 20 DASH in 90 days; Platform: 40 and 80 DASH over 60 days, on 4,000 DASH.
+        assert_eq!(r["evo"]["masternodes"], 3);
+        assert_eq!(r["evo"]["median_annual_yield"], json!(round4(10.0 / 90.0 * 365.0 / 4000.0)));
+        assert_eq!(r["evo"]["median_platform_yield"], json!(round4(40.0 / 60.0 * 365.0 / 4000.0)));
+        assert_eq!(r["evo"]["median_total_yield"], json!(round4((10.0 / 90.0 + 40.0 / 60.0) * 365.0 / 4000.0)));
+        assert_eq!(r["evo"]["platform_span_days"], json!(60.0));
+        assert_eq!(r["regular"]["masternodes"], 1);
+        drop(c);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
