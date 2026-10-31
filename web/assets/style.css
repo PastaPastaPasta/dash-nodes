@@ -196,6 +196,8 @@ table.data th.sortable:hover { color: var(--ink); }
 table.data th[aria-sort="ascending"]::after { content: " ▲"; font-size: 9px; }
 table.data th[aria-sort="descending"]::after { content: " ▼"; font-size: 9px; }
 table.data td.r, table.data th.r { text-align: right; }
+/* The masternode table's twelve columns fit the 1240px page without a sideways scroll. */
+#table th, #table td { padding-inline: 7px; }
 table.data td { font-variant-numeric: tabular-nums; }
 table.data tbody tr:hover { background: var(--surface-2); }
 table.data tbody tr:last-child td { border-bottom: 0; }
@@ -272,7 +274,7 @@ pre.code { background: var(--surface-2); padding: 10px 12px; border-radius: 8px;
   .brand { min-height: 40px; }
   .pager .btn { min-width: 88px; }
   .maplibregl-ctrl-group button { width: 40px !important; height: 40px !important; }
-  table.kv a, .mn-list a, footer.bottom a, .ov-lede a, .mp-foot a { display: inline-block; padding: 8px 0; margin: -8px 0; }
+  table.kv a, .mn-list a, footer.bottom a, .ov-lede a, .mp-foot a, .ranked a { display: inline-block; padding: 8px 0; margin: -8px 0; }
   body button.link, .ov-details summary { padding: 10px 0; margin: -10px 0; }
   .ov-details summary { display: block; margin: 0; }
   table.data td a { display: inline-block; padding: 8px 0; margin: -8px 0; }
@@ -337,6 +339,7 @@ pre.code { background: var(--surface-2); padding: 10px 12px; border-radius: 8px;
   table.stack tr { padding: 8px 12px; border-bottom: 1px solid var(--grid); }
   table.stack td { display: flex; justify-content: space-between; gap: 12px; padding: 3px 0; border: 0; text-align: right; white-space: normal; }
   table.stack td::before { content: attr(data-label); color: var(--muted); text-align: left; }
+  table.stack td.empty { display: block; padding: 20px 0; text-align: center; }
   .strip { gap: 1px; height: 24px; }
 }
 
