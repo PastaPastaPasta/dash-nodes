@@ -9,3 +9,5 @@ Type=oneshot
 ExecStart=/usr/local/lib/dash-nodes-cd/update.sh run
 # A cold app build takes ~7 min on 2 vCPUs; the health wait adds up to 4 min.
 TimeoutStartSec=45min
+# System services get no HOME; docker, buildx and git want one.
+Environment=HOME=/root

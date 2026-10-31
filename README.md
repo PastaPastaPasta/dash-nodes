@@ -258,35 +258,42 @@ from its `deploy/` directory.
      GitHub's web-flow GPG key (it signs squash merges made on GitHub, so trusting it means trusting
      whoever can merge on the repo) in `/etc/dash-nodes-cd/gnupg`. Anything else is refused and logged;
   2. unpacks the tree over `/opt/dash-nodes`, runs `scripts/init.sh`, `docker compose build` and
-     `up -d`, and waits for the app's `/healthz` to answer and stay up for a minute. If the build fails
-     or the app doesn't come up, the previous tree and images (tagged `:previous`) go back and the
-     commit is marked failed, so it isn't tried again until a newer one lands. Docs-only changes just
+     `up -d`, and restarts services whose bind-mounted files changed (the publisher's scripts, dashd's
+     and i2pd's config). Then it checks that the app's `/healthz` answers from the new image and still
+     does a minute later, and that every service that was running still is. If not, the last good
+     tree and images (tagged `:good`; `:previous` is the one before) go back. A commit is tried 3 times
+     (a pass that dies mid-deploy counts) and then waits for a newer one. Docs-only changes just
      update the tree;
-  3. if `worker/` or `web/` changed, deploys the Worker (`npm ci && npm test && npm run deploy` in a
-     `node` container), but only once every network's published summary comes from a crawl that
-     finished after the new app started. That way pages never ask for fields the data doesn't have yet.
-     This needs a Cloudflare API token that can edit Workers scripts in `/etc/dash-nodes-cd/cf-token`
-     (0600); without it, each pass logs that the Worker is waiting.
+  3. if `worker/` or `web/` changed, deploys the Worker: `npm ci`, `npm test` and the build in a
+     `node` container without the token, then `wrangler deploy` with it. It waits until every network's
+     published summary comes from a crawl that finished after the new app started, so pages never
+     ask for fields the data doesn't have yet. The token (one that can edit Workers scripts) lives in
+     `/etc/dash-nodes-cd/cf-token` (0600); without it, each pass logs that the Worker is waiting.
 
-  Install as root on the host, from a checkout: `sh deploy/cd/install.sh`. It writes
-  `/etc/dash-nodes-cd/env` (host settings, from `deploy/cd/env.example`), fetches the trust files
-  (the SSH keys from GitHub as of install time, and the pinned web-flow key; check the fingerprints it
-  prints), mirrors the repo into `/var/lib/dash-nodes-cd`, records the deployed commit from
-  `DEPLOYED_COMMIT`, and enables the timer. Edit the trust files by hand afterwards; nothing refreshes
-  them. A deploy that changes `deploy/cd/` re-installs the updater itself.
+  Install as root on the host, from the deployed tree: `sh deploy/cd/install.sh`, then check the
+  fingerprints it prints and `sh deploy/cd/install.sh --enable` (the first pass runs right away). It
+  writes `/etc/dash-nodes-cd/env` (host settings, from `deploy/cd/env.example`), fetches the trust
+  files (the SSH keys from GitHub as of install time, and the pinned web-flow key), mirrors the repo
+  into `/var/lib/dash-nodes-cd`, and records what's deployed from `DEPLOYED_COMMIT`, or from
+  `APP_COMMIT=… WORKER_COMMIT=…` (full or short hashes) when the live Worker is from another commit.
+  It also tags the running images `:good`, and refuses an `/opt/dash-nodes` that anyone but root
+  can write. Edit the trust files by hand afterwards; nothing refreshes them. A deploy that changes
+  `deploy/cd/` re-installs the updater.
 
   ```sh
-  dash-nodes-update status                  # deployed app/Worker commits, main, pause and failures
+  dash-nodes-update status                  # deployed app/Worker commits, main, pause, failures
   journalctl -u dash-nodes-update -f        # what each pass did
   touch /etc/dash-nodes-cd/paused           # pause (rm to resume); or systemctl disable --now dash-nodes-update.timer
-  dash-nodes-update deploy <commit>         # deploy a signed commit now: a rollback, or a retry of a failed one
+  dash-nodes-update deploy <commit>         # deploy a signed commit now: a rollback, or a retry
   ```
 
-  To roll back, pause and then `deploy` the last good commit; that reverts the Worker too if `web/` or
-  `worker/` differ. The schema migrations so far only add nullable columns, so an older app runs on a
-  newer database. For an instant app-only rollback, pause, then `docker tag dash-nodes:previous
-  dash-nodes:local && docker compose up -d app bench`. `npx wrangler rollback` (from `worker/`,
-  with a token) puts back the previous Worker version.
+  **Rolling back:** `dash-nodes-update deploy <last good commit>`. Going back, the Worker is deployed
+  first and without waiting, since older pages work on newer data. The commit it replaced is
+  held: passes won't redeploy it, only a newer commit on `main` (the fix). The schema migrations so far
+  only add nullable columns, so an older app runs on a newer database. For an instant app-only
+  rollback: pause, then `docker tag dash-nodes:previous dash-nodes:local && docker compose up -d app bench`.
+  The tree and `app-commit` then still say the newer commit, so stay paused until `deploy` sorts it
+  out. `npx wrangler rollback` (from `worker/`, with a token) puts back the previous Worker version.
 - **Bench vantages on other hosts** (`deploy/bench-vantage/`) don't update themselves: a 1 GB box can't
   build the image, and they take no inbound connections. When a deploy changes the bench code
   (`src/bench/`, `src/p2p.rs`, `src/transport.rs`), the updater logs a reminder; copy the image over
