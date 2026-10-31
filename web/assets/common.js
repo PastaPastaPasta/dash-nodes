@@ -4,7 +4,12 @@ export const NETWORKS = ["mainnet", "testnet"];
 
 export function currentNet() {
   const q = new URLSearchParams(location.search).get("net");
-  if (NETWORKS.includes(q)) return q;
+  // A link that names its network is a choice too: remember it, or the next page (whose links leave
+  // ?net out for mainnet) would switch back to the network picked before.
+  if (NETWORKS.includes(q)) {
+    localStorage.setItem("net", q);
+    return q;
+  }
   const saved = localStorage.getItem("net");
   return NETWORKS.includes(saved) ? saved : "mainnet";
 }
