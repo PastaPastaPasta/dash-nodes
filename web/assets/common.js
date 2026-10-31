@@ -119,13 +119,37 @@ export function nodeStatus(m, unchecked = "Not checked") {
 export const registration = (m) => (m.status === "pose_banned" ? "PoSe-banned" : "Enabled");
 export const poseBadge = (m) => (m.status === "pose_banned" ? badge("serious", "PoSe-banned") : null);
 
+// DKG readiness (readiness.rs): would quorum members vote this masternode a bad connection under the
+// next Core release's rules? Each check is "pass", "fail" or "unknown"; the thresholds come from the API.
+export const DKG_CHECKS = [
+  ["protocol", "Protocol version"],
+  ["relay", "Transaction relay"],
+  ["filters", "Compact block filters"],
+  ["reachable", "Reachable"],
+  ["platform_ban", "No Platform ban"],
+];
+export const DKG_OVERALL = { pass: ["good", "Ready"], fail: ["critical", "Not ready"], unknown: ["none", "Unknown"] };
+/** The `dkg` filter: overall state, or masternodes failing one check. */
+export const DKG_OPTIONS = [["ready", "Ready"], ["not-ready", "Not ready"], ["unknown", "Unknown"],
+  ...DKG_CHECKS.map(([k, label]) => [k, `Fails: ${label.toLowerCase()}`])];
+const DKG_OVERALL_OF = { ready: "pass", "not-ready": "fail", unknown: "unknown" };
+
+/** Data published before readiness existed has none: such rows aren't filtered out. */
+function dkgMatches(m, v) {
+  const r = m.dkg_readiness;
+  if (!r) return true;
+  return v in DKG_OVERALL_OF ? r.overall === DKG_OVERALL_OF[v] : r.checks[v] === "fail";
+}
+
 /** Masternode filters shared by the list and the map, so either page can link to the other. */
-export const MN_FILTERS = ["q", "type", "reach", "status", "version", "country", "host"];
+export const MN_FILTERS = ["q", "type", "reach", "status", "version", "country", "host", "dkg"];
 
 export function mnFilters(params) {
   const f = Object.fromEntries(MN_FILTERS.map((k) => [k, params.get(k) || ""]));
   // Links from before reachability and registration were separate: ?status=Unreachable and the like.
   if (REACH.includes(f.status)) [f.reach, f.status] = [f.reach || f.status, ""];
+  // An unknown readiness value (a stale or mistyped link) would hide every row: ignore it.
+  if (!DKG_OPTIONS.some(([v]) => v === f.dkg)) f.dkg = "";
   return f;
 }
 
@@ -142,6 +166,7 @@ export function mnMatches(m, f) {
   if (f.host && !hostMatches(m, f.host)) return false;
   if (f.version && (m.version || "Unknown") !== f.version) return false;
   if (f.country && (m.country || "Unknown") !== f.country) return false;
+  if (f.dkg && !dkgMatches(m, f.dkg)) return false;
   const q = f.q.trim().toLowerCase();
   if (q) {
     const hay = [m.protx, m.service, m.payout_address, m.as_org, m.user_agent, m.platform_node_id, m.city].join(" ").toLowerCase();
@@ -216,6 +241,7 @@ export function filterControls(rows, f, onChange) {
     select("version", "Version", versionOptions(rows)),
     select("country", "Country", countryOptions(rows)),
     select("host", "Hosting", hostOptions(rows, f.host)),
+    select("dkg", "DKG readiness", DKG_OPTIONS),
   ];
 }
 
