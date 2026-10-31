@@ -85,10 +85,11 @@ its oldest block, so the full history comes from a snapshot (below) or from a ru
 unpruned node. A cold mainnet sync takes many hours; seeding the datadirs from another node with the
 same dashd version is much faster (see Deploy notes).
 
-Put an R2 API token's S3 credentials (Object Read & Write, the data bucket only) in
-`secrets/r2_access_key_id` and `secrets/r2_secret_access_key` and set `R2_ENDPOINT` in `.env`, and the
-`publisher` service starts uploading; until then it idles. (Without `R2_ENDPOINT` it pushes to
-`PUBLISH_TARGET`'s ingest with `secrets/ingest_token`.)
+The `publisher` service uploads straight to R2 when `.env` sets `R2_ENDPOINT` and
+`secrets/r2_access_key_id` and `secrets/r2_secret_access_key` hold an R2 API token's S3 credentials
+(Object Read & Write on the data bucket only, never the snapshot bucket); without `R2_ENDPOINT` it
+pushes to `PUBLISH_TARGET`'s ingest with `secrets/ingest_token`. Until its secrets are filled in, it
+idles. Secrets are bind mounts: after replacing a secret file, `docker compose up -d publisher`.
 
 Useful while developing:
 
@@ -250,7 +251,9 @@ of disk are enough for both networks pruned. Unpack the source somewhere such as
 from its `deploy/` directory.
 
 - **Redeploy:** `git archive` or tar the tree (without `target/`, `deploy/secrets`, `deploy/.env`),
-  unpack it over the old one, then `docker compose build app && docker compose up -d app`.
+  unpack it over the old one, run `scripts/init.sh` (it adds any new secret placeholders; compose
+  won't start a service whose secret file is missing), then `docker compose build app && docker
+  compose up -d app`.
   Restarting the app abandons a crawl in progress; the next one starts right away.
 - **Seeding dashd:** a cold sync takes many hours. Copying `blocks chainstate evodb llmq` (and
   `indexes` without `txindex`) from another synced node with the same dashd version into the

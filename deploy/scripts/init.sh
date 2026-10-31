@@ -1,7 +1,8 @@
 #!/bin/sh
 # One-time setup: RPC password secret (readable by uid 1000, which dashd, the app, the publisher and
 # the bench run as), placeholders for the Worker's ingest and bench tokens, and a default .env.
-# Safe to re-run: existing secrets and .env are kept.
+# Safe to re-run: existing secrets and .env are kept. Re-run it after updating the tree, so secrets a
+# newer docker-compose.yml expects exist (compose refuses to start a service whose secret file is missing).
 set -eu
 cd "$(dirname "$0")/.."
 mkdir -p secrets
@@ -11,7 +12,8 @@ if [ ! -s secrets/rpc_password ]; then
 fi
 # The Worker's INGEST_TOKEN secret; the publisher idles until it's filled in.
 [ -e secrets/ingest_token ] || : > secrets/ingest_token
-# R2 S3 credentials for the publisher (with R2_ENDPOINT in .env); empty, it uses the ingest token.
+# R2 S3 credentials for the publisher; used when .env sets R2_ENDPOINT (the publisher idles until
+# they're filled in). Without R2_ENDPOINT the publisher uses the ingest token.
 [ -e secrets/r2_access_key_id ] || : > secrets/r2_access_key_id
 [ -e secrets/r2_secret_access_key ] || : > secrets/r2_secret_access_key
 # The bench's token for the Worker's ingest; the bench idles until it's filled in.

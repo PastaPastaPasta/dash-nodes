@@ -25,7 +25,7 @@ export function authorization({ method, path, query = "", headers, accessKeyId, 
 }
 
 /** Each path segment percent-encoded as SigV4 wants it (unreserved characters stay). */
-const encodePath = (p) => p.split("/").map((s) => encodeURIComponent(s).replace(/[!'()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`)).join("/");
+export const encodePath = (p) => p.split("/").map((s) => encodeURIComponent(s).replace(/[!'()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`)).join("/");
 
 /**
  * A bucket on an R2 S3 endpoint (`https://<account id>.r2.cloudflarestorage.com`). `put` stores
