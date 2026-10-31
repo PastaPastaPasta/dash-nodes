@@ -8,6 +8,7 @@ mod geo;
 mod network;
 mod p2p;
 mod platform;
+mod readiness;
 mod reference;
 mod rpc;
 mod snapshot;
@@ -205,6 +206,23 @@ async fn probe(addr: &str, network: &str, getaddr: bool, transport: &TransportAr
     let p = p2p::probe(net, &addr, &route, 0, getaddr, &transport::default_timeouts(addr.net())).await?;
     println!("{addr} ({}, via {route:?}) in {:.1?}", addr.net(), started.elapsed());
     println!("{:#?}", p.version);
+    // The rules a handshake can show; reachability and Platform bans come from the crawl and dashd.
+    let v = &p.version;
+    let r = readiness::evaluate(&readiness::Input {
+        handshake: Some(readiness::Handshake {
+            protocol: Some(v.protocol.into()),
+            services: Some(v.services as i64),
+            relay: Some(v.relay),
+        }),
+        ..Default::default()
+    });
+    println!(
+        "DKG readiness for {}: protocol {}, relay {}, compact filters {}",
+        readiness::core::RELEASE,
+        r.protocol.name(),
+        r.relay.name(),
+        r.filters.name()
+    );
     if getaddr {
         let mut by_net = BTreeMap::new();
         for a in &p.addrs {

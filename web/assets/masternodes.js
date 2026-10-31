@@ -125,7 +125,8 @@ function renderFilters() {
 
 function csv() {
   const cols = ["protx", "type", "status", "service", "reachable", "version", "user_agent", "protocol", "country", "asn", "as_org",
-    "uptime_7d", "uptime_30d", "last_seen", "registered_height", "last_paid_height", "pose_penalty", "pose_ban_height", "payout_address", "platform_node_id"];
+    "uptime_7d", "uptime_30d", "last_seen", "registered_height", "last_paid_height", "pose_penalty", "pose_ban_height", "payout_address", "platform_node_id",
+    "dkg_readiness"];
   // Operators choose their user agent: neutralize spreadsheet formulas, then quote.
   const esc = (v) => {
     if (v == null) return "";
@@ -133,7 +134,9 @@ function csv() {
     if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`;
     return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
   };
-  const text = [cols.join(","), ...filtered().map((m) => cols.map((c) => esc(m[c])).join(","))].join("\n");
+  // DKG readiness goes in as its overall state: pass, fail or unknown.
+  const value = (m, c) => (c === "dkg_readiness" ? m.dkg_readiness?.overall : m[c]);
+  const text = [cols.join(","), ...filtered().map((m) => cols.map((c) => esc(value(m, c))).join(","))].join("\n");
   const a = el("a", { href: URL.createObjectURL(new Blob([text], { type: "text/csv" })), download: `dash-${net}-masternodes.csv` });
   a.click();
   URL.revokeObjectURL(a.href);

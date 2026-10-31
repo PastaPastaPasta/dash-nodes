@@ -192,6 +192,9 @@ table.data tbody tr:hover { background: var(--surface-2); }
 table.data tbody tr:last-child td { border-bottom: 0; }
 table.kv td:first-child { color: var(--ink-2); width: 210px; }
 table.kv td { white-space: normal; word-break: break-all; }
+/* DKG readiness: results and fixes are sentences; let them wrap. */
+.card.dkg td { white-space: normal; }
+.card.dkg td:first-child { white-space: nowrap; }
 
 .badge { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 500; color: var(--ink-2); }
 .badge i { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex: none; }
@@ -321,7 +324,7 @@ pre.code { background: var(--surface-2); padding: 10px 12px; border-radius: 8px;
 }
 
 /* ---- speed test (masternode page) ---- */
-.card.speed { margin-bottom: 14px; }
+.card.speed, .card.dkg { margin-bottom: 14px; }
 .speed-grid { display: grid; grid-template-columns: minmax(240px, 1fr) minmax(0, 2.2fr); gap: 24px; align-items: start; }
 .speed-summary { display: flex; gap: 16px; align-items: center; }
 .grade { width: 64px; height: 64px; border-radius: 14px; display: grid; place-items: center; flex: none;

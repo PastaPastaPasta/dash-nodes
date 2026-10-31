@@ -1,5 +1,5 @@
 import { api, chrome, currentNet, el, fmt, pct, href, countryName, flag, place, badge, ago, dateTime, dash, nodeStatus, poseBadge, uptimeKind, tile, card,
-  changeText, changeKind } from "./common.js";
+  changeText, changeKind, DKG_CHECKS, DKG_OVERALL } from "./common.js";
 
 chrome("masternodes");
 const net = currentNet();
@@ -100,6 +100,9 @@ async function main() {
     earnedTile(m),
   ));
 
+  const dkg = dkgSection(m);
+  if (dkg) root.append(dkg);
+
   // Speed tests come from the Worker's API; the crawler's own server doesn't have them, so the card
   // only appears when there's something to show. Their handshakes also feed the latency row.
   const speed = el("section", { class: "card speed", hidden: true, id: "speed" });
@@ -167,6 +170,95 @@ async function main() {
           el("td", { text: dateTime(v.ts) }), el("td", {}, el("code", { text: v.user_agent })), el("td", { class: "r", text: v.protocol }))))
           : [el("tr", {}, el("td", { colspan: 3, class: "empty", text: "No handshake recorded yet." }))]))))),
     paymentsSection(m)));
+}
+
+const CHECK_BADGE = { pass: ["good", "Pass"], fail: ["critical", "Fail"], unknown: ["none", "Unknown"] };
+
+/** What each DKG check found, as [what we saw, how to fix it] (the fix only for failures). */
+function dkgTexts(m, d) {
+  const { rules } = d;
+  const port = m.service?.split(":").pop();
+  const noHandshake = "No handshake with our crawler in the past week.";
+  const proto = `Protocol ${m.protocol}. Masternodes running ${rules.release} vote nodes below protocol ${rules.min_protocol} bad in DKGs.`;
+  const bit = `service bit ${rules.compact_filters_bit}`;
+  const streak = rules.reach_failures;
+  return {
+    protocol: { pass: [`Protocol ${m.protocol}, at least ${rules.min_protocol}.`], fail: [proto, `Upgrade to ${rules.release}.`], unknown: [noHandshake] },
+    relay: {
+      pass: ["Relays transactions."],
+      fail: ["Relay is off, so it won't have the transactions it must sign InstantSend locks for.",
+        `Remove blocksonly=1 from dash.conf. ${rules.release} won't start a masternode with it.`],
+      unknown: [d.checks.protocol !== "unknown" ? "Not recorded yet; the next crawl will tell." : noHandshake],
+    },
+    filters: {
+      pass: [`Serves compact block filters (${bit}).`],
+      fail: [`Doesn't serve compact block filters (${bit}).`,
+        `Set peerblockfilters=1 and blockfilterindex=1, or remove a =0 for either. ${rules.release} won't start a masternode without them.`],
+      unknown: [noHandshake],
+    },
+    reachable: {
+      pass: [m.reachable === false ? `Missed our latest port check, but not ${streak} in a row. Core judges repeated failures, not one.`
+        : "Answered our latest port check."],
+      fail: [`Missed ${streak} or more of our port checks in a row. Members vote against a masternode they fail to connect to more than ${rules.core_max_failed_outbound} times.`,
+        port ? `Open port ${port} to inbound connections and keep the node online.` : "Keep the node online and its port open to inbound connections."],
+      unknown: ["Not checked in our latest crawl."],
+    },
+    platform_ban: {
+      pass: ["Our dashd knows of no Platform ban. Bans arrive over P2P, so it could miss one."],
+      fail: ["Platform has PoSe-banned this evonode.", "Fix its Platform services, then send a ProUpServTx (protx update_service) to lift the ban."],
+      unknown: ["Our dashd hasn't said yet."],
+    },
+  };
+}
+
+/**
+ * Would quorum members vote this masternode a bad connection in DKGs under the next Core release's
+ * rules? One row per check, with a fix for each failure.
+ */
+function dkgSection(m) {
+  const d = m.dkg_readiness;
+  if (!d?.rules || m.removed) return null;
+  const rules = d.rules;
+  const texts = dkgTexts(m, d);
+  const rows = DKG_CHECKS.filter(([k]) => d.checks[k]).map(([k, label]) => {
+    const result = d.checks[k];
+    const [said, fix] = texts[k][result];
+    return labelled(["Check", "Result", "Fix"], el("tr", {},
+      el("td", { text: label }),
+      el("td", {}, badge(...CHECK_BADGE[result]), " ", el("span", { class: "muted", text: said })),
+      el("td", { text: fix || "–" })));
+  });
+  const states = Object.values(d.checks);
+  const failing = states.filter((c) => c === "fail").length;
+  const lede = el("p", { class: "sub" });
+  if (d.overall === "pass") lede.textContent = "Passes every check we can see.";
+  else if (d.overall === "unknown") lede.textContent = "Nothing fails, but we can't see every check yet.";
+  else if (d.checks.protocol === "fail" && states.filter((c) => c !== "pass").length === 1) {
+    lede.textContent = `Only the version check fails. Masternodes running ${rules.release} vote nodes below protocol ${rules.min_protocol} bad in DKGs.`;
+  } else {
+    lede.textContent = `Fails ${failing} of ${rows.length} checks. Quorum members vote against masternodes that fail these in DKGs, which costs PoSe score.`;
+  }
+  // How close the network is to the new minimum is what decides when the version rule starts to bite.
+  if (d.checks.protocol === "fail") {
+    api(`${net}/summary`).then((sum) => {
+      const s = sum.dkg_readiness;
+      if (s?.masternodes) lede.append(` ${pct(s.checks.protocol.pass / s.masternodes)} of enabled masternodes already run protocol ${rules.min_protocol} or newer.`);
+    }, () => {});
+  }
+  const [kind, text] = DKG_OVERALL[d.overall];
+  return el("section", { class: "card dkg" },
+    el("div", { class: "card-head" }, el("h2", {}, `Ready for ${rules.release} quorums? `, badge(kind, text)),
+      el("span", { class: "sub", text: "an estimate, from what our crawler sees" })),
+    lede,
+    m.status === "pose_banned" ? el("p", { class: "sub", text: "It's PoSe-banned now, so it isn't picked for quorums until it's revived." }) : null,
+    el("div", { class: "table-wrap" }, el("table", { class: "data stack" },
+      el("thead", {}, el("tr", {}, el("th", { text: "Check" }), el("th", { text: "Result" }), el("th", { text: "Fix" }))),
+      el("tbody", {}, ...rows))),
+    el("p", { class: "muted small" },
+      "When a DKG starts, each quorum member votes against members it can't reach or that fail these checks on their masternode connections. ",
+      `Reachability and Platform bans count already; ${rules.release} raises the minimum protocol and adds the relay and filter checks. `,
+      "We see the handshake this node sends our crawler, an ordinary inbound connection, so relay and services can differ only if the operator set something unusual. ",
+      "Rules from Dash Core ", el("a", { href: `https://github.com/dashpay/dash/blob/${rules.core_commit}/src/active/dkgsession.cpp`, text: `develop at ${rules.core_commit}` }), "."));
 }
 
 /** What it earned over the last year, and the yield on its collateral that works out to. */

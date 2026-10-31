@@ -99,6 +99,8 @@ pub struct MnRow {
     pub pose_revived_height: Option<i64>,
     pub pose_ban_height: Option<i64>,
     pub revocation_reason: Option<i64>,
+    /// `metaInfo.is_platform_banned`: Platform banned this evonode (DKG members then vote against it).
+    pub platform_banned: Option<bool>,
 }
 
 /// Parses one `protx list registered true` entry. Tolerates both the v23 shape (`service`,
@@ -160,6 +162,7 @@ pub fn parse_mn(v: &Value) -> Result<MnRow> {
         pose_revived_height: st["PoSeRevivedHeight"].as_i64(),
         pose_ban_height: st["PoSeBanHeight"].as_i64(),
         revocation_reason: st["revocationReason"].as_i64(),
+        platform_banned: v["metaInfo"]["is_platform_banned"].as_bool(),
     })
 }
 
@@ -307,8 +310,8 @@ async fn sync_masternodes(ctx: &NetCtx, height: i64) -> Result<()> {
                         platform_p2p, platform_https, platform_node_id, payout_address, operator_payout_address,
                         owner_address, voting_address, pubkey_operator, registered_height, last_paid_height,
                         consecutive_payments, pose_penalty, pose_revived_height, pose_ban_height, revocation_reason,
-                        first_seen, updated, removed, core_p2p)
-                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?22,NULL,?23)
+                        first_seen, updated, removed, core_p2p, platform_banned)
+                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?22,NULL,?23,?24)
                      ON CONFLICT(protx) DO UPDATE SET type=excluded.type, collateral=excluded.collateral,
                         collateral_address=excluded.collateral_address, operator_reward=excluded.operator_reward,
                         service=excluded.service, platform_p2p=excluded.platform_p2p,
@@ -319,7 +322,8 @@ async fn sync_masternodes(ctx: &NetCtx, height: i64) -> Result<()> {
                         last_paid_height=excluded.last_paid_height, consecutive_payments=excluded.consecutive_payments,
                         pose_penalty=excluded.pose_penalty, pose_revived_height=excluded.pose_revived_height,
                         pose_ban_height=excluded.pose_ban_height, revocation_reason=excluded.revocation_reason,
-                        updated=excluded.updated, removed=NULL, core_p2p=excluded.core_p2p",
+                        updated=excluded.updated, removed=NULL, core_p2p=excluded.core_p2p,
+                        platform_banned=excluded.platform_banned",
                 )?;
                 for r in &rows {
                     up.execute(params![
@@ -327,7 +331,7 @@ async fn sync_masternodes(ctx: &NetCtx, height: i64) -> Result<()> {
                         r.platform_p2p, r.platform_https, r.platform_node_id, r.payout_address,
                         r.operator_payout_address, r.owner_address, r.voting_address, r.pubkey_operator,
                         r.registered_height, r.last_paid_height, r.consecutive_payments, r.pose_penalty,
-                        r.pose_revived_height, r.pose_ban_height, r.revocation_reason, now, r.core_p2p,
+                        r.pose_revived_height, r.pose_ban_height, r.revocation_reason, now, r.core_p2p, r.platform_banned,
                     ])?;
                 }
             }
@@ -708,7 +712,8 @@ mod tests {
                 "revocationReason": 0, "ownerAddress": "Xo", "votingAddress": "Xv",
                 "platformNodeID": "ff", "platformP2PPort": 26656, "platformHTTPPort": 443,
                 "payoutAddress": "Xp", "pubKeyOperator": "8f"
-            }
+            },
+            "metaInfo": {"outboundAttemptCount": 0, "is_platform_banned": true, "platform_ban_height_updated": 15}
         });
         let r = parse_mn(&v).unwrap();
         assert_eq!(r.service.as_deref(), Some("1.2.3.4:9999"));
@@ -717,6 +722,7 @@ mod tests {
         assert_eq!(r.payout_address.as_deref(), Some("Xp"));
         assert_eq!(r.collateral.as_deref(), Some("cc-1"));
         assert_eq!(r.pose_ban_height, Some(-1));
+        assert_eq!(r.platform_banned, Some(true));
     }
 
     #[test]
@@ -734,6 +740,7 @@ mod tests {
         assert_eq!(r.core_p2p.as_deref(), Some(r#"["5.6.7.8:9999"]"#));
         assert_eq!(r.payout_address.as_deref(), Some("Xa,Xb"));
         assert_eq!(r.pose_ban_height, Some(1234));
+        assert_eq!(r.platform_banned, None);
     }
 
     #[test]

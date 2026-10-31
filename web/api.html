@@ -39,6 +39,14 @@
         the latest checks: <code>checked</code>, <code>healthy</code>, <code>https_ok</code>, <code>p2p_ok</code>,
         <code>cert_expiring_3d</code>, <code>max_height</code> and the <code>drive</code>, <code>tenderdash</code> and <code>dapi</code>
         versions as <code>[[version, count], …]</code>).</p>
+      <p class="sub"><code>dkg_readiness</code> counts enabled masternodes by whether quorum members would vote them a bad connection in DKGs
+        under the next Core release's rules: <code>overall</code> and per check in <code>checks</code> (<code>protocol</code>,
+        <code>relay</code>, <code>filters</code>, <code>reachable</code>, <code>platform_ban</code> for evonodes), each
+        <code>{pass, fail, unknown}</code>; <code>version_only</code> (failing the version and passing every other check);
+        <code>beyond_version</code> (failing a check other than the version); and <code>rules</code> (the <code>release</code>,
+        <code>min_protocol</code>, <code>compact_filters_bit</code>, <code>reach_failures</code> (port checks missed in a row before
+        reachability fails) and the Dash Core commit they come from). It's an estimate from the handshake each masternode sends our
+        crawler.</p>
       <pre class="code">curl https://nodes.dashhq.org/api/v1/mainnet/summary | jq '.dists.mn.version'</pre>
     </div>
     <div class="api-ep">
@@ -60,7 +68,8 @@
         crawl didn't check it), announced user agent, geolocation and 7- and 30-day port-check uptime. Geolocation is
         <code>country</code> (ISO 3166), <code>continent</code> (two-letter code), <code>city</code>, city-level
         <code>lat</code>/<code>lon</code>, <code>asn</code> and <code>as_org</code>; <code>network</code> is the service address's network.
-        The map page is drawn from this endpoint.</p>
+        <code>dkg_readiness</code> is <code>{overall, checks}</code>, each <code>pass</code>, <code>fail</code> or <code>unknown</code>
+        (see <code>summary</code>), or <code>null</code> for a removed masternode. The map page is drawn from this endpoint.</p>
     </div>
     <div class="api-ep">
       <h3>GET /api/v1/{net}/masternodes/{protx}</h3>
@@ -68,7 +77,8 @@
         (<code>core_p2p: [{address, network}]</code>), version history, 90 days of daily uptime, its 25 latest payments,
         <code>returns</code> (paid in the last 30, 90 and 365 days, in duffs, and <code>annual_yield</code> on its collateral over the
         last 90 days or since registration), its 50 latest registration <code>changes</code>, and for evonodes <code>platform</code>
-        (the latest Platform check and 30 days of daily results).</p>
+        (the latest Platform check and 30 days of daily results). Here <code>dkg_readiness</code> also carries its <code>rules</code>, next
+        to the handshake's <code>services</code> and <code>relay</code> flag and our dashd's <code>platform_banned</code>.</p>
     </div>
     <div class="api-ep">
       <h3>GET /api/v1/{net}/masternodes/{protx}/payments?before={height}&amp;limit=100</h3>

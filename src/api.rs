@@ -25,6 +25,7 @@ use crate::collector::{payments_range, pose_status};
 use crate::crawler::network_stats;
 use crate::db::{self, day_of, get_meta, query_all};
 use crate::network::Network;
+use crate::readiness::{self, Handshake, Input, Readiness, Tally, evaluate};
 use crate::state::NetCtx;
 
 pub type Nets = Arc<HashMap<Network, Arc<NetCtx>>>;
@@ -202,6 +203,8 @@ async fn summary(State(nets): State<Nets>, UrlPath(net): UrlPath<String>) -> Api
     let body = ctx
         .db
         .read(|c| {
+            // One snapshot, so a crawl recorded meanwhile can't mix into this answer.
+            let c = &c.unchecked_transaction()?;
             let Some(id) = latest_crawl(c)? else {
                 return Ok(json!({"crawl": null, "dists": {}, "networks": network_stats(c, 0, db::now(), None)?}));
             };
@@ -235,9 +238,10 @@ async fn summary(State(nets): State<Nets>, UrlPath(net): UrlPath<String>) -> Api
             };
             let returns = network_returns(c)?;
             let platform = platform_summary(c)?;
+            let dkg_readiness = readiness_summary(c, id)?;
             Ok(json!({
                 "crawl": crawl, "day_ago": day_ago, "dists": dists, "networks": networks, "returns": returns,
-                "platform": platform,
+                "platform": platform, "dkg_readiness": dkg_readiness,
             }))
         })
         .await?;
@@ -404,15 +408,44 @@ fn totals_history(c: &Connection, since: i64, per_crawl: bool) -> Result<Value> 
 const MN_COLUMNS: &str = "m.protx, m.type, m.service, m.payout_address, m.registered_height, m.last_paid_height,
     m.pose_penalty, m.pose_ban_height, m.operator_reward, m.platform_node_id,
     n.user_agent, n.protocol, n.last_crawl, n.last_ok, n.last_success, n.latency_ms, n.country, n.asn, n.as_org,
-    n.last_error, n.start_height, n.continent, n.city, n.lat, n.lon";
+    n.last_error, n.start_height, n.continent, n.city, n.lat, n.lon, n.services, n.relay, n.fail_streak,
+    m.platform_banned, m.removed";
+
+/// A 0/1 column as a bool.
+fn flag(r: &Row, col: &str) -> rusqlite::Result<Option<bool>> {
+    Ok(r.get::<_, Option<i64>>(col)?.map(|x| x != 0))
+}
+
+/// Whether the row's address answered crawl `latest` (None: not checked in it).
+fn reachable_in(r: &Row, latest: Option<i64>) -> rusqlite::Result<Option<bool>> {
+    match (r.get::<_, Option<i64>>("last_crawl")?, latest) {
+        (Some(a), Some(b)) if a == b => Ok(Some(r.get::<_, i64>("last_ok")? == 1)),
+        _ => Ok(None),
+    }
+}
+
+/// DKG readiness (see readiness.rs) from a row with MN_COLUMNS and its latest port check.
+fn mn_readiness(r: &Row, reachable: Option<bool>, now: i64) -> rusqlite::Result<Readiness> {
+    // Like the crawler's per-crawl counts, trust a handshake from the past week only; older, we don't
+    // know what it runs now.
+    let recent = r.get::<_, Option<i64>>("last_success")?.is_some_and(|t| now - t < crate::crawler::ACTIVE_WINDOW);
+    let handshake = if recent {
+        Some(Handshake { protocol: r.get("protocol")?, services: r.get("services")?, relay: flag(r, "relay")? })
+    } else {
+        None
+    };
+    Ok(evaluate(&Input {
+        handshake,
+        reachable,
+        fail_streak: r.get::<_, Option<i64>>("fail_streak")?.unwrap_or(0),
+        evo: r.get::<_, String>("type")? == "Evo",
+        platform_banned: flag(r, "platform_banned")?,
+    }))
+}
 
 fn mn_json(r: &Row, latest: Option<i64>) -> rusqlite::Result<Value> {
     let ban: Option<i64> = r.get("pose_ban_height")?;
-    let last_crawl: Option<i64> = r.get("last_crawl")?;
-    let reachable = match (last_crawl, latest) {
-        (Some(a), Some(b)) if a == b => Some(r.get::<_, i64>("last_ok")? == 1),
-        _ => None,
-    };
+    let reachable = reachable_in(r, latest)?;
     let ua: Option<String> = r.get("user_agent")?;
     let service: Option<String> = r.get("service")?;
     Ok(json!({
@@ -443,6 +476,11 @@ fn mn_json(r: &Row, latest: Option<i64>) -> rusqlite::Result<Value> {
         "city": r.get::<_, Option<String>>("city")?,
         "lat": r.get::<_, Option<f64>>("lat")?,
         "lon": r.get::<_, Option<f64>>("lon")?,
+        // A removed masternode isn't in any quorum; its old flags say nothing.
+        "dkg_readiness": match r.get::<_, Option<i64>>("removed")? {
+            Some(_) => Value::Null,
+            None => mn_readiness(r, reachable, db::now())?.json(),
+        },
     }))
 }
 
@@ -502,8 +540,7 @@ async fn masternode(State(nets): State<Nets>, UrlPath((net, protx)): UrlPath<(St
             let sql = format!(
                 "SELECT {MN_COLUMNS}, m.core_p2p, m.collateral, m.collateral_address, m.platform_p2p, m.platform_https,
                     m.operator_payout_address, m.owner_address, m.voting_address, m.pubkey_operator,
-                    m.consecutive_payments, m.pose_revived_height, m.revocation_reason, m.first_seen, m.removed,
-                    n.services
+                    m.consecutive_payments, m.pose_revived_height, m.revocation_reason, m.first_seen
                  FROM masternodes m
                  -- A removed masternode's old address may belong to someone else now: don't show its live data.
                  LEFT JOIN nodes n ON n.addr = m.service AND m.removed IS NULL
@@ -521,6 +558,8 @@ async fn masternode(State(nets): State<Nets>, UrlPath((net, protx)): UrlPath<(St
                     for k in ["consecutive_payments", "pose_revived_height", "revocation_reason", "first_seen", "removed", "services"] {
                         v[k] = json!(r.get::<_, Option<i64>>(k)?);
                     }
+                    v["relay"] = json!(flag(r, "relay")?);
+                    v["platform_banned"] = json!(flag(r, "platform_banned")?);
                     // Every core P2P address (v24 ProTx can list several, on any network), each with its network.
                     let core_p2p: Vec<String> = r
                         .get::<_, Option<String>>("core_p2p")?
@@ -576,6 +615,10 @@ async fn masternode(State(nets): State<Nets>, UrlPath((net, protx)): UrlPath<(St
                 change_json,
             )?;
             mn["changes"] = json!(changes);
+            // The thresholds, so the page can quote them.
+            if let Some(d) = mn["dkg_readiness"].as_object_mut() {
+                d.insert("rules".into(), readiness::rules_json());
+            }
             mn["versions"] = json!(versions);
             mn["uptime_daily"] = json!(uptime_daily);
             Ok(Some(mn))
@@ -721,6 +764,21 @@ fn platform_summary(c: &Connection) -> Result<Value> {
         "cert_expiring_3d": expiring, "max_height": height, "updated": ts,
         "drive": dist("drive")?, "tenderdash": dist("tenderdash")?, "dapi": dist("dapi")?,
     }))
+}
+
+/// DKG readiness across every enabled masternode (see readiness.rs), as of the latest crawl `id`.
+fn readiness_summary(c: &Connection, id: i64) -> Result<Value> {
+    let mut tally = Tally::default();
+    let now = db::now();
+    let mut st = c.prepare(&format!(
+        "SELECT {MN_COLUMNS} FROM masternodes m LEFT JOIN nodes n ON n.addr = m.service
+         WHERE m.removed IS NULL AND coalesce(m.pose_ban_height, -1) = -1"
+    ))?;
+    let mut rows = st.query([])?;
+    while let Some(r) = rows.next()? {
+        tally.add(&mn_readiness(r, reachable_in(r, Some(id))?, now)?);
+    }
+    Ok(tally.to_json())
 }
 
 fn change_json(r: &rusqlite::Row) -> rusqlite::Result<Value> {

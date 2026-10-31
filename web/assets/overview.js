@@ -1,4 +1,4 @@
-import { api, chrome, currentNet, el, fmt, pct, href, countryName, flag, ago, segmented } from "./common.js";
+import { api, chrome, currentNet, el, fmt, pct, href, countryName, flag, ago, segmented, DKG_CHECKS } from "./common.js";
 import { Palette, timeChart, svg } from "./charts.js";
 import { worldMap } from "./worldmap.js";
 
@@ -368,6 +368,42 @@ function renderPlatform() {
   }
 }
 
+/**
+ * DKG readiness (summary.dkg_readiness): how many enabled masternodes pass each of the next Core
+ * release's DKG connection checks, with links to the ones that fail.
+ */
+function renderDkg() {
+  const d = summary.dkg_readiness;
+  const hidden = !d?.masternodes;
+  $("dkg-section").hidden = hidden;
+  if (hidden) return;
+  const { rules } = d;
+  const list = (filter) => href(`/masternodes?dkg=${filter}&status=Enabled`);
+  const known = (c) => c.pass + c.fail + c.unknown;
+  $("dkg-title").textContent = `Ready for ${rules.release} quorums`;
+  const ready = (n) => pct(n / d.masternodes);
+  $("dkg-lede").textContent = `Masternodes running ${rules.release} vote nodes that fail these checks bad when they set up a quorum (DKG), ` +
+    "which costs PoSe score. Reachability and Platform bans count already. " +
+    `${ready(d.checks.protocol.pass)} of ${fmt(d.masternodes)} enabled masternodes already run protocol ${rules.min_protocol} or newer, ` +
+    `and ${ready(d.overall.pass)} pass every check. ` +
+    (d.version_only ? `${fmt(d.version_only)} fail only the version check and need just the upgrade. ` : "") +
+    (d.beyond_version ? `${fmt(d.beyond_version)} fail another check that needs a fix.` : "");
+  const notes = { protocol: `needs ${rules.min_protocol}+`, platform_ban: "evonodes only" };
+  const stat = (label, c, filter) => el("div", { class: c.fail ? "stat-warning" : c.pass ? "stat-good" : null },
+    el("dt", { text: label }),
+    // Nothing known yet (e.g. dashd hasn't reported Platform bans): no share to give.
+    el("dd", { class: "num" }, c.pass + c.fail ? pct(c.pass / known(c)) : "–", el("small", {},
+      c.fail ? el("a", { href: list(filter), text: `${fmt(c.fail)} fail` }) : "none fail",
+      c.unknown ? `, ${fmt(c.unknown)} unknown` : "", notes[filter] ? ` · ${notes[filter]}` : "")));
+  $("dkg-stats").replaceChildren(
+    el("div", { class: d.overall.pass === d.masternodes ? "stat-good" : null },
+      el("dt", { text: "Pass every check" }),
+      el("dd", { class: "num" }, pct(d.overall.pass / d.masternodes),
+        el("small", {}, d.overall.pass ? el("a", { href: list("ready"), text: `${fmt(d.overall.pass)} ready` }) : "0 ready",
+          ` of ${fmt(d.masternodes)}`, d.overall.unknown ? `, ${fmt(d.overall.unknown)} unknown` : ""))),
+    ...DKG_CHECKS.filter(([k]) => d.checks[k] && known(d.checks[k])).map(([k, label]) => stat(label, d.checks[k], k)));
+}
+
 function renderSections() {
   renderSoftware();
   renderWhere();
@@ -398,6 +434,7 @@ async function main() {
   heroPoints().then((points) => worldMap($("hero-map"), points)).catch(() => {});
   renderControls();
   renderSections();
+  renderDkg();
   renderEarn();
   renderPlatform();
   renderSpeed();

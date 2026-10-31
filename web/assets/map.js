@@ -3,7 +3,7 @@
 import { Map as GLMap, Marker, Popup, NavigationControl, AttributionControl, LngLatBounds } from "/assets/vendor/maplibre-gl.mjs";
 import { api, chrome, currentNet, el, fmt, pct, compact, href, place, shortHash, badge, nodeStatus, evoPill, mnFilters, mnMatches,
   rememberParams, filterQuery, countBy, segmented, filterSelect, searchBox, REACH, REGISTRATION, registration, poseBadge, TYPE_OPTIONS, versionOptions,
-  countryOptions, hostOptions } from "./common.js";
+  countryOptions, hostOptions, DKG_OPTIONS } from "./common.js";
 
 chrome("map", { footer: false });
 const net = currentNet();
@@ -412,7 +412,8 @@ function buildPanel() {
     el("div", { class: "mp-row mn-only" }, el("span", { class: "mp-label", text: "Color" }), colors),
     chips,
     el("div", { class: "mp-filters mn-only" }, pick("type", "Type", TYPE_OPTIONS), pick("version", "Version", versionOptions(rows)),
-      pick("country", "Country", countryOptions(rows)), pick("host", "Hosting", hostOptions(rows, state.host))),
+      pick("country", "Country", countryOptions(rows)), pick("host", "Hosting", hostOptions(rows, state.host)),
+      pick("dkg", "DKG readiness", DKG_OPTIONS)),
     groupBox, nodeBox, foot);
 }
 
