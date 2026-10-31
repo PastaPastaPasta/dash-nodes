@@ -312,7 +312,7 @@ export function chrome(page, { footer = true } = {}) {
   // Named here because narrow screens hide the text and the logo is decoration.
   const brand = el("a", { class: "brand", href: href("/"), "aria-label": net === "testnet" ? "DashHQ Radar, testnet" : "DashHQ Radar" });
   brand.append(el("img", { src: "/assets/icons/mark-96.png", alt: "", width: 22, height: 22 }));
-  brand.append(el("span", { text: "DashHQ Radar" }), el("small", { text: "radar.dashhq.org" }));
+  brand.append(el("span", { text: "DashHQ Radar" }));
   if (net === "testnet") brand.append(el("b", { class: "net-badge", text: "Testnet" }));
   // Phones: the network switch, theme and status fold into a menu behind one button.
   const more = el("button", { class: "more-toggle", type: "button", "aria-label": "Network and display settings", "aria-expanded": "false", "aria-controls": "top-right" });

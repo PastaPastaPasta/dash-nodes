@@ -80,7 +80,6 @@ header.top {
 .brand { display: flex; align-items: center; gap: 9px; color: var(--ink); font-weight: 650; font-size: 15px; }
 .brand:hover { text-decoration: none; }
 .brand img { width: 22px; height: 22px; display: block; }
-.brand small { font-weight: 450; color: var(--muted); font-size: 13px; }
 nav.main { display: flex; gap: 2px; }
 nav.main a { color: var(--ink-2); padding: 6px 10px; border-radius: 6px; font-weight: 500; }
 nav.main a:hover { background: var(--surface-2); text-decoration: none; color: var(--ink); }
@@ -89,13 +88,11 @@ nav.main a[aria-current="page"] { color: var(--ink); background: var(--surface-2
 .net-badge { font-size: 11.5px; font-weight: 650; padding: 2px 7px; border-radius: 999px; background: color-mix(in srgb, var(--warning) 25%, transparent); color: var(--ink); }
 .more-toggle { display: none; font: inherit; background: none; border: 0; color: var(--ink-2); padding: 6px; border-radius: 8px; cursor: pointer; margin-left: auto; }
 .more-toggle svg { width: 20px; height: 20px; display: block; }
-/* Narrow desktops: the hostname under the name goes before the header needs a second row. */
-@media (max-width: 1180px) { .brand small { display: none; } }
 /* Phones and small tablets: one header row (logo, nav, menu button); the rest drops down from the
    button. Same breakpoint as the map's bottom sheet, so the map never gets a two-row header. */
 @media (max-width: 900px) {
   .top-inner { flex-wrap: nowrap; gap: 6px; padding: 6px 10px; position: relative; }
-  .brand span, .brand small { display: none; }
+  .brand span { display: none; }
   .brand img { width: 26px; height: 26px; }
   nav.main { overflow-x: auto; scrollbar-width: none; flex: 1; min-width: 0; }
   nav.main::-webkit-scrollbar { display: none; }
