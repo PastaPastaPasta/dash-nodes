@@ -226,9 +226,9 @@ input[type="search"], select {
 input[type="search"] { min-width: 280px; }
 input[type="search"]:focus, select:focus, button:focus-visible { outline: 2px solid var(--brand); outline-offset: 1px; }
 /* 16px on phones and touch screens: iOS zooms the page into any smaller field that gets focus. After
-   the rules above, which would otherwise win. */
+   the rules above, which would otherwise win; the map's search box has its own, more specific rule. */
 @media (max-width: 900px), (pointer: coarse) {
-  input[type="search"], select, .mp-head input[type="search"] { font-size: 16px; }
+  input[type="search"], select, .mp .mp-head input[type="search"] { font-size: 16px; }
 }
 .btn { font: inherit; font-size: 13px; border: 0; border-radius: 7px; padding: 6px 12px; cursor: pointer; background: var(--surface); color: var(--ink); box-shadow: 0 0 0 1px var(--ring); }
 .btn:hover { background: var(--surface-2); }
