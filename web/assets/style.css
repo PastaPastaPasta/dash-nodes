@@ -123,6 +123,11 @@ nav.main a[aria-current="page"] { color: var(--ink); background: var(--surface-2
   nav.main a { padding: 7px 6px; font-size: 13.5px; }
   .brand:has(.net-badge) ~ nav.main a { padding-inline: 4px; }
 }
+/* 360 px phones on testnet (the badge takes ~50 px), and 320 px ones: a little smaller still. */
+@media (max-width: 380px) {
+  nav.main { gap: 0; }
+  nav.main a, .brand:has(.net-badge) ~ nav.main a { padding-inline: 4px; font-size: 12.5px; }
+}
 .chain-status { color: var(--muted); font-size: 12.5px; white-space: nowrap; }
 .chain-status .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 6px; vertical-align: 1px; background: var(--muted); }
 .chain-status .dot.ok { background: var(--good); }
@@ -416,7 +421,7 @@ main.overview { padding-top: 26px; }
 .sharebar.thin { height: 12px; border-radius: 4px; margin-bottom: 14px; }
 .sharebar div { min-width: 3px; }
 .share-legend { display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 12px 0 0; font-size: 13.5px; color: var(--ink-2); }
-.share-legend > span { display: inline-flex; align-items: center; gap: 7px; }
+.share-legend > span { display: inline-flex; align-items: center; gap: 7px; min-width: 0; max-width: 100%; overflow-wrap: anywhere; } /* long dev version names wrap */
 .share-legend i { width: 10px; height: 10px; border-radius: 3px; }
 .share-legend b { color: var(--ink); font-weight: 600; }
 #sw-proto { margin: 14px 0 0; }
