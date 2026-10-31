@@ -24,7 +24,7 @@ use crate::ua;
 
 const DAY: i64 = 86_400;
 /// A node that answered within this window still counts as part of the network when it misses a crawl.
-const ACTIVE_WINDOW: i64 = 7 * DAY;
+pub const ACTIVE_WINDOW: i64 = 7 * DAY;
 const GETADDR_EVERY: i64 = 6 * 3600;
 /// Addresses that never answered get this many tries (with backoff) before going to weekly retries.
 const NEW_ADDR_TRIES: i64 = 6;
@@ -406,7 +406,8 @@ fn record(
         let mut ok_st = tx.prepare_cached(
             "UPDATE nodes SET last_tried = ?2, last_success = ?2, fail_streak = 0, next_try = ?2,
                 last_crawl = ?3, last_ok = 1, last_error = NULL, user_agent = ?4, protocol = ?5, services = ?6,
-                start_height = ?7, latency_ms = ?8, last_getaddr = CASE WHEN ?9 THEN ?2 ELSE last_getaddr END
+                start_height = ?7, latency_ms = ?8, last_getaddr = CASE WHEN ?9 THEN ?2 ELSE last_getaddr END,
+                relay = ?10
              WHERE addr = ?1",
         )?;
         // Failures: nodes seen recently are retried every crawl (they count toward uptime);
@@ -440,6 +441,7 @@ fn record(
                     v.start_height,
                     v.latency_ms,
                     r.asked_addrs,
+                    v.relay,
                 ])?,
                 None => fail_st.execute(params![r.addr, now, id, r.error, ACTIVE_WINDOW, NEW_ADDR_TRIES])?,
             };

@@ -52,6 +52,9 @@ pub struct Version {
     pub services: u64,
     pub user_agent: String,
     pub start_height: i32,
+    /// The version message's relay flag: whether the node wants transactions announced to it. Off
+    /// with `blocksonly=1`. Absent (very old peers) counts as on, as in Dash Core.
+    pub relay: bool,
     pub latency_ms: u32,
 }
 
@@ -331,6 +334,7 @@ pub fn parse_version(payload: &[u8]) -> Result<Version> {
     r.take(26)?; // addr_recv
     let mut user_agent = String::new();
     let mut start_height = -1;
+    let mut relay = true;
     if !r.is_empty() {
         r.take(26)?; // addr_from
         r.take(8)?; // nonce
@@ -345,7 +349,11 @@ pub fn parse_version(payload: &[u8]) -> Result<Version> {
     if !r.is_empty() {
         start_height = r.i32()?;
     }
-    Ok(Version { protocol, services, user_agent, start_height, latency_ms: 0 })
+    if !r.is_empty() {
+        relay = r.u8()? != 0;
+    }
+    // Dash Core follows with an mnauth challenge and fMasternode, which we don't need.
+    Ok(Version { protocol, services, user_agent, start_height, relay, latency_ms: 0 })
 }
 
 /// Same idea as Core's SanitizeString: keep printable ASCII only.
@@ -415,11 +423,27 @@ mod tests {
         assert_eq!(v.protocol, PROTOCOL_VERSION);
         assert_eq!(v.user_agent, user_agent());
         assert_eq!(v.start_height, 123);
+        // We announce fRelay = false.
+        assert!(!v.relay);
         // addr_recv: services, then the v4-mapped address and port.
         assert_eq!(payload[20 + 8..20 + 26], [&[0u8; 10][..], &[0xff, 0xff, 1, 2, 3, 4], &[0x27, 0x0f]].concat()[..]);
         // An onion peer's address can't be expressed in v1: zeros.
         let onion: PeerAddr = "pg6mmjiyjmcrsslvykfwnntlaru7p5svn6y2ymmju6nubxndf4pscryd.onion:9999".parse().unwrap();
         assert_eq!(version_payload(&onion, 1)[20 + 8..20 + 26], [0u8; 18]);
+    }
+
+    #[test]
+    fn version_relay_flag() {
+        let addr: PeerAddr = "1.2.3.4:9999".parse().unwrap();
+        let mut payload = version_payload(&addr, 1);
+        // relay = 1, then the trailing mnauth challenge and fMasternode a Dash Core node sends.
+        *payload.last_mut().unwrap() = 1;
+        payload.extend_from_slice(&[7u8; 32]);
+        payload.push(0);
+        assert!(parse_version(&payload).unwrap().relay);
+        // A message that ends after the start height relays, as Dash Core assumes.
+        payload.truncate(payload.len() - 34);
+        assert!(parse_version(&payload).unwrap().relay);
     }
 
     #[test]

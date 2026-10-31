@@ -33,6 +33,7 @@ CREATE TABLE IF NOT EXISTS nodes (
     user_agent    TEXT,
     protocol      INTEGER,
     services      INTEGER,
+    relay         INTEGER,                   -- version message relay flag (0 with blocksonly=1)
     start_height  INTEGER,
     latency_ms    INTEGER,
     country       TEXT,
@@ -101,6 +102,7 @@ CREATE TABLE IF NOT EXISTS masternodes (
     pose_revived_height     INTEGER,
     pose_ban_height         INTEGER,
     revocation_reason       INTEGER,
+    platform_banned         INTEGER,         -- dashd's metaInfo.is_platform_banned (evonodes)
     first_seen              INTEGER NOT NULL,
     updated                 INTEGER NOT NULL,
     removed                 INTEGER          -- set when the ProTx left the registered list
@@ -200,7 +202,7 @@ pub struct Db {
 }
 
 /// Columns added after the first release, for databases created before them: (table, column, type).
-const ADDED_COLUMNS: [(&str, &str, &str); 7] = [
+const ADDED_COLUMNS: [(&str, &str, &str); 9] = [
     ("nodes", "continent", "TEXT"),
     ("nodes", "city", "TEXT"),
     ("nodes", "lat", "REAL"),
@@ -208,6 +210,8 @@ const ADDED_COLUMNS: [(&str, &str, &str); 7] = [
     ("nodes", "network", "TEXT"),
     ("masternodes", "core_p2p", "TEXT"),
     ("crawls", "networks", "TEXT"),
+    ("nodes", "relay", "INTEGER"),
+    ("masternodes", "platform_banned", "INTEGER"),
 ];
 
 /// Every core P2P address of every registered masternode (the primary `service` for rows the
@@ -379,6 +383,46 @@ mod tests {
         lock(&db.writer)
             .execute("INSERT INTO nodes (addr, source, first_seen, city, lat, lon, continent) VALUES ('a', 's', 0, 'c', 1.5, 2.5, 'EU')", [])
             .unwrap();
+        drop(db);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn migrates_pre_readiness_database() {
+        let dir = std::env::temp_dir().join(format!("dash-nodes-migrate-ready-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("old.sqlite");
+        let _ = std::fs::remove_file(&path);
+        let old = SCHEMA
+            .replace(
+                "    relay         INTEGER,                   -- version message relay flag (0 with blocksonly=1)\n",
+                "",
+            )
+            .replace(
+                "    platform_banned         INTEGER,         -- dashd's metaInfo.is_platform_banned (evonodes)\n",
+                "",
+            );
+        assert!(!old.contains("relay ") && !old.contains("platform_banned"));
+        {
+            let c = Connection::open(&path).unwrap();
+            c.execute_batch(&old).unwrap();
+            c.execute(
+                "INSERT INTO nodes (addr, source, first_seen, services) VALUES ('1.2.3.4:9999', 'mnlist', 0, 1)",
+                [],
+            )
+            .unwrap();
+        }
+        let db = Db::open(&path).unwrap();
+        let c = lock(&db.writer);
+        // Handshakes from before the column have no relay flag: unknown, not off.
+        let relay: Option<i64> = c.query_row("SELECT relay FROM nodes", [], |r| r.get(0)).unwrap();
+        assert_eq!(relay, None);
+        c.execute(
+            "INSERT INTO masternodes (protx, type, first_seen, updated, platform_banned) VALUES ('p', 'Evo', 0, 0, 1)",
+            [],
+        )
+        .unwrap();
+        drop(c);
         drop(db);
         std::fs::remove_dir_all(&dir).unwrap();
     }
