@@ -455,11 +455,11 @@ main.overview { padding-top: 26px; }
 .ladder { width: 100%; border-collapse: collapse; font-size: 14px; font-variant-numeric: tabular-nums; }
 .ladder thead th { font-size: 12.5px; font-weight: 450; color: var(--muted); text-align: left; padding: 0 8px 8px 0; white-space: nowrap; }
 .ladder tbody { border-top: 1px solid var(--grid); }
-.ladder tr.group th { padding: 12px 0 2px; text-align: left; font-size: 12.5px; font-weight: 600; color: var(--muted); }
+.ladder tbody tr.group > th { padding: 12px 0 2px; text-align: left; font-size: 12.5px; font-weight: 600; color: var(--muted); }
 .ladder td, .ladder th.ver { padding: 6px 8px 6px 0; white-space: nowrap; color: var(--ink-2); }
 .ladder tbody tr:first-child > * { padding-top: 9px; }
 .ladder tbody tr:last-child > * { padding-bottom: 9px; }
-/* The version, and what it is (a note that wraps under it as a whole when the column is tight). */
+/* The version and what it is, on one line (under it on phones). */
 .ladder th.ver { text-align: left; white-space: nowrap; color: var(--ink); font-weight: 550; padding-right: 14px; }
 .ladder th.ver span { white-space: nowrap; }
 .ladder th.ver small { margin-left: 8px; font-size: 12.5px; font-weight: 450; color: var(--muted); white-space: nowrap; }
