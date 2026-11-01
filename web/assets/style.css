@@ -92,16 +92,11 @@ nav.main a[aria-current="page"] { color: var(--ink); background: var(--surface-2
 .net-badge { font-size: 11.5px; font-weight: 650; padding: 2px 7px; border-radius: 999px; background: color-mix(in srgb, var(--warning) 25%, transparent); color: var(--ink); }
 .more-toggle { display: none; font: inherit; background: none; border: 0; color: var(--ink-2); padding: 6px; border-radius: 8px; cursor: pointer; margin-left: auto; }
 .more-toggle svg { width: 20px; height: 20px; display: block; }
-/* Phones and small tablets: one header row (logo, nav, menu button); the rest drops down from the
-   button. Same breakpoint as the map's bottom sheet, so the map never gets a two-row header. */
-@media (max-width: 900px) {
-  .top-inner { flex-wrap: nowrap; gap: 6px; padding: 6px 10px; position: relative; }
-  .brand span { display: none; }
-  .brand img { width: 26px; height: 26px; }
-  nav.main { overflow-x: auto; scrollbar-width: none; flex: 1; min-width: 0; }
-  nav.main::-webkit-scrollbar { display: none; }
-  nav.main a { padding: 7px 8px; white-space: nowrap; font-size: 14px; }
-  .more-toggle { display: block; flex: none; }
+/* Below 1200 px the status, network switch and theme don't fit beside the brand and every tab, so
+   they drop down from a menu button and the header stays one row. */
+@media (max-width: 1199px) {
+  .top-inner { flex-wrap: nowrap; position: relative; }
+  .more-toggle { display: grid; place-items: center; flex: none; }
   .top-right {
     display: none; position: absolute; right: 8px; top: calc(100% + 6px); z-index: 20; margin: 0;
     flex-direction: column; align-items: stretch; gap: 12px; padding: 12px; min-width: 230px;
@@ -112,18 +107,28 @@ nav.main a[aria-current="page"] { color: var(--ink); background: var(--surface-2
   .top-right .seg.net { justify-content: stretch; }
   .top-right .seg.net button { flex: 1; }
   .top-right .theme-toggle { align-self: flex-start; }
+}
+/* Phones and small tablets: the logo loses its name and API moves into the menu. Same breakpoint as
+   the map's bottom sheet. */
+@media (max-width: 900px) {
+  .top-inner { gap: 6px; padding: 6px 10px; }
+  .brand span { display: none; }
+  .brand img { width: 26px; height: 26px; }
+  nav.main { overflow-x: auto; scrollbar-width: none; flex: 1; min-width: 0; }
+  nav.main::-webkit-scrollbar { display: none; }
+  nav.main a { padding: 7px 8px; white-space: nowrap; font-size: 14px; }
   .top-right .menu-only { display: block; }
   nav.main a.nav-api { display: none; }
 }
-/* Narrow phones: every tab fits without scrolling. The Overview tab links home too, so the logo gives
-   way (testnet keeps its badge) and the tabs tighten. */
-@media (max-width: 440px) {
+/* Phones: every tab fits without scrolling. The Overview tab links home too, so the logo gives way
+   (testnet keeps its badge) and the tabs tighten. */
+@media (max-width: 540px) {
   .top-inner { gap: 4px; padding: 6px 8px; }
   .more-toggle { padding: 6px 4px; }
   .brand img { display: none; }
   .brand:not(:has(.net-badge)) { display: none; }
   .net-badge { font-size: 10.5px; padding: 2px 5px; }
-  nav.main a { padding: 7px 6px; font-size: 13.5px; }
+  nav.main a { padding: 7px 5px; font-size: 13px; }
   .brand:has(.net-badge) ~ nav.main a { padding-inline: 4px; }
   /* With the testnet badge, five tabs don't fit: Changes moves into the menu. */
   .brand:has(.net-badge) ~ nav.main a.nav-changes { display: none; }
@@ -280,7 +285,7 @@ pre.code { background: var(--surface-2); padding: 10px 12px; border-radius: 8px;
   .btn { min-height: 42px; }
   .chip { min-height: 40px; }
   nav.main a { display: inline-flex; align-items: center; min-height: 40px; }
-  .more-toggle { width: 42px; height: 42px; display: grid; place-items: center; }
+  .more-toggle { width: 42px; height: 42px; }
   .theme-toggle { width: 40px; height: 40px; justify-content: center; align-items: center; }
   .brand { min-height: 40px; }
   .pager .btn { min-width: 88px; }
