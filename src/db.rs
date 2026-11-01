@@ -253,6 +253,58 @@ fn migrate(c: &mut Connection) -> Result<()> {
     Ok(())
 }
 
+/// `PRAGMA user_version` once payments no longer count the platform share (see `drop_platform_share`).
+const NO_PLATFORM_SHARE: i64 = 1;
+/// Dash's block subsidy steps down every this many blocks.
+const SUBSIDY_ERA: i64 = 210_240;
+
+/// What the coinbase at `height` (on or after MN_RR) sends to Platform's credit pool: Core's
+/// `PlatformShare(GetMasternodePayment(height, subsidy))`. After V20 the subsidy starts at 5 DASH and
+/// loses 1/14 every SUBSIDY_ERA blocks (counted from the parent's height); the treasury takes 20% of it,
+/// masternodes 75% of the rest, and Platform 37.5% of theirs. Fees don't count.
+pub fn platform_share(height: i64) -> i64 {
+    let mut subsidy: i64 = 500_000_000;
+    for _ in 0..(height - 1) / SUBSIDY_ERA {
+        subsidy -= subsidy / 14;
+    }
+    (subsidy - subsidy / 5) * 3 / 4 * 375 / 1000
+}
+
+/// Takes the platform share out of payments recorded before the collector stopped counting it (as
+/// `masternode payments` does), once per database, era by era. Returns (payments fixed, blocks with
+/// several payees left as they were: there are none since MN_RR on mainnet or testnet, and which
+/// payee had the share added isn't recorded).
+fn drop_platform_share(c: &mut Connection, mn_rr: i64) -> Result<(usize, usize)> {
+    let tx = c.transaction()?;
+    let top: Option<i64> = tx.query_row("SELECT max(height) FROM payments", [], |r| r.get(0))?;
+    let single = "NOT EXISTS (SELECT 1 FROM payments q WHERE q.height = payments.height AND q.protx != payments.protx)";
+    let mut fixed = 0;
+    let mut lo = mn_rr;
+    while top.is_some_and(|top| lo <= top) {
+        // The era holding `lo` runs to a multiple of SUBSIDY_ERA (see platform_share).
+        let hi = ((lo - 1) / SUBSIDY_ERA + 1) * SUBSIDY_ERA;
+        let share = platform_share(lo);
+        fixed += tx.execute(
+            &format!("UPDATE payments SET amount = amount - ?3 WHERE height BETWEEN ?1 AND ?2 AND {single}"),
+            params![lo, hi, share],
+        )?;
+        tx.execute(
+            "UPDATE blocks SET mn_amount = mn_amount - ?3 WHERE height BETWEEN ?1 AND ?2
+                 AND (SELECT count(*) FROM payments p WHERE p.height = blocks.height) = 1",
+            params![lo, hi, share],
+        )?;
+        lo = hi + 1;
+    }
+    let skipped: usize = tx.query_row(
+        "SELECT count(*) FROM (SELECT height FROM payments WHERE height >= ?1 GROUP BY height HAVING count(*) > 1)",
+        [mn_rr],
+        |r| r.get(0),
+    )?;
+    tx.pragma_update(None, "user_version", NO_PLATFORM_SHARE)?;
+    tx.commit()?;
+    Ok((fixed, skipped))
+}
+
 /// A panic inside a closure poisons the mutex; the connection itself is still fine to use.
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
@@ -272,6 +324,26 @@ impl Db {
             readers: Arc::new(Mutex::new(Vec::new())),
             read_slots: Arc::new(tokio::sync::Semaphore::new(READERS)),
         })
+    }
+
+    /// Runs `drop_platform_share` unless this database already has (`user_version`).
+    pub async fn drop_platform_share(&self, mn_rr: i64) -> Result<()> {
+        let fixed = self
+            .write(move |c| {
+                let v: i64 = c.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+                if v >= NO_PLATFORM_SHARE { Ok(None) } else { drop_platform_share(c, mn_rr).map(Some) }
+            })
+            .await?;
+        if let Some((n, skipped)) = fixed {
+            tracing::info!("{}: took the platform share out of {n} payments", self.path.display());
+            if skipped > 0 {
+                tracing::warn!(
+                    "{}: {skipped} blocks with several payees keep their platform share",
+                    self.path.display()
+                );
+            }
+        }
+        Ok(())
     }
 
     pub async fn write<F, R>(&self, f: F) -> Result<R>
@@ -463,5 +535,55 @@ mod tests {
         drop(c);
         drop(db);
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn drops_the_platform_share_once() {
+        // The OP_RETURN outputs on chain: mainnet 2,563,677 (era 12), the eras before it, and testnet era 7.
+        assert_eq!(platform_share(2_563_677), 46_231_323);
+        assert_eq!([platform_share(2_312_640), platform_share(2_312_641)], [53_617_393, 49_787_579]);
+        assert_eq!(platform_share(1_500_000), 66_966_830);
+
+        let mut c = Connection::open_in_memory().unwrap();
+        c.execute_batch(SCHEMA).unwrap();
+        // MN_RR at 2,312,000; the subsidy steps down after 2,312,640. Height 2,400,000 has two payees.
+        let rows = [
+            (2_311_999, "p", 300),
+            (2_312_000, "p", 142_979_715),
+            (2_312_640, "p", 142_990_000),
+            (2_312_641, "p", 132_766_878),
+            (2_400_000, "p", 100),
+            (2_400_000, "q", 200),
+        ];
+        for (h, protx, a) in rows {
+            c.execute(
+                "INSERT OR IGNORE INTO blocks (height, hash, prev, time, mn_amount) VALUES (?1, '', '', 0, ?2)",
+                params![h, a],
+            )
+            .unwrap();
+            c.execute("INSERT INTO payments (height, protx, amount) VALUES (?1, ?2, ?3)", params![h, protx, a])
+                .unwrap();
+        }
+        assert_eq!(drop_platform_share(&mut c, 2_312_000).unwrap(), (3, 1));
+        let paid: Vec<(i64, i64)> =
+            query_all(&c, "SELECT height, amount FROM payments ORDER BY height, protx", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .unwrap();
+        assert_eq!(
+            paid,
+            [
+                (2_311_999, 300),
+                (2_312_000, 89_362_322),
+                (2_312_640, 89_372_607),
+                (2_312_641, 82_979_299),
+                (2_400_000, 100),
+                (2_400_000, 200)
+            ]
+        );
+        let mn: Vec<i64> = query_all(&c, "SELECT mn_amount FROM blocks ORDER BY height", [], |r| r.get(0)).unwrap();
+        assert_eq!(mn, [300, 89_362_322, 89_372_607, 82_979_299, 100]);
+        let v: i64 = c.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
+        assert_eq!(v, NO_PLATFORM_SHARE);
     }
 }

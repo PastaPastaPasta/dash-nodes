@@ -481,24 +481,21 @@ fn payout_addresses(entry: &Value) -> Vec<String> {
 }
 
 /// What `block` (`getblock` verbosity 2) paid each of `payees` (ProTx hash, reward addresses as of
-/// its parent), as `masternode payments` counts it, but without the txindex that RPC needs: the
-/// coinbase outputs to the payee's addresses, plus the platform share (the OP_RETURN output into
-/// the credit pool), which that RPC also counts as the payee's.
+/// its parent): the coinbase outputs to the payee's addresses. Unlike `masternode payments`, not the
+/// platform share (the OP_RETURN output into Platform's credit pool since MN_RR): the payee never gets
+/// it; it funds the epoch rewards Platform pays every evonode that proposes blocks.
 fn block_payments(block: &Value, payees: &[(String, Vec<String>)]) -> Result<Block> {
     let height = block["height"].as_i64().ok_or_else(|| anyhow!("getblock: no height"))?;
     let outputs = block["tx"][0]["vout"].as_array().ok_or_else(|| anyhow!("getblock {height}: no coinbase"))?;
-    let platform: i64 =
-        outputs.iter().filter(|o| o["scriptPubKey"]["type"].as_str() == Some("nulldata")).filter_map(duffs).sum();
     let payees: Vec<(String, i64)> = payees
         .iter()
-        .enumerate()
-        .map(|(i, (protx, addrs))| {
+        .map(|(protx, addrs)| {
             let paid: i64 = outputs
                 .iter()
                 .filter(|o| o["scriptPubKey"]["address"].as_str().is_some_and(|a| addrs.iter().any(|x| x == a)))
                 .filter_map(duffs)
                 .sum();
-            (protx.clone(), paid + if i == 0 { platform } else { 0 })
+            (protx.clone(), paid)
         })
         .collect();
     Ok(Block {
@@ -694,10 +691,10 @@ mod tests {
                 {"valueSat": 11_611_384, "scriptPubKey": {"type": "scripthash", "address": "Xop"}}
             ]}]
         });
-        // The payee gets its outputs plus the platform share, whatever its type (as the RPC counts it).
+        // The payee gets its own outputs; the platform share (OP_RETURN) goes to Platform's pool.
         let b = block_payments(&block, &[("aa".to_owned(), payout_addresses(&v23))]).unwrap();
-        assert_eq!(b.payees, vec![("aa".to_owned(), 100_000_000 + 11_611_384 + 66_966_830)]);
-        assert_eq!((b.amount, b.prev.as_str(), b.time), (178_578_214, "h99", 5));
+        assert_eq!(b.payees, vec![("aa".to_owned(), 100_000_000 + 11_611_384)]);
+        assert_eq!((b.amount, b.prev.as_str(), b.time), (111_611_384, "h99", 5));
         assert!(block_payments(&block, &[]).unwrap().payees.is_empty());
     }
 

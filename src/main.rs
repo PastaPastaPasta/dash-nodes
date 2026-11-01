@@ -296,6 +296,7 @@ async fn serve(args: ServeArgs) -> Result<()> {
         }
         snapshots.push((name, path.clone()));
         let db = db::Db::open(&path)?;
+        db.drop_platform_share(net.mn_rr_height()).await.with_context(|| format!("{}: platform share", net.name()))?;
         let ctx = Arc::new(NetCtx {
             net,
             db,

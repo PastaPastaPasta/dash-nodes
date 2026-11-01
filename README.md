@@ -16,7 +16,9 @@ mnowatch.org/user-agents and the old dashninja.pl:
   just not crawled; each address counts as one node, so a node on IPv4 and Tor counts twice.
 - **Masternode list:** the deterministic list from dashd, a live port check per masternode, version
   history, daily port-check uptime, and every payment back to DIP3 enforcement (from each block's
-  coinbase and the masternode list at its height, backfilled newest first).
+  coinbase and the masternode list at its height, backfilled newest first). A payment is what the
+  payee's addresses got: since MN_RR, 37.5% of the masternode subsidy share goes to Platform's credit
+  pool instead, and isn't counted (Core's `masternode payments` counts it as the payee's).
 - **Map:** every masternode (or every reachable node, counted per city) placed by the city its IP
   geolocates to (DB-IP City Lite), clustered, colored by port-check status, version or type, with the
   list's filters. It replaces the old map.dashhq.org / map.thepasta.org (`PastaPastaPasta/dash-mn-map`).

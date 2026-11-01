@@ -31,6 +31,15 @@ impl Network {
         }
     }
 
+    /// Where MN_RR activated (`getdeploymentinfo`): from this block on, 37.5% of the masternode share
+    /// of the block subsidy goes to Platform's credit pool (an OP_RETURN coinbase output), not the payee.
+    pub fn mn_rr_height(self) -> i64 {
+        match self {
+            Network::Mainnet => 2_128_896,
+            Network::Testnet => 1_066_900,
+        }
+    }
+
     pub fn default_port(self) -> u16 {
         match self {
             Network::Mainnet => 9999,
