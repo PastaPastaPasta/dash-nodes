@@ -198,7 +198,7 @@ function renderAll() {
   const state = { q: "", show: "all", sort: "monthly", dir: -1, page: 0 };
   const PAGE = 50;
   $("all-lede").textContent = `Every registered evonode: what it earned, what it can withdraw, and when its next block is due. ` +
-    `"A month" is at the pace of its last ${lastSpan(doc.returns.monthly_basis_days) ?? "six finished epochs, once there are six"}. Click a column to sort; open an evonode for its history.`;
+    `"A month" is at the pace of ${lastSpan(doc.returns.monthly_basis_days) ?? "its last six finished epochs, once there are six"}. Click a column to sort; open an evonode for its history.`;
   const matches = (e) => {
     if (state.show === "proposed" && !e.epoch_blocks) return false;
     if (state.show === "idle" && (e.next || e.status !== "enabled")) return false;
