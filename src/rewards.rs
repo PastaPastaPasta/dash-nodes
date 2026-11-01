@@ -1797,6 +1797,9 @@ fn yields(c: &Connection, since: i64, protx: Option<&str>) -> Result<(HashMap<St
     Ok((rows.into_iter().map(|(p, cr)| (p, yearly(cr))).collect(), span as f64 / DAY as f64))
 }
 
+/// The window network yields are over, in days (as the Core yields in the summary).
+pub const YIELD_DAYS: i64 = 90;
+
 /// Every evonode's Platform yield since `since`, as in `yields`.
 pub fn platform_yields(c: &Connection, since: i64) -> Result<(HashMap<String, f64>, f64)> {
     yields(c, since, None)
@@ -1852,8 +1855,9 @@ fn pool_so_far(now: &Value) -> Option<u64> {
     core_rewards(first.checked_add(1)?, to, CORE_HALVING)
 }
 
-/// Everything per evonode the network table, the list and evonode pages need, keyed by ProTx. Built
-/// once per round (`refresh_board`), not per request: the network-wide sums read every payout of a month.
+/// Everything per evonode the network table, the list and evonode pages need, keyed by ProTx, and the
+/// network-wide sums. Built once per round (`refresh_board`), not per request: the sums read every
+/// payout of months.
 pub struct Board {
     now: Option<Value>,
     last: HashMap<String, (i64, i64)>,
@@ -1867,6 +1871,10 @@ pub struct Board {
     epoch_total: i64,
     balances: HashMap<String, Option<i64>>,
     votes: HashMap<String, i64>,
+    /// The finished epochs the network document lists (`epochs_json`).
+    epochs: Vec<Value>,
+    /// Every evonode's Platform yield over the last YIELD_DAYS days (`platform_yields`).
+    yields: (HashMap<String, f64>, f64),
 }
 
 fn board(c: &Connection) -> Result<Board> {
@@ -1890,6 +1898,8 @@ fn board(c: &Connection) -> Result<Board> {
     d30_enabled.sort_unstable();
     let (monthly, monthly_basis) = monthly(c, start)?;
     Ok(Board {
+        epochs: epochs_json(c, start)?,
+        yields: platform_yields(c, db::now() - YIELD_DAYS * DAY)?,
         last,
         d30,
         d30_enabled,
@@ -1933,6 +1943,14 @@ impl View {
             None => Ok(Arc::new(board(c)?)),
         }
     }
+
+    /// Every evonode's Platform yield over the last `days` days: the board's, for its window.
+    pub fn platform_yields(&self, c: &Connection, days: i64) -> Result<(HashMap<String, f64>, f64)> {
+        match &self.board {
+            Some(b) if days == YIELD_DAYS => Ok(b.yields.clone()),
+            _ => platform_yields(c, db::now() - days * DAY),
+        }
+    }
 }
 
 /// The few Platform fields the masternode list carries per evonode: credits last epoch and over 30
@@ -1962,7 +1980,6 @@ pub fn network_json(c: &Connection, view: &View, net: Network) -> Result<Value> 
     let schedule = view.schedule();
     let Some(now) = b.now.clone() else { return Ok(json!({"now": null})) };
     let start = now["start"].as_i64().unwrap_or(0);
-    let epochs = epochs_json(c, start)?;
     // Enabled evonodes: the electorate for upgrades, and the table.
     struct Evo {
         protx: String,
@@ -2021,7 +2038,7 @@ pub fn network_json(c: &Connection, view: &View, net: Network) -> Result<Value> 
         (Some(_), _) => "voting",
         _ => "active",
     };
-    let durations: Vec<i64> = epochs.iter().filter_map(|e| e["duration"].as_i64()).take(6).collect();
+    let durations: Vec<i64> = b.epochs.iter().filter_map(|e| e["duration"].as_i64()).take(6).collect();
     let epoch_secs = if durations.is_empty() {
         epoch_secs(net) as i64
     } else {
@@ -2046,8 +2063,8 @@ pub fn network_json(c: &Connection, view: &View, net: Network) -> Result<Value> 
             "required": required, "enabled_evonodes": enabled, "versions": versions, "phase": phase,
             "next_epoch": next_epoch, "next_epoch_reported_by": reported,
         },
-        "returns": network_returns(c, &b)?,
-        "epochs": epochs,
+        "returns": network_returns(&b),
+        "epochs": b.epochs,
         "schedule": schedule.map(|s| json!({"ts": s.ts, "height": s.height, "epoch": s.epoch, "block_secs": s.block_secs, "next": next_list})),
         "evonodes": rows,
     }))
@@ -2095,16 +2112,15 @@ fn epochs_json(c: &Connection, current_start: i64) -> Result<Vec<Value>> {
 }
 
 /// Median evonode returns: Platform rewards per epoch and per month, and the yearly yield from Platform
-/// over the last 90 days (Core's comes from payments, in the summary).
-fn network_returns(c: &Connection, b: &Board) -> Result<Value> {
-    let (monthly, basis) = (&b.monthly, b.monthly_basis);
-    let mut m: Vec<i64> = monthly.values().copied().collect();
+/// over the last YIELD_DAYS days (Core's comes from payments, in the summary).
+fn network_returns(b: &Board) -> Value {
+    let mut m: Vec<i64> = b.monthly.values().copied().collect();
     m.sort_unstable();
-    let (yields, span) = platform_yields(c, db::now() - 90 * DAY)?;
-    Ok(json!({
-        "median_monthly": quantile(&m, 0.5), "monthly_basis_days": basis, "evonodes_paid": m.len(),
-        "median_platform_yield": median4(yields.into_values().collect()), "yield_span_days": span,
-    }))
+    let (yields, span) = &b.yields;
+    json!({
+        "median_monthly": quantile(&m, 0.5), "monthly_basis_days": b.monthly_basis, "evonodes_paid": m.len(),
+        "median_platform_yield": median4(yields.values().copied().collect()), "yield_span_days": span,
+    })
 }
 
 /// An evonode's Platform rewards for its page.

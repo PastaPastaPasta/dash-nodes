@@ -203,9 +203,10 @@ fn latest_crawl(c: &Connection) -> rusqlite::Result<Option<i64>> {
 /// first, plus per address network counts (`networks`, see crawler::network_stats).
 async fn summary(State(nets): State<Nets>, UrlPath(net): UrlPath<String>) -> ApiResult {
     let ctx = net_ctx(&nets, &net)?;
+    let view = rewards::view(&ctx);
     let body = ctx
         .db
-        .read(|c| {
+        .read(move |c| {
             // One snapshot, so a crawl recorded meanwhile can't mix into this answer.
             let c = &c.unchecked_transaction()?;
             let Some(id) = latest_crawl(c)? else {
@@ -239,7 +240,7 @@ async fn summary(State(nets): State<Nets>, UrlPath(net): UrlPath<String>) -> Api
                 // Crawls from before per-network stats were recorded.
                 None => json!(network_stats(c, id, started, None)?),
             };
-            let returns = network_returns(c)?;
+            let returns = network_returns(c, view.platform_yields(c, RETURN_WINDOW)?)?;
             let platform = platform_summary(c)?;
             let dkg_readiness = readiness_summary(c, id)?;
             Ok(json!({
@@ -725,8 +726,9 @@ pub(crate) fn median4(mut ys: Vec<f64>) -> Option<f64> {
 }
 
 /// The median annualized yield of enabled masternodes registered for the whole window, by type, and
-/// how many that is. None until the payments index covers the window.
-fn network_returns(c: &Connection) -> Result<Value> {
+/// how many that is. None until the payments index covers the window. Evonodes' Platform yields over
+/// the same window come in as `platform` (from the rewards board, which reads every payout in it).
+fn network_returns(c: &Connection, platform: (HashMap<String, f64>, f64)) -> Result<Value> {
     let since = db::now() - RETURN_WINDOW * DAY;
     let covered = index_start(c)?.is_some_and(|t| t <= since);
     let from = if covered { height_at(c, since)? } else { None };
@@ -749,7 +751,7 @@ fn network_returns(c: &Connection) -> Result<Value> {
             .map(move |(_, paid, p)| (p, annualized(*paid, RETURN_WINDOW, evo)))
     };
     // Evonodes also earn Platform rewards: annualized over the finalized epochs in the same window.
-    let (platform, span) = rewards::platform_yields(c, since)?;
+    let (platform, span) = platform;
     let with_platform = span > 0.0;
     let regular: Vec<f64> = core(false).map(|(_, y)| y).collect();
     // (Core yield, Platform yield) of each evonode.
@@ -972,7 +974,8 @@ mod tests {
             now - 30 * day,
         ))
         .unwrap();
-        let r = network_returns(&c).unwrap();
+        let platform = rewards::platform_yields(&c, now - RETURN_WINDOW * DAY).unwrap();
+        let r = network_returns(&c, platform).unwrap();
         // Core: 10 and 20 DASH in 90 days; Platform: 40 and 80 DASH over 60 days, on 4,000 DASH.
         assert_eq!(r["evo"]["masternodes"], 3);
         assert_eq!(r["evo"]["median_annual_yield"], json!(round4(10.0 / 90.0 * 365.0 / 4000.0)));
