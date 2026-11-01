@@ -11,6 +11,9 @@ const ADDRESS_NETWORKS = { ipv4: "IPv4", ipv6: "IPv6", onion: "Tor", i2p: "I2P",
 const params = new URLSearchParams(location.search);
 let scope = SCOPES.some(([s]) => s === params.get("scope")) ? params.get("scope") : "mn";
 let days = RANGES.some(([d]) => d === params.get("days")) ? params.get("days") : "30";
+/** The versions chart: share over time, or share now as a pie. */
+const SW_VIEWS = [["time", "Over time"], ["now", "Now"]];
+let swView = params.get("versions") === "now" ? "now" : "time";
 
 const sizePalette = new Palette();
 let versionsChart, sizeChart, summary;
@@ -20,6 +23,8 @@ function remember() {
   const u = new URL(location.href);
   u.searchParams.set("scope", scope);
   u.searchParams.set("days", days);
+  if (swView === "now") u.searchParams.set("versions", "now");
+  else u.searchParams.delete("versions");
   history.replaceState(null, "", u);
 }
 
@@ -187,8 +192,8 @@ function byNewest(a, b) {
   for (let i = 0; i < Math.max(x.length, y.length); i++) if ((x[i] || 0) !== (y[i] || 0)) return (y[i] || 0) - (x[i] || 0);
   return 0;
 }
-/** A Dash Core version's release line ("23.x"); other clients' versions ("Lksc Core 5.18") have none. */
-const releaseLine = (v) => (/^\d+\./.test(v) ? `${vparts(v)[0]}.x` : null);
+/** Whether a version is Dash Core's ("23.1.9"), not another client's ("Lksc Core 5.18"). */
+const isCoreVersion = (v) => /^\d+\./.test(v);
 
 /** Dash Core's releases (/api/v1/releases) by version: {candidate, published}; null if unavailable. */
 let releases = null;
@@ -244,67 +249,85 @@ function releaseNote(v) {
   return new Date(releases.get(v).published).toLocaleDateString("en-GB", { month: "short", year: "numeric", timeZone: "UTC" });
 }
 
-/** Version shares at the start and end of the chart's history: {scope, days, t0, first, last} (Maps of key to %). */
-let versionHistory = null;
-/** Whether the history starts later than the range picked asks for. */
-const historyShort = (h) => h.t0 > Date.now() / 1000 - Number(days) * 86400 + 86400;
-const shortDate = (t, year) => new Date(t * 1000).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: year ? "numeric" : undefined, timeZone: "UTC" });
 
 /**
- * The ladder's groups: Dash Core release lines newest first. The newest line lists every version; the
- * next lists those on at least 1% and folds the rest into one row; older lines are one row together, and
- * so are other clients' versions.
+ * What a version is, for ordering: 0 releases, 1 release candidates, 2 other builds, 3 other clients
+ * (including a user agent that reads "Other"). The chart's folded "Other" band and "Unknown" (no answer)
+ * sort after those.
+ */
+const KINDS = { release: 0, candidate: 1, build: 2 };
+const kindOf = (v) => (isCoreVersion(v) ? KINDS[releaseStatus(v)] : 3);
+const stackKind = (k) => (k === "Unknown" ? 5 : k === "Other" ? 4 : kindOf(k));
+/** The ladder's order: the latest release first, older releases after it, then candidates and builds. */
+const ladderOrder = (a, b) => stackKind(a) - stackKind(b) || byNewest(a, b);
+
+/**
+ * The ladder's groups, the latest release always first (even if nothing runs it yet): releases newest
+ * first, those under 1% after the latest folded into one row; then release candidates, builds that match
+ * no release, and other clients. Without the release list, one group by share.
  */
 function ladderGroups(versions, sum) {
-  const lines = new Map();
-  const others = [];
-  for (const row of versions.slice().sort(([a], [b]) => byNewest(a, b))) {
-    const l = releaseLine(row[0]);
-    if (!l) { others.push(row); continue; }
-    if (!lines.has(l)) lines.set(l, []);
-    lines.get(l).push(row);
-  }
   const one = (k, n) => ({ key: k, label: k, n });
   const fold = (rows, label) => (rows.length === 1 ? one(...rows[0]) : { key: rows[0][0], label, n: total(rows), merged: true });
-  const entries = [...lines.entries()];
-  const groups = entries.slice(0, 2).map(([l, rows], i) => {
-    const shown = i === 0 ? rows : rows.filter(([, n]) => n / sum >= 0.01);
-    const rest = rows.filter((r) => !shown.includes(r));
-    return { label: l, rows: [...shown.map((r) => one(...r)), ...(rest.length ? [fold(rest, `${rest.length} more ${l}`)] : [])] };
-  });
-  const older = entries.slice(2).flatMap(([, rows]) => rows);
-  if (older.length) groups.push({ label: "Older", rows: [fold(older, `${entries.at(-1)[0]}–${entries[2][0]}`)] });
-  if (others.length) groups.push({ label: "Other", rows: [fold(others, `${others.length} other clients`)] });
-  return groups;
+  const split = (rows, keep) => {
+    const shown = rows.filter(keep), rest = rows.filter((r) => !shown.includes(r));
+    return [shown, rest];
+  };
+  if (!releases) {
+    const [shown, rest] = split(versions, ([, n], i) => i < 8 && n / sum >= 0.005);
+    return [{ rows: [...shown.map((r) => one(...r)), ...(rest.length ? [fold(rest, `${rest.length} more versions`)] : [])] }];
+  }
+  const kinds = [[], [], [], []];
+  for (const row of versions) kinds[kindOf(row[0])].push(row);
+  for (const k of kinds) k.sort(([a], [b]) => byNewest(a, b));
+  if (finals[0] && !kinds[0].some(([v]) => v === finals[0])) kinds[0].unshift([finals[0], 0]);
+  const [rel, older] = split(kinds[0], ([v, n]) => v === finals[0] || n / sum >= 0.01);
+  return [
+    { label: "Releases", rows: [...rel.map((r) => one(...r)), ...(older.length ? [fold(older, `${older.length} other releases`)] : [])] },
+    { label: "Release candidates", rows: kinds[1].map((r) => one(...r)) },
+    { label: "Builds that aren't releases", rows: kinds[2].map((r) => one(...r)) },
+    { label: "Other clients", rows: kinds[3].length ? [fold(kinds[3], `${kinds[3].length} other clients`)] : [] },
+  ].filter((g) => g.rows.length);
 }
+
+/** The ladder's rows, flat and in order, for the pie. */
+let ladderRows = [];
 
 function renderLadder() {
   const d = summary.dists[scope] || {};
   const versions = (d.version || []).filter(([k]) => k !== "Unknown");
   const unknown = (d.version || []).find(([k]) => k === "Unknown")?.[1] || 0;
   const sum = total(d.version || []);
-  // History from another scope or range (still loading, or failed to) says nothing about this one.
-  const h = versionHistory?.scope === scope && versionHistory.days === days ? versionHistory : null;
-  const change = (row) => {
-    if (!h || row.merged || !h.first.has(row.key) || !h.last.has(row.key)) return "–";
-    const pts = h.last.get(row.key) - h.first.get(row.key);
-    // The unit goes on narrow screens; the note under the table says what the numbers are.
-    return [Math.abs(pts) < 0.05 ? "0.0" : `${pts > 0 ? "+" : "−"}${Math.abs(pts).toFixed(1)}`, el("span", { class: "unit", text: " pts" })];
-  };
-  const note = (r) => (r.merged || r.key === "Unknown" ? "" : releaseNote(r.key));
-  const row = (r, line) => el("tr", {},
-    line, el("th", { class: "ver", scope: "row" }, el("span", { text: r.label }), note(r) ? el("small", { text: note(r) }) : null),
-    el("td", { class: "bar", "aria-hidden": "true" }, el("i", { style: { width: `${(r.n / sum) * 100}%`, background: r.merged ? "var(--other)" : versionPalette.color(r.key) } })),
-    el("td", { class: "r", text: pct(r.n / sum) }), el("td", { class: "r n", text: fmt(r.n) }), el("td", { class: "r chg" }, change(r)));
-  const lineHead = (g) => el("th", { class: "line", scope: "rowgroup", rowspan: g.rows.length, text: g.label });
+  const note = (r) => (r.merged || !isCoreVersion(r.key) ? "" : releaseNote(r.key));
+  const row = (r) => el("tr", {},
+    el("th", { class: "ver", scope: "row" }, el("span", { text: r.label }), note(r) ? [" ", el("small", { text: note(r) })] : null),
+    el("td", { class: "bar", "aria-hidden": "true" }, r.n ? el("i", { style: { width: `${(r.n / sum) * 100}%`, background: r.merged ? "var(--other)" : versionPalette.color(r.key) } }) : null),
+    el("td", { class: "r", text: pct(sum ? r.n / sum : 0) }), el("td", { class: "r n", text: fmt(r.n) }));
+  const groups = ladderGroups(versions, sum);
+  const none = unknown ? [{ key: "Unknown", label: "No answer this week", n: unknown }] : [];
+  ladderRows = [...groups.flatMap((g) => g.rows), ...none];
+  const head = (label) => el("tr", { class: "group" }, el("th", { colspan: 4, scope: "rowgroup", text: label }));
   $("sw-ladder").replaceChildren(
-    el("thead", {}, el("tr", {}, el("th", { colspan: 2, text: "Release" }), el("td", { "aria-hidden": "true" }),
-      el("th", { class: "r", text: "Share" }), el("th", { class: "r n", text: "Count" }), el("th", { class: "r", text: "Change" }))),
-    ...ladderGroups(versions, sum).map((g) => el("tbody", {}, ...g.rows.map((r, j) => row(r, j ? null : lineHead(g))))),
-    ...(unknown ? [el("tbody", { class: "unknown" }, row({ key: "Unknown", label: "No answer this week", n: unknown }, el("td", { class: "line" })))] : []));
-  const span = { 1: "24 hours", 7: "7 days", 30: "30 days", 90: "90 days", 365: "year" }[days];
-  $("sw-change").textContent = !h ? "" : historyShort(h) ? `Change is in percentage points of share since ${shortDate(h.t0)}, when our history starts.`
-    : `Change is in percentage points of share over the last ${span}.`;
+    el("thead", {}, el("tr", {}, el("th", { text: "Version" }), el("td", { "aria-hidden": "true" }),
+      el("th", { class: "r", text: "Share" }), el("th", { class: "r n", text: "Count" }))),
+    ...groups.map((g) => el("tbody", {}, g.label ? head(g.label) : null, ...g.rows.map(row))),
+    ...(none.length ? [el("tbody", { class: "unknown" }, ...none.map(row))] : []));
+  if (swView === "now") renderVersionPie();
+}
+
+/** "Share now": the ladder's rows as a pie, the latest release's share in the middle (0% before anything runs it). */
+function renderVersionPie() {
+  const rows = ladderRows.filter((r) => r.n > 0);
+  const sum = rows.reduce((a, r) => a + r.n, 0);
+  const color = (r) => (r.key === "Unknown" ? "var(--axis)" : r.merged ? "var(--other)" : versionPalette.color(r.key));
+  const latest = finals[0] && ladderRows.find((r) => r.key === finals[0] && !r.merged);
+  donut($("versions-pie"), rows.map((r) => [r.key, r.n]), {
+    limit: rows.length,
+    color: (_, i) => color(rows[i]),
+    label: (k) => rows.find((r) => r.key === k).label,
+    center: latest ? [pct(sum ? latest.n / sum : 0), "latest release"] : null,
+  });
+  $("versions-pie-legend").replaceChildren(...rows.map((r) => el("span", {}, el("i", { style: { background: color(r) } }), r.label, el("b", { text: ` ${pct(r.n / sum)}` }))));
 }
 
 function renderSoftware() {
@@ -404,30 +427,42 @@ function renderNetworks() {
 
 let historyRequest = 0;
 
+/**
+ * Narrows the version history to `n` named series, the latest release always among them (the API keeps
+ * the most common over the whole range, which on a long range can leave out a new release); the rest
+ * fold into "Other".
+ */
+function keepVersions(doc, n) {
+  const named = doc.series.filter((x) => x.key !== "Other" && x.key !== "Unknown");
+  const keep = named.slice(0, n);
+  const latest = named.find((x) => x.key === finals[0]);
+  if (latest && !keep.includes(latest)) keep.splice(n - 1, 1, latest);
+  const rest = named.filter((x) => !keep.includes(x));
+  if (!rest.length) return;
+  let other = doc.series.find((x) => x.key === "Other");
+  if (!other) { other = { key: "Other", values: doc.t.map(() => 0) }; }
+  other = { key: "Other", values: other.values.map((v, i) => rest.reduce((a, x) => a + x.values[i], v)) };
+  doc.series = [...keep, other, ...doc.series.filter((x) => x.key === "Unknown")];
+}
+
 async function loadHistory() {
   const mine = ++historyRequest;
   versionsChart?.loading();
   sizeChart?.loading();
   const [v, s] = await Promise.all([
-    api(`${net}/history?scope=${scope}&dim=version&days=${days}&top=6`),
+    api(`${net}/history?scope=${scope}&dim=version&days=${days}&top=20`),
     api(`${net}/history?dim=totals&days=${days}`),
   ]);
   if (mine !== historyRequest) return; // a newer scope or range was picked meanwhile
-  // Stacked oldest at the bottom to newest on top, as the ladder reads from the top; no answer and
-  // the folded rest underneath.
-  const rank = (k) => (k === "Unknown" ? -2 : k === "Other" ? -1 : 0);
-  v.series.sort((a, b) => rank(a.key) - rank(b.key) || byNewest(b.key, a.key));
-  versionHistory = null;
-  if (v.t.length >= 2) {
-    const shares = (i) => {
-      const tot = v.series.reduce((acc, s) => acc + s.values[i], 0) || 1;
-      return new Map(v.series.map((s) => [s.key, (s.values[i] / tot) * 100]));
-    };
-    versionHistory = { scope, days, t0: v.t[0], first: shares(0), last: shares(v.t.length - 1) };
-  }
-  renderLadder();
-  $("sw-since").textContent = versionHistory && historyShort(versionHistory)
-    ? `Our history starts ${shortDate(versionHistory.t0, true)}, so this range shows less than it asks for.` : "";
+  keepVersions(v, 6);
+  // Stacked in the ladder's order read upwards: the latest release on top, no answer at the bottom.
+  // Without the release list the ladder goes by share, and so does the stack.
+  const share = (k) => v.series.find((x) => x.key === k).values.reduce((a, b) => a + b, 0);
+  v.series.sort((a, b) => (releases ? ladderOrder(b.key, a.key) : stackKind(b.key) - stackKind(a.key) || share(a.key) - share(b.key)));
+  const t0 = v.t.length >= 2 ? v.t[0] : null;
+  $("sw-since").textContent = t0 && t0 > Date.now() / 1000 - Number(days) * 86400 + 86400
+    ? `Our history starts ${new Date(t0 * 1000).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" })}, so this range shows less than it asks for.`
+    : "";
   const labels = { reachable_nodes: "Reachable nodes", masternodes: "Enabled masternodes", masternodes_reachable: "Masternodes reachable" };
   const vopts = { stacked: true, share: true, palette: versionPalette, label: (k) => (k === "Unknown" ? "No answer this week" : k), title: "Version share over time", height: 240 };
   // The three counts sit close together far from zero: an axis that starts at zero flattens them.
@@ -514,7 +549,6 @@ function renderPlatform() {
     plainStat("Healthy", `${fmt(p.healthy)} of ${fmt(p.checked)}`, null, p.healthy / p.checked >= 0.95 ? "good" : "warning"),
     plainStat("DAPI answered", fmt(p.https_ok)),
     plainStat("Tenderdash P2P open", fmt(p.p2p_ok)),
-    plainStat("Certificates expiring", fmt(p.cert_expiring_3d), "within 3 days", p.cert_expiring_3d ? "warning" : null),
     plainStat("Platform height", p.max_height != null ? fmt(p.max_height) : "–", "highest seen"));
   for (const [bar, legend, rows] of [["drive-bar", "drive-legend", p.drive], ["td-bar", "td-legend", p.tenderdash]]) {
     const palette = new Palette();
@@ -575,6 +609,17 @@ function renderControls() {
     el("span", { class: "muted", text: "Describing" }),
     segmented(SCOPES, scope, (v) => { scope = v; remember(); renderSections(); loadHistorySafely(); }, "Which nodes"));
   $("sw-range").replaceChildren(segmented(RANGES, days, (v) => { days = v; remember(); loadHistorySafely(); }, "Time range"));
+  $("sw-view").replaceChildren(segmented(SW_VIEWS, swView, (v) => { swView = v; remember(); showVersionsView(); }, "Versions chart"));
+  showVersionsView();
+}
+
+/** Shows the chosen versions chart: the time series with its range picker, or the pie. */
+function showVersionsView() {
+  const now = swView === "now";
+  $("sw-chart-title").textContent = now ? "Share now" : "Share over time";
+  for (const id of ["sw-range", "versions-chart", "sw-since"]) $(id).hidden = now;
+  $("versions-pie-box").hidden = !now;
+  if (now) renderVersionPie();
 }
 
 async function main() {
