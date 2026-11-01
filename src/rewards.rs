@@ -295,22 +295,38 @@ struct Quorums {
     last_proposer: [u8; 32],
 }
 
+/// Most validator sets, and members per set, a sample may have (mainnet has 24 of 100): the schedule
+/// walks every member of every set, so one evonode's answer can't make that billions of steps.
+const MAX_SETS: usize = 100;
+const MAX_MEMBERS: usize = 1_000;
+
 /// GetCurrentQuorumsInfoResponse: v0 { quorum_hashes = 1 [], current_quorum_hash = 2, validator_sets = 3
 /// [ { quorum_hash = 1, members = 3 [ { pro_tx_hash = 1, is_banned = 3 } ] } ], last_block_proposer = 4,
-/// metadata = 5 }.
+/// metadata = 5 }. The rotation order is kept without repeats.
 fn parse_quorums(resp: &[u8]) -> Result<(Quorums, Meta)> {
     let v0 = msg(resp, 1).ok_or_else(|| anyhow!("no v0 answer"))?;
     let mut sets = Vec::new();
     for s in all(v0, 3)? {
+        if sets.len() == MAX_SETS {
+            bail!("more than {MAX_SETS} validator sets");
+        }
         let mut members = Vec::new();
         for m in all(s, 3)? {
+            if members.len() == MAX_MEMBERS {
+                bail!("a validator set of more than {MAX_MEMBERS} members");
+            }
             members.push(Member { pro_tx_hash: id32(msg(m, 1).unwrap_or_default())?, banned: uint(m, 3) == Some(1) });
         }
         members.sort_by_key(|m| m.pro_tx_hash);
         sets.push(ValidatorSet { quorum_hash: msg(s, 1).unwrap_or_default().to_vec(), members });
     }
+    let mut seen = HashSet::new();
+    let order: Vec<Vec<u8>> = all(v0, 1)?.into_iter().filter(|h| seen.insert(*h)).map(<[u8]>::to_vec).collect();
+    if order.len() > MAX_SETS {
+        bail!("more than {MAX_SETS} validator sets in the rotation");
+    }
     let q = Quorums {
-        order: all(v0, 1)?.into_iter().map(<[u8]>::to_vec).collect(),
+        order,
         current: msg(v0, 2).unwrap_or_default().to_vec(),
         sets,
         last_proposer: id32(msg(v0, 4).unwrap_or_default()).context("last block proposer")?,
@@ -388,7 +404,10 @@ fn votes_required(active_evonodes: u64) -> u64 {
 /// 1 = the next block).
 fn schedule(q: &Quorums) -> Vec<([u8; 32], u64)> {
     let sets: HashMap<&[u8], &ValidatorSet> = q.sets.iter().map(|s| (s.quorum_hash.as_slice(), s)).collect();
-    let order: Vec<&[u8]> = q.order.iter().map(Vec::as_slice).filter(|h| sets.contains_key(h)).collect();
+    // Each set once: the walk below is (sets in the order) × (their members).
+    let mut listed = HashSet::new();
+    let order: Vec<&[u8]> =
+        q.order.iter().map(Vec::as_slice).filter(|h| sets.contains_key(h) && listed.insert(*h)).collect();
     let mut out = Vec::new();
     if order.is_empty() {
         return out;
@@ -2265,6 +2284,67 @@ mod tests {
         assert!(s.windows(2).all(|w| w[0].1 < w[1].1));
         assert_eq!(s.iter().map(|x| x.0).collect::<HashSet<_>>().len(), s.len());
         assert!(s.len() > 300);
+    }
+
+    /// A getCurrentQuorumsInfo answer: the rotation `order`, and sets of (quorum hash, members).
+    fn quorums_answer(order: &[&[u8]], sets: &[(&[u8], usize)]) -> Vec<u8> {
+        let mut v0 = Vec::new();
+        for h in order {
+            put_bytes(&mut v0, 1, h);
+        }
+        put_bytes(&mut v0, 2, sets.first().map_or(&[][..], |s| s.0));
+        for &(hash, n) in sets {
+            let mut s = Vec::new();
+            put_bytes(&mut s, 1, hash);
+            for i in 0..n {
+                let mut m = Vec::new();
+                let mut pro_tx = [0u8; 32];
+                pro_tx[..8].copy_from_slice(&(i as u64).to_be_bytes());
+                put_bytes(&mut m, 1, &pro_tx);
+                put_bytes(&mut s, 3, &m);
+            }
+            put_bytes(&mut v0, 3, &s);
+        }
+        put_bytes(&mut v0, 4, &id(0));
+        let mut resp = Vec::new();
+        put_bytes(&mut resp, 1, &v0);
+        resp
+    }
+
+    #[test]
+    fn hostile_validator_sets_are_cheap() {
+        let start = Instant::now();
+        // ~1 MB: 250k repeats of one (empty) quorum hash pointing at a set of 14k members. Walked as
+        // sent, that's 3.5e9 steps; it's turned down instead.
+        let repeats = vec![&[][..]; 250_000];
+        let err = parse_quorums(&quorums_answer(&repeats, &[(&[], 14_000)])).unwrap_err();
+        assert!(err.to_string().contains("members"), "{err:#}");
+        // Within the caps, repeats count once.
+        let (q, _) = parse_quorums(&quorums_answer(&repeats, &[(&[], MAX_MEMBERS)])).unwrap();
+        assert_eq!((q.order.len(), schedule(&q).len()), (1, MAX_MEMBERS - 1));
+        // Too many sets, in the answer or in the rotation.
+        let hashes: Vec<[u8; 1]> = (0..=MAX_SETS as u8).map(|i| [i]).collect();
+        let many: Vec<(&[u8], usize)> = hashes.iter().map(|h| (&h[..], 1)).collect();
+        assert!(parse_quorums(&quorums_answer(&[], &many)).is_err());
+        let order: Vec<&[u8]> = hashes.iter().map(|h| &h[..]).collect();
+        assert!(parse_quorums(&quorums_answer(&order, &many[..1])).is_err());
+        // The schedule itself doesn't trust the order either.
+        let big = set(0, &[]);
+        let members = (0..14_000u32)
+            .map(|i| {
+                let mut p = [0u8; 32];
+                p[..4].copy_from_slice(&i.to_be_bytes());
+                Member { pro_tx_hash: p, banned: false }
+            })
+            .collect();
+        let q = Quorums {
+            order: vec![vec![0]; 250_000],
+            current: vec![0],
+            sets: vec![ValidatorSet { members, ..big }],
+            last_proposer: [0; 32],
+        };
+        assert_eq!(schedule(&q).len(), 13_999);
+        assert!(start.elapsed() < Duration::from_secs(5), "{:?}", start.elapsed());
     }
 
     #[test]
