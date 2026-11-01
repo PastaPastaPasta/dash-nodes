@@ -10,12 +10,16 @@
 //! for when each evonode proposes next and which turns it misses.
 //!
 //! The calls are unproved gRPC-web, as in platform.rs, to evonodes that passed its checks. An answer
-//! counts only once two evonodes at different IPs give the same one, at the same chain state; finalized
-//! epochs never change, so each is checked once, when it's stored, against Drive's own rules too
-//! (`check_finalized`). Core heights an answer claims are held to our dashd's tip.
+//! counts only once two evonodes at different IPs give the same one, at the same chain state. Finalized
+//! epochs never change, so each is stored once: three evonodes have to agree on it, and it's checked
+//! against Drive's own rules (`check_finalized`): numbered as its start time says, starting where the
+//! one before ended, and the last ending where the current epoch starts. Core heights an answer
+//! claims are held to our dashd's tip. If finalized epochs stop moving on all the same, the newest
+//! stored ones are asked for again (`recover_tail`).
 
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
+use std::ops::RangeInclusive;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -487,6 +491,11 @@ struct Peers {
     list: Vec<SocketAddr>,
     next: usize,
     client: reqwest::Client,
+    /// How many of them (by IP) passed platform.rs's latest check.
+    healthy: usize,
+    /// Answers from a chain state before this (unix ms) are passed over: evonodes left behind, like
+    /// those that didn't upgrade and halted, still answer and agree with each other.
+    min_time_ms: u64,
 }
 
 /// The public addresses among `addrs`, the first of each IP only: one host's evonodes count as one.
@@ -521,12 +530,13 @@ impl Peers {
             })
             .await?;
         let healthy = distinct_ips(&healthy);
-        let mut list = if healthy.len() >= 4 { healthy } else { distinct_ips(&all) };
+        let n_healthy = healthy.len();
+        let mut list = if n_healthy >= 4 { healthy } else { distinct_ips(&all) };
         list.shuffle(&mut rand::rng());
         if list.len() < 2 {
             bail!("fewer than two evonodes (by IP) to ask");
         }
-        Ok(Peers { list, next: 0, client: client.clone() })
+        Ok(Peers { list, next: 0, client: client.clone(), healthy: n_healthy, min_time_ms: 0 })
     }
 
     fn take(&mut self) -> SocketAddr {
@@ -554,8 +564,8 @@ impl Peers {
         bail!("{method}: {}", error.unwrap_or_else(|| "no answer".into()))
     }
 
-    /// Asks evonodes in turn until two in a row, at different IPs, give the same answer at the same
-    /// chain state (`agreed_meta`), and returns it with the metadata they agree on.
+    /// Asks evonodes in turn until two at different IPs give the same answer at the same chain state
+    /// (`agreed_meta`), and returns it with the metadata they agree on.
     async fn agreed<T: PartialEq>(
         &mut self,
         method: &str,
@@ -563,28 +573,50 @@ impl Peers {
         max: usize,
         parse: impl Fn(&[u8]) -> Result<(T, Meta)>,
     ) -> Result<(T, Meta)> {
-        let mut last: Option<(T, Meta, SocketAddr)> = None;
+        self.agreed_by(2, method, request, max, parse).await
+    }
+
+    /// As `agreed`, but `need` evonodes at different IPs have to give the answer.
+    async fn agreed_by<T: PartialEq>(
+        &mut self,
+        need: usize,
+        method: &str,
+        request: &[u8],
+        max: usize,
+        parse: impl Fn(&[u8]) -> Result<(T, Meta)>,
+    ) -> Result<(T, Meta)> {
+        // Each answer given so far, with the chain state its evonodes agree on and their IPs.
+        let mut answers: Vec<(T, Meta, Vec<IpAddr>)> = Vec::new();
         let mut error = None;
-        for _ in 0..MAX_ASKED.min(self.list.len() + 1) {
+        for _ in 0..(MAX_ASKED + need - 2).min(self.list.len() + 1) {
             let addr = self.take();
             let answer = platform::unary(&self.client, addr, method, request, max).await.and_then(|(m, _)| parse(&m));
             match answer {
+                Ok((_, m)) if m.time_ms < self.min_time_ms => {
+                    error = Some(format!("{addr}: behind (chain time {})", m.time_ms / 1000));
+                }
                 Ok((t, m)) => {
-                    if let Some((prev, pm, pa)) = &last
-                        && pa.ip() != addr.ip()
-                        && *prev == t
-                        && let Some(meta) = agreed_meta(pm, &m)
-                    {
-                        return Ok((t, meta));
+                    let same = answers.iter_mut().find_map(|(at, am, ips)| {
+                        let meta = agreed_meta(am, &m).filter(|_| !ips.contains(&addr.ip()) && *at == t)?;
+                        Some((am, ips, meta))
+                    });
+                    match same {
+                        Some((am, ips, meta)) => {
+                            *am = meta;
+                            ips.push(addr.ip());
+                            if ips.len() >= need {
+                                return Ok((t, meta));
+                            }
+                        }
+                        None => answers.push((t, m, vec![addr.ip()])),
                     }
-                    last = Some((t, m, addr));
                 }
                 Err(e) => error = Some(format!("{addr}: {e:#}")),
             }
         }
-        match (last, error) {
-            (Some((_, _, addr)), _) => bail!("{method}: no second evonode agreed with {addr}"),
-            (None, e) => bail!("{method}: {}", e.unwrap_or_else(|| "no answer".into())),
+        match (answers.is_empty(), error) {
+            (false, _) => bail!("{method}: fewer than {need} evonodes agreed"),
+            (true, e) => bail!("{method}: {}", e.unwrap_or_else(|| "no answer".into())),
         }
     }
 }
@@ -647,13 +679,50 @@ fn local_tip(ctx: &NetCtx) -> Option<u64> {
     (s.synced && s.blocks > 0).then_some(s.blocks as u64)
 }
 
+/// The chain-locked Core height two evonodes agree on, held to our dashd's tip.
+fn held_core_height(agreed: u64, tip: Option<u64>) -> u64 {
+    tip.map_or(agreed, |t| agreed.min(t))
+}
+
+/// Seconds per epoch (Drive's EPOCH_TIME_LENGTH_S: 788,400 in .env.mainnet, 3,600 in .env.testnet).
+fn epoch_secs(net: Network) -> u64 {
+    if net == Network::Mainnet { 788_400 } else { 3_600 }
+}
+
+/// Drive's epoch indexes are u16 (EpochInfoV0::calculate).
+const MAX_EPOCH: u64 = u16::MAX as u64;
+/// Evonodes (by IP) that have to agree on a page of finished epochs: it's stored once and never asked
+/// for again.
+const FINALIZED_AGREE: usize = 3;
+/// Rounds in a row that fail to move on from the same stored epoch before the newest stored epochs
+/// are fetched again (`recover_tail`).
+const STALL_ROUNDS: u32 = 3;
+
+/// What the collector carries from one round to the next.
+#[derive(Debug, Default)]
+struct Progress {
+    /// Rounds in a row that found a new Platform chain (see `restart`).
+    behind: u32,
+    /// The newest stored epoch when finished epochs last failed to move on, and how many rounds in a
+    /// row they have.
+    stalled: (Option<u64>, u32),
+}
+
+impl Progress {
+    fn stalled_at(&mut self, newest: Option<u64>) {
+        self.stalled = (newest, if self.stalled.0 == newest { self.stalled.1 + 1 } else { 1 });
+    }
+}
+
 pub async fn run(ctx: Arc<NetCtx>) {
     let client = platform::client();
     let explorer = explorer_client();
+    // What's stored is served from the start, rather than gathered per request until a round ends.
+    refresh_board(&ctx).await;
     wait_for_evonodes(&ctx).await;
-    let mut behind = 0;
+    let mut progress = Progress::default();
     loop {
-        if let Err(e) = round(&ctx, &client, &explorer, &mut behind).await {
+        if let Err(e) = round(&ctx, &client, &explorer, &mut progress).await {
             tracing::warn!(net = ctx.net.name(), "platform rewards: {e:#}");
         }
         refresh_board(&ctx).await;
@@ -690,58 +759,187 @@ fn clear_platform(c: &mut Connection) -> Result<()> {
     Ok(())
 }
 
-/// The current epoch, as far as it can be checked here: it started in the past, at or below our tip.
-fn check_current(e: &Epoch, meta: &Meta, tip: Option<u64>, now: u64) -> Result<()> {
+/// What a current epoch far below the newest stored one means.
+#[derive(Debug, PartialEq)]
+enum Restart {
+    /// It isn't.
+    Go,
+    /// Evonodes left behind (they started that epoch before the stored one), or a wrong stored epoch:
+    /// wait, and look at the stored ones again (`recover_tail`).
+    Lag,
+    /// A new chain, seen fewer than RESET_ROUNDS rounds in a row.
+    Pending,
+    /// A new chain: clear what was collected.
+    Clear,
+}
+
+/// A current epoch RESET_MARGIN or more below the newest stored one is a new chain only on testnet,
+/// and only if it started after that stored epoch did (a chain that halted started its epoch earlier).
+/// `behind` counts the rounds in a row that saw a new chain.
+fn restart(net: Network, current: &Epoch, newest: Option<&Before>, behind: &mut u32) -> Restart {
+    let Some(n) = newest.filter(|n| current.epoch.saturating_add(RESET_MARGIN) <= n.epoch) else {
+        *behind = 0;
+        return Restart::Go;
+    };
+    if net == Network::Mainnet || current.start_ms / 1000 <= n.first_block_time {
+        *behind = 0;
+        return Restart::Lag;
+    }
+    *behind += 1;
+    if *behind < RESET_ROUNDS {
+        return Restart::Pending;
+    }
+    *behind = 0;
+    Restart::Clear
+}
+
+/// The current epoch, on its own: numbered as the answer's metadata says, within Drive's u16 epoch
+/// indexes, started in the past, and at or below the chain-locked height the answer reports.
+fn check_current(e: &Epoch, meta: &Meta, now: u64) -> Result<()> {
     if e.epoch != meta.epoch {
         bail!("epoch {} answered at epoch {}", e.epoch, meta.epoch);
+    }
+    if e.epoch > MAX_EPOCH {
+        bail!("epoch {} is past Drive's last epoch index", e.epoch);
     }
     if e.start_ms / 1000 > now + SKEW_SECS {
         bail!("epoch {} starts in the future", e.epoch);
     }
-    if let Some(t) = tip
-        && e.first_core_height > t
-    {
-        bail!("epoch {} starts at Core block {}, past our tip {t}", e.epoch, e.first_core_height);
+    if e.first_core_height > meta.core_height {
+        bail!("epoch {} starts at Core block {}, past the answer's {}", e.epoch, e.first_core_height, meta.core_height);
     }
     Ok(())
 }
 
-async fn round(ctx: &NetCtx, client: &reqwest::Client, explorer: &reqwest::Client, behind: &mut u32) -> Result<()> {
+/// Drive numbers epochs by time: a block at `t` is in epoch ⌊(t − genesis) / d⌋ (EpochInfoV0::calculate),
+/// so epoch n's first block is in [genesis + n·d, genesis + (n + 1)·d). Two epochs' starts are then their
+/// distance in epochs times d apart, give or take less than d (d itself in whole seconds). `a` and `b`
+/// are (epoch, start), `a` the earlier.
+fn starts_fit(a: (u64, u64), b: (u64, u64), d: u64) -> bool {
+    match (b.0.checked_sub(a.0), b.1.checked_sub(a.1)) {
+        (Some(k), Some(dt)) => k.checked_mul(d).is_some_and(|x| x.abs_diff(dt) <= d),
+        _ => false,
+    }
+}
+
+/// The current epoch against the stored ones: after the newest (in epochs, blocks and Core blocks),
+/// and numbered as its start time says from the newest and from the oldest.
+fn check_current_follows(e: &Epoch, newest: Option<&Before>, oldest: Option<&Before>, d: u64) -> Result<()> {
+    let start = e.start_ms / 1000;
+    for b in newest.into_iter().chain(oldest) {
+        if e.epoch <= b.epoch || !starts_fit((b.epoch, b.first_block_time), (e.epoch, start), d) {
+            bail!(
+                "epoch {} (started {start}) doesn't follow stored epoch {} (started {})",
+                e.epoch,
+                b.epoch,
+                b.first_block_time
+            );
+        }
+    }
+    if let Some(b) = newest
+        && (e.first_block_height < b.end_block || e.first_core_height < b.next_core_height)
+    {
+        bail!("epoch {} starts before stored epoch {} ended", e.epoch, b.epoch);
+    }
+    Ok(())
+}
+
+/// The last finished epoch before the current one ends where the current one starts: at its first
+/// Platform block, and at its Core start (getEpochsInfo gives the current epoch's Core start as is; a
+/// finished epoch's first Core block is the one after it).
+fn check_ties(last: &Before, current: &Epoch, d: u64) -> Result<()> {
+    if !starts_fit((last.epoch, last.first_block_time), (current.epoch, current.start_ms / 1000), d)
+        || last.end_block != current.first_block_height
+        || last.next_core_height != current.first_core_height
+    {
+        bail!(
+            "epoch {} ends at block {} and Core block {}, but epoch {} starts at {} and {}",
+            last.epoch,
+            last.end_block,
+            last.next_core_height,
+            current.epoch,
+            current.first_block_height,
+            current.first_core_height
+        );
+    }
+    Ok(())
+}
+
+async fn round(
+    ctx: &NetCtx,
+    client: &reqwest::Client,
+    explorer: &reqwest::Client,
+    progress: &mut Progress,
+) -> Result<()> {
     let mut peers = Peers::load(ctx, client).await?;
     let tip = local_tip(ctx);
     let now_secs = db::now() as u64;
+    let net = ctx.net.name();
+    let limits = Limits { tip, now: now_secs, epoch_secs: epoch_secs(ctx.net) };
+    if progress.stalled.1 >= STALL_ROUNDS {
+        progress.stalled.1 = 0;
+        match recover_tail(ctx, &mut peers, limits).await {
+            Ok(Some(from)) => tracing::warn!(
+                net,
+                "platform rewards: stored epochs from {from} on aren't what {FINALIZED_AGREE} evonodes give now; dropped them to fetch again"
+            ),
+            Ok(None) => tracing::info!(net, "platform rewards: the newest stored epochs are what evonodes give now"),
+            Err(e) => tracing::warn!(net, "platform rewards: checking the newest stored epochs: {e:#}"),
+        }
+    }
+    let (newest, oldest) = ctx.db.read(stored_ends).await?;
+    // Evonodes whose chain is older than the newest stored epoch are behind: ask others.
+    peers.min_time_ms = newest.map_or(0, |b| b.first_block_time * 1000);
     // The current epoch: getEpochsInfo { count = 2: 1, ascending = 3: false }, from the latest epoch.
     let (epochs, meta) = peers.agreed("getEpochsInfo", &v0(&[0x10, 0x01]), SMALL_ANSWER, parse_epochs).await?;
     let current = *epochs.first().ok_or_else(|| anyhow!("getEpochsInfo: no epoch"))?;
-    check_current(&current, &meta, tip, now_secs)?;
-    let net = ctx.net.name();
-    let newest: Option<i64> = ctx.db.read(latest_finalized).await?;
-    if let Some(newest) = newest
-        && current.epoch.saturating_add(RESET_MARGIN) <= newest as u64
-    {
-        *behind += 1;
-        if ctx.net == Network::Mainnet || *behind < RESET_ROUNDS {
+    check_current(&current, &meta, now_secs)?;
+    let stored_epoch = newest.map(|b| b.epoch);
+    match restart(ctx.net, &current, newest.as_ref(), &mut progress.behind) {
+        Restart::Go => {
+            check_current_follows(&current, newest.as_ref(), oldest.as_ref(), limits.epoch_secs)
+                .inspect_err(|_| progress.stalled_at(stored_epoch))?;
+        }
+        r @ (Restart::Lag | Restart::Pending) => {
+            if r == Restart::Lag {
+                progress.stalled_at(stored_epoch);
+            }
             bail!(
-                "Platform is at epoch {}, but epoch {newest} is stored ({} rounds in a row); not collecting",
+                "Platform is at epoch {} (started {}), but epoch {} is stored; not collecting",
                 current.epoch,
-                behind
+                current.start_ms / 1000,
+                stored_epoch.unwrap_or_default()
             );
         }
-        tracing::warn!(
-            net,
-            "platform rewards: Platform restarted at epoch {} (epoch {newest} was stored); clearing what was collected",
-            current.epoch
-        );
-        ctx.db.write(clear_platform).await?;
-        *ctx.platform_schedule.write().unwrap() = None;
+        Restart::Clear => {
+            tracing::warn!(
+                net,
+                "platform rewards: Platform restarted at epoch {} (epoch {} was stored); clearing what was collected",
+                current.epoch,
+                stored_epoch.unwrap_or_default()
+            );
+            ctx.db.write(clear_platform).await?;
+            *ctx.platform_schedule.write().unwrap() = None;
+            peers.min_time_ms = 0;
+        }
     }
-    *behind = 0;
     // Chain heights and time as both evonodes put them, held to our tip and clock.
-    let core_height = tip.map_or(meta.core_height, |t| meta.core_height.min(t));
+    let core_height = held_core_height(meta.core_height, tip);
     let time = (meta.time_ms / 1000).min(now_secs);
     // Each part stands alone: one that fails (live numbers can move between two evonodes' answers)
     // keeps its last values and is tried again next round.
-    let stored = soft(net, "finished epochs", finalized(ctx, &mut peers, current.epoch, tip).await);
+    let stored = if let Some(t) = tip.filter(|t| *t < current.first_core_height) {
+        // Finished epochs end at the current one's Core start, which our dashd hasn't reached.
+        tracing::info!(net, "platform rewards: our dashd is at Core block {t}, behind Platform; finished epochs wait");
+        Some(0)
+    } else {
+        let r = finalized(ctx, &mut peers, &current, limits).await;
+        match &r {
+            Ok(_) => progress.stalled = (None, 0),
+            Err(_) => progress.stalled_at(stored_epoch),
+        }
+        soft(net, "finished epochs", r)
+    };
     let blocks = soft(net, "blocks this epoch", epoch_blocks(&mut peers, current.epoch).await);
     let ids = ctx.db.read(registered_evonodes).await?;
     let balances = soft(net, "balances", balances(&mut peers, &ids).await);
@@ -854,33 +1052,86 @@ fn soft<T>(net: &str, what: &str, r: Result<T>) -> Option<T> {
     r.map_err(|e| tracing::warn!(net, "platform rewards: {what}: {e:#}")).ok()
 }
 
-/// What a page of finalized epochs is checked against: the newest stored one before it.
-#[derive(Clone, Copy, Debug)]
+/// What a finished epoch is checked against: a stored one before it (the newest, or the oldest for
+/// its number), or the one before it in the same page.
+#[derive(Clone, Copy, Debug, PartialEq)]
 struct Before {
+    epoch: u64,
     first_block_time: u64,
+    /// Where the next epoch starts: its first Platform block plus its blocks.
+    end_block: u64,
     next_core_height: u64,
 }
 
-/// Checks a page of finalized epochs asked for as `start..=end` against Drive's rules, so two evonodes
-/// agreeing can't make up epochs or payouts: in range and in order, each starting where the one
-/// before ended (Core block after its `next_core_height`, later in time) and not in the future, its
-/// proposers' blocks adding up to its total, Core heights at or below our tip, and its Core block
-/// rewards exactly what Drive pays for its Core blocks.
-fn check_finalized(
-    epochs: &[Finalized],
-    start: u64,
-    end: u64,
-    mut before: Option<Before>,
+impl Before {
+    fn of(e: &Finalized) -> Before {
+        Before {
+            epoch: e.epoch,
+            first_block_time: e.first_block_time_ms / 1000,
+            end_block: e.first_block_height.saturating_add(e.total_blocks),
+            next_core_height: e.next_core_height,
+        }
+    }
+}
+
+/// The newest and the oldest stored epochs.
+fn stored_ends(c: &Connection) -> Result<(Option<Before>, Option<Before>)> {
+    let end = |order: &str| {
+        c.query_row(
+            &format!(
+                "SELECT epoch, first_block_time, first_block_height + total_blocks, next_core_height
+                 FROM platform_epochs ORDER BY epoch {order} LIMIT 1"
+            ),
+            [],
+            |r| {
+                Ok(Before {
+                    epoch: r.get::<_, i64>(0)? as u64,
+                    first_block_time: r.get::<_, i64>(1)? as u64,
+                    end_block: r.get::<_, i64>(2)? as u64,
+                    next_core_height: r.get::<_, i64>(3)? as u64,
+                })
+            },
+        )
+        .optional()
+    };
+    Ok((end("DESC")?, end("ASC")?))
+}
+
+/// What finished epochs are held to besides each other: our dashd's tip, our clock, the epoch length.
+#[derive(Clone, Copy, Debug)]
+struct Limits {
     tip: Option<u64>,
     now: u64,
+    epoch_secs: u64,
+}
+
+/// Checks a page of finished epochs asked for as `range` against Drive's rules, so evonodes agreeing
+/// can't make up epochs or payouts:
+/// - in range and in order, within Drive's u16 indexes, not in the future, and numbered as their start
+///   says (`starts_fit`, from the one before and from `oldest`, the oldest stored);
+/// - each starting where the one before ended: at the Platform block after its last, and at the Core
+///   block after its `next_core_height`;
+/// - its proposers' blocks adding up to its total, at least one;
+/// - Core heights at or below our tip, and its Core block rewards exactly what Drive pays for them;
+/// - with `current` (the page ends just before it), the last ending where `current` starts.
+fn check_finalized(
+    epochs: &[Finalized],
+    range: RangeInclusive<u64>,
+    mut before: Option<Before>,
+    mut oldest: Option<Before>,
+    current: Option<&Epoch>,
+    limits: Limits,
 ) -> Result<()> {
     let mut last_epoch = None;
     for e in epochs {
         let n = e.epoch;
-        if n < start || n > end || last_epoch.is_some_and(|l| n <= l) {
-            bail!("epoch {n} wasn't asked for, or is out of order ({start}–{end})");
+        if !range.contains(&n) || last_epoch.is_some_and(|l| n <= l) {
+            bail!("epoch {n} wasn't asked for, or is out of order ({}–{})", range.start(), range.end());
         }
         last_epoch = Some(n);
+        if n > MAX_EPOCH {
+            bail!("epoch {n} is past Drive's last epoch index");
+        }
         let mut ids = HashSet::new();
         let mut blocks = 0u64;
         for (id, b) in &e.proposers {
@@ -892,24 +1143,38 @@ fn check_finalized(
         if blocks != e.total_blocks {
             bail!("epoch {n}: its proposers made {blocks} blocks, not {}", e.total_blocks);
         }
+        if blocks == 0 {
+            bail!("epoch {n} has no blocks");
+        }
         let pool = e.processing_fees.checked_add(e.storage_fees).and_then(|x| x.checked_add(e.core_rewards));
         if pool.is_none_or(|p| p > i64::MAX as u64) || e.total_blocks > i64::MAX as u64 {
             bail!("epoch {n}: pool or blocks out of range");
         }
-        if e.first_core_height > e.next_core_height || tip.is_some_and(|t| e.next_core_height > t) {
+        // An epoch over which the chain-locked height didn't move starts just after it and ends at it.
+        if e.first_core_height > e.next_core_height.saturating_add(1)
+            || limits.tip.is_some_and(|t| e.next_core_height > t)
+        {
             bail!("epoch {n}: Core blocks {}–{} aren't before our tip", e.first_core_height, e.next_core_height);
         }
         // Epoch 0 starts at Platform's genesis Core height, which isn't in its record.
         if n > 0 && core_rewards(e.first_core_height, e.next_core_height, CORE_HALVING) != Some(e.core_rewards) {
             bail!("epoch {n}: Core block rewards {} don't match its Core blocks", e.core_rewards);
         }
-        let time = e.first_block_time_ms / 1000;
-        if time > now + SKEW_SECS {
+        let this = Before::of(e);
+        let time = this.first_block_time;
+        if time > limits.now + SKEW_SECS {
             bail!("epoch {n} starts in the future");
         }
         if let Some(b) = before {
             if time <= b.first_block_time {
                 bail!("epoch {n} starts no later than the one before it");
+            }
+            if b.end_block != e.first_block_height {
+                bail!(
+                    "epoch {n} starts at block {}, not after the one before it ({})",
+                    e.first_block_height,
+                    b.end_block
+                );
             }
             if b.next_core_height.checked_add(1) != Some(e.first_core_height) {
                 bail!(
@@ -919,50 +1184,174 @@ fn check_finalized(
                 );
             }
         }
-        before = Some(Before { first_block_time: time, next_core_height: e.next_core_height });
+        let first = *oldest.get_or_insert(this);
+        for b in before.iter().chain([&first]) {
+            if !starts_fit((b.epoch, b.first_block_time), (n, time), limits.epoch_secs) {
+                bail!(
+                    "epoch {n} starts at {time}, out of step with epoch {} (started {})",
+                    b.epoch,
+                    b.first_block_time
+                );
+            }
+        }
+        before = Some(this);
+    }
+    if let (Some(c), Some(b)) = (current, before) {
+        check_ties(&b, c, limits.epoch_secs)?;
     }
     Ok(())
 }
 
-/// Fetches and stores finalized epochs after the newest stored one, up to the one before `current`.
-/// Returns how many were stored.
-async fn finalized(ctx: &NetCtx, peers: &mut Peers, current: u64, tip: Option<u64>) -> Result<usize> {
-    let last: Option<(i64, i64, i64)> = ctx
-        .db
-        .read(|c| {
-            Ok(c.query_row(
-                "SELECT epoch, first_block_time, next_core_height FROM platform_epochs ORDER BY epoch DESC LIMIT 1",
-                [],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
-            )
-            .optional()?)
-        })
-        .await?;
-    let mut start = last.map_or(0, |l| l.0 as u64 + 1);
-    let mut before = last.map(|l| Before { first_block_time: l.1 as u64, next_core_height: l.2 as u64 });
+/// getFinalizedEpochInfos { start_epoch_index = 1, start_included = 2, end_epoch_index = 3, end_included = 4 }.
+fn finalized_request(start: u64, end: u64) -> Vec<u8> {
+    let mut req = Vec::new();
+    put_uint(&mut req, 1, start);
+    put_uint(&mut req, 2, 1);
+    put_uint(&mut req, 3, end);
+    put_uint(&mut req, 4, 1);
+    v0(&req)
+}
+
+/// Fetches and stores finished epochs after the newest stored one, up to the one before `current`,
+/// and checks the last of them ends where `current` starts. Returns how many were stored.
+async fn finalized(ctx: &NetCtx, peers: &mut Peers, current: &Epoch, limits: Limits) -> Result<usize> {
+    let (mut before, mut oldest) = ctx.db.read(stored_ends).await?;
+    let mut start = before.map_or(0, |b| b.epoch + 1);
     let mut stored = 0;
     for _ in 0..FINALIZED_PAGES {
-        if start >= current {
+        if start >= current.epoch {
+            // Caught up: the newest stored epoch is the last before the current one.
+            if let Some(b) = &before {
+                check_ties(b, current, limits.epoch_secs)?;
+            }
             break;
         }
-        let end = (start + PAGE as u64 - 1).min(current - 1);
-        // getFinalizedEpochInfos { start_epoch_index = 1, start_included = 2, end_epoch_index = 3, end_included = 4 }.
-        let mut req = Vec::new();
-        put_uint(&mut req, 1, start);
-        put_uint(&mut req, 2, 1);
-        put_uint(&mut req, 3, end);
-        put_uint(&mut req, 4, 1);
-        let (epochs, _) = peers.agreed("getFinalizedEpochInfos", &v0(&req), FINALIZED_ANSWER, parse_finalized).await?;
-        check_finalized(&epochs, start, end, before, tip, db::now() as u64)?;
+        if peers.healthy < FINALIZED_AGREE {
+            tracing::info!(
+                net = ctx.net.name(),
+                "platform rewards: finished epochs wait for {FINALIZED_AGREE} healthy evonodes (by IP) to ask"
+            );
+            break;
+        }
+        let end = (start + PAGE as u64 - 1).min(current.epoch - 1);
+        let request = finalized_request(start, end);
+        let (epochs, _) = peers
+            .agreed_by(FINALIZED_AGREE, "getFinalizedEpochInfos", &request, FINALIZED_ANSWER, parse_finalized)
+            .await?;
+        let next = (end + 1 == current.epoch).then_some(current);
+        check_finalized(&epochs, start..=end, before, oldest, next, limits)?;
         stored += epochs.len();
         if let Some(e) = epochs.last() {
-            before =
-                Some(Before { first_block_time: e.first_block_time_ms / 1000, next_core_height: e.next_core_height });
+            before = Some(Before::of(e));
+            oldest = oldest.or_else(|| epochs.first().map(Before::of));
             ctx.db.write(move |c| store_finalized(c, &epochs)).await?;
         }
         start = end + 1;
     }
     Ok(stored)
+}
+
+/// The newest `n` stored epochs, oldest first, with their proposers as stored (from their payouts).
+fn newest_stored(c: &Connection, n: usize) -> Result<Vec<Finalized>> {
+    let mut epochs: Vec<Finalized> = query_all(
+        c,
+        "SELECT epoch, first_block_height, first_core_height, first_block_time, protocol_version, total_blocks,
+                next_core_height, processing_fees, storage_fees, core_rewards
+         FROM platform_epochs ORDER BY epoch DESC LIMIT ?1",
+        [n as i64],
+        |r| {
+            let u = |i| r.get::<_, i64>(i).map(|v| v as u64);
+            Ok(Finalized {
+                epoch: u(0)?,
+                first_block_height: u(1)?,
+                first_core_height: u(2)?,
+                first_block_time_ms: u(3)? * 1000,
+                protocol_version: u(4)?,
+                total_blocks: u(5)?,
+                next_core_height: u(6)?,
+                processing_fees: u(7)?,
+                storage_fees: u(8)?,
+                core_rewards: u(9)?,
+                proposers: Vec::new(),
+            })
+        },
+    )?;
+    epochs.reverse();
+    let mut proposers: HashMap<u64, Vec<([u8; 32], u64)>> = HashMap::new();
+    let from = epochs.first().map_or(0, |e| e.epoch as i64);
+    let rows: Vec<(i64, String, i64)> =
+        query_all(c, "SELECT epoch, protx, blocks FROM platform_payouts WHERE epoch >= ?1", [from], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+        })?;
+    for (epoch, protx, blocks) in rows {
+        let id = unhex(&protx).ok_or_else(|| anyhow!("stored proposer {protx}"))?;
+        proposers.entry(epoch as u64).or_default().push((id, blocks as u64));
+    }
+    for e in &mut epochs {
+        e.proposers = proposers.remove(&e.epoch).unwrap_or_default();
+        e.proposers.sort_unstable();
+    }
+    Ok(epochs)
+}
+
+/// The first stored epoch that `fresh`, an agreed answer for the same epochs at chain state `meta`,
+/// shows to be wrong: one it gives differently; one it has that wasn't stored, with stored ones after
+/// it; or one it doesn't have although its chain is past it, in epochs or (as epochs are numbered by
+/// time) in time. Its chain may be behind ours, so an epoch it hasn't reached proves nothing.
+fn first_wrong(stored: &[Finalized], fresh: &[Finalized], meta: &Meta) -> Option<u64> {
+    let fresh: BTreeMap<u64, Finalized> = fresh
+        .iter()
+        .map(|e| {
+            let mut e = e.clone();
+            e.first_block_time_ms = e.first_block_time_ms / 1000 * 1000;
+            e.proposers.sort_unstable();
+            (e.epoch, e)
+        })
+        .collect();
+    let kept: HashSet<u64> = stored.iter().map(|e| e.epoch).collect();
+    let newest = stored.last().map_or(0, |e| e.epoch);
+    let skipped = fresh.keys().copied().find(|n| !kept.contains(n) && *n < newest);
+    let wrong = stored
+        .iter()
+        .find(|s| match fresh.get(&s.epoch) {
+            Some(f) => f != *s,
+            None => {
+                s.epoch < meta.epoch || (s.epoch > meta.epoch && s.first_block_time_ms / 1000 < meta.time_ms / 1000)
+            }
+        })
+        .map(|s| s.epoch);
+    skipped.into_iter().chain(wrong).min()
+}
+
+/// Drops the stored epochs from `from` on, with their payouts.
+fn drop_epochs_from(c: &mut Connection, from: u64) -> Result<()> {
+    let tx = c.transaction()?;
+    tx.execute("DELETE FROM platform_payouts WHERE epoch >= ?1", [from as i64])?;
+    tx.execute("DELETE FROM platform_epochs WHERE epoch >= ?1", [from as i64])?;
+    tx.commit()?;
+    Ok(())
+}
+
+/// After STALL_ROUNDS rounds failed to move on from the stored epochs: the newest of them (a page)
+/// again, from three evonodes at different IPs. Evonodes agreeing on a wrong epoch would otherwise
+/// stop collection for good, as no true epoch follows it. From the first one the answer shows to be
+/// wrong (`first_wrong`), stored epochs and their payouts are dropped, to be fetched again. Returns
+/// that epoch.
+async fn recover_tail(ctx: &NetCtx, peers: &mut Peers, limits: Limits) -> Result<Option<u64>> {
+    if peers.healthy < FINALIZED_AGREE {
+        bail!("fewer than {FINALIZED_AGREE} healthy evonodes (by IP) to ask");
+    }
+    let stored = ctx.db.read(|c| newest_stored(c, PAGE)).await?;
+    let (Some(lo), Some(hi)) = (stored.first().map(|e| e.epoch), stored.last().map(|e| e.epoch)) else {
+        return Ok(None);
+    };
+    let request = finalized_request(lo, hi);
+    let (fresh, meta) =
+        peers.agreed_by(FINALIZED_AGREE, "getFinalizedEpochInfos", &request, FINALIZED_ANSWER, parse_finalized).await?;
+    check_finalized(&fresh, lo..=hi, None, None, None, limits)?;
+    let Some(from) = first_wrong(&stored, &fresh, &meta) else { return Ok(None) };
+    ctx.db.write(move |c| drop_epochs_from(c, from)).await?;
+    Ok(Some(from))
 }
 
 fn store_finalized(c: &mut Connection, epochs: &[Finalized]) -> Result<()> {
@@ -1634,7 +2023,7 @@ pub fn network_json(c: &Connection, view: &View, net: Network) -> Result<Value> 
     };
     let durations: Vec<i64> = epochs.iter().filter_map(|e| e["duration"].as_i64()).take(6).collect();
     let epoch_secs = if durations.is_empty() {
-        if net == Network::Mainnet { 788_400 } else { 3_600 }
+        epoch_secs(net) as i64
     } else {
         durations.iter().sum::<i64>() / durations.len() as i64
     };
@@ -2121,66 +2510,298 @@ mod tests {
         );
     }
 
-    /// Recorded epoch 86, with what came before it and a tip and time after it.
-    fn epoch_86() -> (Finalized, Before, Option<u64>, u64) {
+    /// Recorded epoch 86, with what came before it (85, and 34, mainnet's oldest stored), and our tip,
+    /// clock and mainnet's epoch length after it.
+    fn epoch_86() -> (Finalized, Before, Before, Limits) {
         let (epochs, _) = parse_finalized(&recorded(include_bytes!("testdata/finalized-86.bin"))).unwrap();
         let e = epochs[0].clone();
         let before = Before {
+            epoch: 85,
             first_block_time: e.first_block_time_ms / 1000 - 788_400,
+            end_block: e.first_block_height,
             next_core_height: e.first_core_height - 1,
         };
-        let (tip, now) = (Some(e.next_core_height + 600), e.first_block_time_ms / 1000 + 20 * 86_400);
-        (e, before, tip, now)
+        let oldest =
+            Before { epoch: 34, first_block_time: 1_751_601_268, end_block: 206_380, next_core_height: 2_303_950 };
+        let limits = Limits {
+            tip: Some(e.next_core_height + 600),
+            now: e.first_block_time_ms / 1000 + 20 * 86_400,
+            epoch_secs: epoch_secs(Network::Mainnet),
+        };
+        (e, before, oldest, limits)
+    }
+
+    /// The current epoch after it, as recorded the same day.
+    fn epoch_87() -> (Epoch, Meta) {
+        let (epochs, meta) = parse_epochs(&recorded(include_bytes!("testdata/epochs-current.bin"))).unwrap();
+        (epochs[0], meta)
     }
 
     #[test]
     fn finalized_epochs_follow_drives_rules() {
-        let (e, before, tip, now) = epoch_86();
-        assert!(check_finalized(std::slice::from_ref(&e), 86, 86, Some(before), tip, now).is_ok());
-        assert!(check_finalized(std::slice::from_ref(&e), 34, 133, None, None, now).is_ok());
-        assert!(check_finalized(&[], 86, 185, Some(before), tip, now).is_ok());
+        let (e, before, oldest, limits) = epoch_86();
+        let (current, _) = epoch_87();
+        let one = std::slice::from_ref(&e);
+        assert!(check_finalized(one, 86..=86, Some(before), Some(oldest), Some(&current), limits).is_ok());
+        assert!(check_finalized(one, 34..=133, None, None, None, Limits { tip: None, ..limits }).is_ok());
+        assert!(check_finalized(&[], 86..=185, Some(before), Some(oldest), None, limits).is_ok());
         // Core block rewards are exactly what Drive pays for the epoch's Core blocks.
         assert_eq!(core_rewards(e.first_core_height, e.next_core_height, CORE_HALVING), Some(e.core_rewards));
-        let reject = |f: &dyn Fn(&mut Finalized), start: u64, end: u64, before: Option<Before>, tip: Option<u64>| {
+        let reject = |f: &dyn Fn(&mut Finalized), range: RangeInclusive<u64>, before: Before, limits: Limits| {
             let mut bad = e.clone();
             f(&mut bad);
-            check_finalized(&[bad], start, end, before, tip, now).unwrap_err().to_string()
+            check_finalized(&[bad], range, Some(before), Some(oldest), None, limits).unwrap_err().to_string()
         };
         // Not asked for: an epoch far ahead would stop collection for good.
-        assert!(reject(&|x| x.epoch = 60_000, 86, 185, Some(before), tip).contains("asked"));
-        assert!(reject(&|_| {}, 87, 186, Some(before), tip).contains("asked"));
-        // Blocks that don't add up, or a proposer twice.
-        assert!(reject(&|x| x.proposers[0].1 += 1, 86, 86, Some(before), tip).contains("blocks"));
-        assert!(
-            reject(
-                &|x| {
-                    x.proposers[1].0 = x.proposers[0].0;
-                },
-                86,
-                86,
-                Some(before),
-                tip
-            )
-            .contains("twice")
-        );
+        assert!(reject(&|x| x.epoch = 60_000, 86..=185, before, limits).contains("asked"));
+        assert!(reject(&|_| {}, 87..=186, before, limits).contains("asked"));
+        // Past Drive's u16 epoch indexes.
+        assert!(reject(&|x| x.epoch = 70_000, 0..=100_000, before, limits).contains("index"));
+        // Blocks that don't add up, a proposer twice, or none.
+        assert!(reject(&|x| x.proposers[0].1 += 1, 86..=86, before, limits).contains("blocks"));
+        assert!(reject(&|x| x.proposers[1].0 = x.proposers[0].0, 86..=86, before, limits).contains("twice"));
+        let none = |x: &mut Finalized| {
+            x.proposers.clear();
+            x.total_blocks = 0;
+        };
+        assert!(reject(&none, 86..=86, before, limits).contains("no blocks"));
         // Made-up rewards, or a pool no ledger holds.
-        assert!(reject(&|x| x.core_rewards += 1, 86, 86, Some(before), tip).contains("Core block rewards"));
-        assert!(reject(&|x| x.processing_fees = u64::MAX, 86, 86, Some(before), tip).contains("pool"));
+        assert!(reject(&|x| x.core_rewards += 1, 86..=86, before, limits).contains("Core block rewards"));
+        assert!(reject(&|x| x.processing_fees = u64::MAX, 86..=86, before, limits).contains("pool"));
         let gap_max = Before { next_core_height: u64::MAX, ..before };
-        assert!(reject(&|_| {}, 86, 86, Some(gap_max), tip).contains("after the one before"));
+        assert!(reject(&|_| {}, 86..=86, gap_max, limits).contains("after the one before"));
         // Core heights past our tip.
-        assert!(reject(&|_| {}, 86, 86, Some(before), Some(e.next_core_height - 1)).contains("tip"));
+        assert!(
+            reject(&|_| {}, 86..=86, before, Limits { tip: Some(e.next_core_height - 1), ..limits }).contains("tip")
+        );
         // Times: in the future, or not after the epoch before.
-        assert!(reject(&|x| x.first_block_time_ms = (now + 3_600) * 1000, 86, 86, None, tip).contains("future"));
+        let future = |x: &mut Finalized| x.first_block_time_ms = (limits.now + 3_600) * 1000;
+        assert!(reject(&future, 86..=86, before, limits).contains("future"));
         let late = Before { first_block_time: e.first_block_time_ms / 1000, ..before };
-        assert!(reject(&|_| {}, 86, 86, Some(late), tip).contains("later"));
-        // Not starting where the one before ended (an epoch left out).
+        assert!(reject(&|_| {}, 86..=86, late, limits).contains("later"));
+        // Not starting where the one before ended (an epoch left out), in Core or Platform blocks.
         let gap = Before { next_core_height: before.next_core_height - 5, ..before };
-        assert!(reject(&|_| {}, 86, 86, Some(gap), tip).contains("after the one before"));
+        assert!(reject(&|_| {}, 86..=86, gap, limits).contains("after the one before"));
+        let gap = Before { end_block: before.end_block - 1, ..before };
+        assert!(reject(&|_| {}, 86..=86, gap, limits).contains("starts at block"));
+        // Numbered other than its start time says: from the one before, or (drifting a little each
+        // epoch) from the oldest stored.
+        let early = Before { first_block_time: before.first_block_time - 788_401, ..before };
+        assert!(reject(&|_| {}, 86..=86, early, limits).contains("out of step"));
+        let drifted = Before { epoch: 30, ..oldest };
+        assert!(
+            check_finalized(one, 86..=86, Some(before), Some(drifted), None, limits)
+                .unwrap_err()
+                .to_string()
+                .contains("out of step")
+        );
         // Out of order within a page.
         let mut next = e.clone();
         next.epoch = 85;
-        assert!(check_finalized(&[e.clone(), next], 80, 90, None, tip, now).unwrap_err().to_string().contains("order"));
+        assert!(
+            check_finalized(&[e.clone(), next], 80..=90, None, None, None, limits)
+                .unwrap_err()
+                .to_string()
+                .contains("order")
+        );
+    }
+
+    #[test]
+    fn the_last_finished_epoch_ends_where_the_current_one_starts() {
+        let (e, before, oldest, limits) = epoch_86();
+        let (current, _) = epoch_87();
+        let check = |e: &Finalized, current: &Epoch| {
+            check_finalized(std::slice::from_ref(e), 86..=86, Some(before), Some(oldest), Some(current), limits)
+        };
+        assert!(check(&e, &current).is_ok());
+        // Two evonodes moving the last epoch's end (with Core block rewards to match) would leave every
+        // true epoch after it failing to follow.
+        let mut longer = e.clone();
+        longer.next_core_height += 10;
+        longer.core_rewards = core_rewards(longer.first_core_height, longer.next_core_height, CORE_HALVING).unwrap();
+        assert!(
+            check_finalized(std::slice::from_ref(&longer), 86..=86, Some(before), Some(oldest), None, limits).is_ok()
+        );
+        assert!(check(&longer, &current).unwrap_err().to_string().contains("ends at"));
+        let mut fewer = e.clone();
+        fewer.total_blocks -= 1;
+        fewer.proposers[0].1 -= 1;
+        assert!(check(&fewer, &current).is_err());
+        // Or a current epoch not after it in time.
+        let late = Epoch { start_ms: current.start_ms + 2 * 788_400_000, ..current };
+        assert!(check(&e, &late).is_err());
+        // With nothing new to fetch, the newest stored epoch is held to the same.
+        assert!(check_ties(&Before::of(&e), &current, limits.epoch_secs).is_ok());
+        assert!(check_ties(&Before::of(&longer), &current, limits.epoch_secs).is_err());
+    }
+
+    #[test]
+    fn a_made_up_current_epoch_doesnt_follow_the_stored_ones() {
+        let (e, _, oldest, _) = epoch_86();
+        let (current, meta) = epoch_87();
+        let newest = Before::of(&e);
+        let d = epoch_secs(Network::Mainnet);
+        let now = current.start_ms / 1000 + 86_400;
+        assert!(check_current(&current, &meta, now).is_ok());
+        assert!(check_current_follows(&current, Some(&newest), Some(&oldest), d).is_ok());
+        assert!(check_current_follows(&current, None, None, d).is_ok());
+        // Far ahead of the stored epochs, started now: its number doesn't match its start.
+        let ahead = Epoch { epoch: 60_000, start_ms: now * 1000, ..current };
+        assert!(check_current(&ahead, &Meta { epoch: 60_000, ..meta }, now).is_ok());
+        assert!(check_current_follows(&ahead, Some(&newest), Some(&oldest), d).is_err());
+        // Past u16, in the future, or past the chain-locked height of its own answer.
+        assert!(check_current(&Epoch { epoch: 70_000, ..current }, &Meta { epoch: 70_000, ..meta }, now).is_err());
+        assert!(check_current(&current, &meta, current.start_ms / 1000 - 3_600).is_err());
+        assert!(check_current(&current, &Meta { epoch: 88, ..meta }, now).is_err());
+        assert!(check_current(&current, &Meta { core_height: current.first_core_height - 1, ..meta }, now).is_err());
+        // Not after the newest stored, or starting before it ended.
+        assert!(check_current_follows(&current, Some(&Before { epoch: 87, ..newest }), Some(&oldest), d).is_err());
+        let early = Epoch { first_core_height: newest.next_core_height - 1, ..current };
+        assert!(check_current_follows(&early, Some(&newest), Some(&oldest), d).is_err());
+    }
+
+    #[test]
+    fn core_height_is_held_to_our_tip() {
+        assert_eq!(held_core_height(2_564_733, Some(2_564_700)), 2_564_700);
+        assert_eq!(held_core_height(2_564_733, Some(2_564_800)), 2_564_733);
+        assert_eq!(held_core_height(u64::MAX, None), u64::MAX);
+    }
+
+    /// Testnet epochs as stored (epoch, first block, start, first Core block, next epoch's Core start,
+    /// blocks, processing fees, storage fees, Core block rewards, protocol version): the chain halted
+    /// between 7552 and 8592, and 9078's chain-locked height didn't move.
+    const TESTNET: [[u64; 10]; 8] = [
+        [7552, 152_132, 1_748_540_423, 1_260_352, 1_286_852, 24, 15_506_760, 35_668_762, 1_917_243_689_584_638, 8],
+        [8592, 152_156, 1_752_284_470, 1_286_853, 1_286_876, 20, 0, 5_625_496, 1_730_834_981_136, 9],
+        [8593, 152_176, 1_752_288_027, 1_286_877, 1_286_901, 20, 0, 5_615_173, 1_802_953_105_350, 9],
+        [9076, 161_877, 1_754_026_839, 1_299_162, 1_299_264, 20, 0, 24_428_935, 7_428_166_794_042, 9],
+        [9077, 161_897, 1_754_030_495, 1_299_265, 1_299_276, 20, 3_089_529, 24_425_791, 865_417_490_568, 9],
+        [9078, 161_917, 1_754_034_112, 1_299_277, 1_299_276, 20, 0, 24_389_067, 0, 9],
+        [9079, 161_937, 1_754_037_768, 1_299_277, 1_299_318, 19, 0, 24_369_926, 3_028_961_216_988, 9],
+        [9080, 161_956, 1_754_041_210, 1_299_319, 1_299_341, 20, 0, 24_368_880, 1_658_716_856_922, 9],
+    ];
+
+    /// A stored testnet epoch, its blocks split between two made-up proposers.
+    fn testnet(n: u64) -> Finalized {
+        let r = TESTNET.iter().find(|r| r[0] == n).unwrap();
+        Finalized {
+            epoch: r[0],
+            first_block_height: r[1],
+            first_block_time_ms: r[2] * 1000 + 417,
+            first_core_height: r[3],
+            next_core_height: r[4],
+            total_blocks: r[5],
+            processing_fees: r[6],
+            storage_fees: r[7],
+            core_rewards: r[8],
+            protocol_version: r[9],
+            proposers: vec![(id(1), r[5] / 2), (id(2), r[5] - r[5] / 2)],
+        }
+    }
+
+    fn testnet_limits() -> Limits {
+        Limits { tip: Some(1_400_000), now: 1_793_490_900, epoch_secs: epoch_secs(Network::Testnet) }
+    }
+
+    #[test]
+    fn honest_pages_pass_across_halts_and_still_chain_locks() {
+        let limits = testnet_limits();
+        // One page across the halt (epochs 7553–8591 never happened), then one with an epoch over which
+        // the chain-locked height didn't move: it starts after it and ends at it, with no Core rewards.
+        let page1: Vec<Finalized> = [7552, 8592, 8593].map(testnet).to_vec();
+        check_finalized(&page1, 7552..=8651, None, None, None, limits).unwrap();
+        let still = testnet(9078);
+        assert_eq!(still.first_core_height, still.next_core_height + 1);
+        assert_eq!(core_rewards(still.first_core_height, still.next_core_height, CORE_HALVING), Some(0));
+        let page2: Vec<Finalized> = (9076..=9080).map(testnet).collect();
+        let oldest = Some(Before::of(&page1[0]));
+        assert!(check_finalized(&page2, 9076..=9080, None, oldest, None, limits).is_ok());
+        // The next epoch after it follows on as usual, and so does the current one after the page.
+        let before = Some(Before::of(&page2[2]));
+        assert!(check_finalized(&page2[3..], 9079..=9080, before, oldest, None, limits).is_ok());
+        let current = Epoch {
+            epoch: 9081,
+            first_block_height: 161_976,
+            first_core_height: 1_299_341,
+            start_ms: 1_754_044_810_000,
+            protocol_version: 9,
+        };
+        assert!(check_finalized(&page2, 9076..=9080, None, oldest, Some(&current), limits).is_ok());
+        assert!(check_current_follows(&current, before.as_ref(), oldest.as_ref(), limits.epoch_secs).is_ok());
+        // A Core start more than one past the end is still turned down.
+        let mut back = still.clone();
+        back.first_core_height += 1;
+        assert!(check_finalized(&[back], 9078..=9078, None, None, None, limits).is_err());
+    }
+
+    #[test]
+    fn restart_needs_a_later_chain_three_rounds_in_a_row() {
+        let stored =
+            Before { epoch: 20_037, first_block_time: 1_793_486_429, end_block: 655_474, next_core_height: 1_583_171 };
+        let new_chain = Epoch { epoch: 3, start_ms: (stored.first_block_time + 7_200) * 1000, ..Epoch::default() };
+        let mut behind = 0;
+        let seen = |net, e: &Epoch, behind: &mut u32| restart(net, e, Some(&stored), behind);
+        assert_eq!(seen(Network::Testnet, &new_chain, &mut behind), Restart::Pending);
+        assert_eq!(seen(Network::Testnet, &new_chain, &mut behind), Restart::Pending);
+        // A round that sees the stored chain again starts the count over.
+        let same = Epoch { epoch: 20_038, start_ms: (stored.first_block_time + 3_600) * 1000, ..Epoch::default() };
+        assert_eq!(seen(Network::Testnet, &same, &mut behind), Restart::Go);
+        assert_eq!(behind, 0);
+        for _ in 0..2 {
+            assert_eq!(seen(Network::Testnet, &new_chain, &mut behind), Restart::Pending);
+        }
+        assert_eq!(seen(Network::Testnet, &new_chain, &mut behind), Restart::Clear);
+        assert_eq!(behind, 0);
+        // Evonodes that halted at an older epoch started it before the stored one: lag, however long.
+        let stuck = Epoch { epoch: 20_030, start_ms: (stored.first_block_time - 7 * 3_600) * 1000, ..Epoch::default() };
+        for _ in 0..10 {
+            assert_eq!(seen(Network::Testnet, &stuck, &mut behind), Restart::Lag);
+        }
+        // Within the margin, nothing to say.
+        let near = Epoch { epoch: 20_036, ..stuck };
+        assert_eq!(seen(Network::Testnet, &near, &mut behind), Restart::Go);
+        // Mainnet never clears.
+        for _ in 0..10 {
+            assert_eq!(seen(Network::Mainnet, &new_chain, &mut behind), Restart::Lag);
+        }
+        assert_eq!(restart(Network::Testnet, &new_chain, None, &mut behind), Restart::Go);
+    }
+
+    #[test]
+    fn a_wrong_stored_tail_is_found_and_dropped() {
+        let mut c = scratch_db("recover");
+        let honest: Vec<Finalized> = (9076..=9080).map(testnet).collect();
+        // Two evonodes made 9080 end later than it did: no true epoch follows it.
+        let mut stored = honest.clone();
+        stored[4].next_core_height += 10;
+        store_finalized(&mut c, &stored).unwrap();
+        let read = newest_stored(&c, PAGE).unwrap();
+        assert_eq!(read.iter().map(|e| e.epoch).collect::<Vec<_>>(), (9076..=9080).collect::<Vec<_>>());
+        let at = Meta { epoch: 9_081, time_ms: 1_754_045_000_000, ..Meta::default() };
+        // What's stored reads back as it was given (times to the second).
+        assert_eq!(first_wrong(&read, &stored, &at), None);
+        assert_eq!(first_wrong(&read, &honest, &at), Some(9080));
+        drop_epochs_from(&mut c, 9080).unwrap();
+        let count = |t: &str| {
+            c.query_row(&format!("SELECT count(*) FROM {t} WHERE epoch >= 9080"), [], |r| r.get::<_, i64>(0)).unwrap()
+        };
+        assert_eq!((count("platform_epochs"), count("platform_payouts")), (0, 0));
+        assert_eq!(stored_ends(&c).unwrap().0.map(|b| b.epoch), Some(9079));
+        // An epoch that never happened: dropped once the answering chain is past it, in epochs or time.
+        assert_eq!(first_wrong(&read, &honest[..4], &at), Some(9080));
+        let lagging = Meta { epoch: 9_079, time_ms: 1_754_041_000_000, ..at };
+        assert_eq!(first_wrong(&read, &honest[..3], &lagging), None);
+        let later = Meta { epoch: 9_079, time_ms: 1_754_045_000_000, ..at };
+        assert_eq!(first_wrong(&read, &honest[..3], &later), Some(9080));
+        // An epoch it has that wasn't stored: everything after it goes.
+        assert_eq!(first_wrong(&[read[0].clone(), read[2].clone()], &honest[..3], &at), Some(9077));
+        // Rounds that fail at the same stored epoch add up; moving on starts over.
+        let mut p = Progress::default();
+        p.stalled_at(Some(9080));
+        p.stalled_at(Some(9080));
+        assert_eq!(p.stalled, (Some(9080), 2));
+        p.stalled_at(Some(9081));
+        assert_eq!(p.stalled, (Some(9081), 1));
     }
 
     /// A database with the app's schema, in a temporary file.
@@ -2241,12 +2862,8 @@ mod tests {
         assert_eq!(epochs[0].start_ms / 1000, 1_793_386_337);
         assert_eq!((epochs[0].first_block_height, epochs[0].first_core_height), (461_783, 2_564_064));
         assert!(meta.height > epochs[0].first_block_height && meta.core_height > epochs[0].first_core_height);
-        // A real answer passes the checks on the current epoch; one that's ahead of our tip or clock doesn't.
-        let now = epochs[0].start_ms / 1000 + 86_400;
-        assert!(check_current(&epochs[0], &meta, Some(meta.core_height), now).is_ok());
-        assert!(check_current(&epochs[0], &meta, Some(epochs[0].first_core_height - 1), now).is_err());
-        assert!(check_current(&epochs[0], &meta, None, epochs[0].start_ms / 1000 - 3_600).is_err());
-        assert!(check_current(&epochs[0], &Meta { epoch: 88, ..meta }, None, now).is_err());
+        // A real answer passes the checks on the current epoch (more in a_made_up_current_epoch_doesnt_follow_the_stored_ones).
+        assert!(check_current(&epochs[0], &meta, epochs[0].start_ms / 1000 + 86_400).is_ok());
         let (blocks, _) = parse_pairs(&recorded(include_bytes!("testdata/blocks-page.bin"))).unwrap();
         assert_eq!(blocks.len(), 5);
         assert!(blocks.windows(2).all(|w| w[0].0 < w[1].0) && blocks.iter().all(|b| b.1 > Some(0)));
