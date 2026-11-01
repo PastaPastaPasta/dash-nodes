@@ -643,8 +643,8 @@ async fn masternode(State(nets): State<Nets>, UrlPath((net, protx)): UrlPath<(St
 //
 // What masternodes actually earned, from the payments index: everything a block paid a masternode's
 // addresses (owner and operator shares; not the platform share, which goes to Platform's credit pool),
-// against its collateral. The yield is
-// annualized over the last RETURN_WINDOW days, or since registration for a newer masternode.
+// against its collateral. The yield is annualized over the last RETURN_WINDOW days, or since registration
+// for a newer masternode.
 
 const RETURN_WINDOW: i64 = rewards::YIELD_DAYS;
 const DAY: i64 = 86_400;
