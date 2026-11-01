@@ -187,12 +187,20 @@ function sortSelect() {
   return el("label", { class: "sort-select" }, "Sort", sort);
 }
 
+/** Back to the default sort when the sorted column isn't shown (a Platform column outside the evonode list). */
+function normalizeSort() {
+  if (columns().some((c) => c.key === state.sort)) return;
+  state.sort = "registered_height";
+  state.dir = 1;
+}
+
 function renderFilters() {
+  normalizeSort();
   let sort = sortSelect(), type = state.type;
   document.getElementById("filters").replaceChildren(...filterControls(rows, state, () => {
     state.page = 0;
     // Narrowing to evonodes (or back) adds or drops the Platform columns, so the sort choices follow.
-    if (state.type !== type) { type = state.type; const next = sortSelect(); sort.replaceWith(next); sort = next; }
+    if (state.type !== type) { type = state.type; normalizeSort(); const next = sortSelect(); sort.replaceWith(next); sort = next; }
     render();
   }), sort);
   const toggle = document.getElementById("filters-toggle");

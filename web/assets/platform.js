@@ -48,7 +48,8 @@ function renderNow(summary) {
 function renderUpgrade() {
   const u = doc.upgrade;
   const n = doc.now;
-  const v = u.candidate;
+  // Locked in: the protocol Drive scheduled for the next epoch, whatever the current votes favour.
+  const v = u.phase === "locked_in" && u.next_epoch != null ? u.next_epoch : u.candidate;
   const ends = n.ends > Date.now() / 1000 ? `ends ${inAbout(n.ends)}` : "ends any moment";
   const rows = doc.evonodes.filter((e) => e.status === "enabled");
   if (u.phase === "active" || v == null) {
@@ -156,8 +157,8 @@ function renderEpochs() {
   const list = doc.epochs;
   if (!list.length) return;
   const first = list.at(-1);
-  $("epochs-lede").textContent = `Each finished epoch as Drive recorded it when it paid it out. Drive keeps these from epoch ${fmt(first.epoch)} ` +
-    `(${dateTime(first.start).replace(/,.*/, "")}) on${list.length > 1 ? `; ${fmt(list.length)} are listed here` : ""}. ` +
+  $("epochs-lede").textContent = `Each finished epoch as Drive recorded it when it paid it out: the ${list.length > 1 ? `${fmt(list.length)} most recent, ` : ""}` +
+    `from epoch ${fmt(first.epoch)} (${dateTime(first.start).replace(/,.*/, "")}) on. ` +
     "Core block rewards make up nearly all of each pool; fees are the rest.";
   $("epochs-key").textContent = "middle 80% of evonodes, line at the median, in DASH";
   $("epochs-chart").classList.add("chart");
