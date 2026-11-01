@@ -549,7 +549,6 @@ function renderPlatform() {
     plainStat("Healthy", `${fmt(p.healthy)} of ${fmt(p.checked)}`, null, p.healthy / p.checked >= 0.95 ? "good" : "warning"),
     plainStat("DAPI answered", fmt(p.https_ok)),
     plainStat("Tenderdash P2P open", fmt(p.p2p_ok)),
-    plainStat("Certificates expiring", fmt(p.cert_expiring_3d), "within 3 days", p.cert_expiring_3d ? "warning" : null),
     plainStat("Platform height", p.max_height != null ? fmt(p.max_height) : "–", "highest seen"));
   for (const [bar, legend, rows] of [["drive-bar", "drive-legend", p.drive], ["td-bar", "td-legend", p.tenderdash]]) {
     const palette = new Palette();
