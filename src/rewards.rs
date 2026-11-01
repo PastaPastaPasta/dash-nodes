@@ -1336,10 +1336,12 @@ fn stored_epochs(c: &Connection, from: u64, to: u64) -> Result<Vec<Finalized>> {
 
 /// The first stored epoch that `fresh`, an agreed answer for the same epochs at chain state `meta`,
 /// shows to be wrong: one it gives differently; one it has that wasn't stored, with stored ones after
-/// it; or one it doesn't have although its chain is past it: in epochs; in the same epoch but past
-/// the block it ended at (evonodes that halted in it sit just before); or in time, epochs being
-/// numbered by time. Its chain may be behind ours, so an epoch it hasn't reached proves nothing.
-fn first_wrong(stored: &[Finalized], fresh: &[Finalized], meta: &Meta) -> Option<u64> {
+/// it; or one it doesn't have although its chain is past it: in epochs; in the same epoch, but live
+/// (its latest block within LIVE_SECS of `now`) or past the block the stored one ended at (evonodes
+/// that halted in it sit just before, with old blocks); or in time, epochs being numbered by time. Its
+/// chain may be behind ours, so an epoch it hasn't reached proves nothing.
+fn first_wrong(stored: &[Finalized], fresh: &[Finalized], meta: &Meta, now: u64) -> Option<u64> {
+    let live = meta.time_ms / 1000 + LIVE_SECS >= now;
     let fresh: BTreeMap<u64, Finalized> = fresh
         .iter()
         .map(|e| {
@@ -1358,7 +1360,7 @@ fn first_wrong(stored: &[Finalized], fresh: &[Finalized], meta: &Meta) -> Option
             Some(f) => f != *s,
             None => match s.epoch.cmp(&meta.epoch) {
                 Ordering::Less => true,
-                Ordering::Equal => meta.height >= s.first_block_height.saturating_add(s.total_blocks),
+                Ordering::Equal => live || meta.height >= s.first_block_height.saturating_add(s.total_blocks),
                 Ordering::Greater => s.first_block_time_ms / 1000 < meta.time_ms / 1000,
             },
         })
@@ -1384,6 +1386,10 @@ fn recovery_ranges(newest: u64, oldest: u64) -> Vec<(u64, u64)> {
     let lo = newest.saturating_sub(PAGE as u64 - 1).max(oldest);
     if oldest < lo { vec![(oldest, oldest), (lo, newest)] } else { vec![(lo, newest)] }
 }
+
+/// How recent an answer's latest block has to be for its chain to count as live, not halted: blocks
+/// come every couple of minutes, and recovery only runs after STALL_ROUNDS rounds of 15 minutes.
+const LIVE_SECS: u64 = 30 * 60;
 
 /// Drops the stored epochs from `from` on, with their payouts.
 fn drop_epochs_from(c: &mut Connection, from: u64) -> Result<()> {
@@ -1425,7 +1431,7 @@ async fn recover_tail(ctx: &NetCtx, peers: &mut Peers, limits: Limits) -> Result
                 first.0
             );
         }
-        if let Some(wrong) = first_wrong(&stored, &fresh, &meta) {
+        if let Some(wrong) = first_wrong(&stored, &fresh, &meta, limits.now) {
             ctx.db.write(move |c| drop_epochs_from(c, wrong)).await?;
             return Ok(Some(wrong));
         }
@@ -2865,6 +2871,9 @@ mod tests {
         assert_eq!(restart(Network::Testnet, &new_chain, None, &mut behind), Restart::Go);
     }
 
+    /// Long after the testnet epochs above: an answer from then isn't live.
+    const LATE: u64 = 1_793_490_900;
+
     #[test]
     fn a_wrong_stored_tail_is_found_and_dropped() {
         let mut c = scratch_db("recover");
@@ -2877,8 +2886,8 @@ mod tests {
         assert_eq!(read.iter().map(|e| e.epoch).collect::<Vec<_>>(), (9076..=9080).collect::<Vec<_>>());
         let at = Meta { epoch: 9_081, time_ms: 1_754_045_000_000, ..Meta::default() };
         // What's stored reads back as it was given (times to the second).
-        assert_eq!(first_wrong(&read, &stored, &at), None);
-        assert_eq!(first_wrong(&read, &honest, &at), Some(9080));
+        assert_eq!(first_wrong(&read, &stored, &at, LATE), None);
+        assert_eq!(first_wrong(&read, &honest, &at, LATE), Some(9080));
         drop_epochs_from(&mut c, 9080).unwrap();
         let count = |t: &str| {
             c.query_row(&format!("SELECT count(*) FROM {t} WHERE epoch >= 9080"), [], |r| r.get::<_, i64>(0)).unwrap()
@@ -2886,23 +2895,27 @@ mod tests {
         assert_eq!((count("platform_epochs"), count("platform_payouts")), (0, 0));
         assert_eq!(stored_ends(&c).unwrap().0.map(|b| b.epoch), Some(9079));
         // An epoch that never happened: dropped once the answering chain is past it, in epochs or time.
-        assert_eq!(first_wrong(&read, &honest[..4], &at), Some(9080));
+        assert_eq!(first_wrong(&read, &honest[..4], &at, LATE), Some(9080));
         // A chain still in 9079 says it isn't finished, whatever the time (if it's only behind, 9079
         // and 9080 are fetched again).
         let current = Meta { epoch: 9_079, height: 161_956, time_ms: 1_754_037_800_000, ..at };
-        assert_eq!(first_wrong(&read, &honest[..3], &current), Some(9079));
-        // Unless it hasn't reached the block 9079 ended at: evonodes that halted in it.
+        assert_eq!(first_wrong(&read, &honest[..3], &current, LATE), Some(9079));
+        // Unless it hasn't reached the block 9079 ended at, and its blocks are old: evonodes that halted
+        // in it.
         let halted = Meta { height: 161_955, ..current };
-        assert_eq!(first_wrong(&read[..4], &honest[..3], &halted), None);
+        assert_eq!(first_wrong(&read[..4], &honest[..3], &halted, LATE), None);
+        // A live chain in 9079 says it isn't finished, wherever the stored one claims it ended.
+        let live = Meta { time_ms: LATE * 1000 - 60_000, ..halted };
+        assert_eq!(first_wrong(&read[..4], &honest[..3], &live, LATE), Some(9079));
         // A chain in 9078 but past the block it ended at, and past 9079's start in time: neither is true.
         let later = Meta { epoch: 9_078, height: 161_937, time_ms: 1_754_045_000_000, ..at };
-        assert_eq!(first_wrong(&read[..3], &honest[..2], &later), Some(9078));
-        assert_eq!(first_wrong(&read[3..], &[], &later), Some(9079));
+        assert_eq!(first_wrong(&read[..3], &honest[..2], &later, LATE), Some(9078));
+        assert_eq!(first_wrong(&read[3..], &[], &later, LATE), Some(9079));
         // One that hasn't reached a stored epoch in epochs or time proves nothing about it.
         let behind = Meta { epoch: 9_078, time_ms: 1_754_036_000_000, ..at };
-        assert_eq!(first_wrong(&read[3..], &[], &behind), None);
+        assert_eq!(first_wrong(&read[3..], &[], &behind, LATE), None);
         // An epoch it has that wasn't stored: everything after it goes.
-        assert_eq!(first_wrong(&[read[0].clone(), read[2].clone()], &honest[..3], &at), Some(9077));
+        assert_eq!(first_wrong(&[read[0].clone(), read[2].clone()], &honest[..3], &at, LATE), Some(9077));
         // Asked again: the oldest stored epoch, and at most a page of epoch indexes, across gaps too.
         assert_eq!(recovery_ranges(9080, 9076), [(9076, 9080)]);
         assert_eq!(recovery_ranges(19_250, 7552), [(7552, 7552), (19_151, 19_250)]);
