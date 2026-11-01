@@ -387,12 +387,17 @@ function renderDkg() {
   const known = (c) => c.pass + c.fail + c.unknown;
   $("dkg-title").textContent = `Ready for ${rules.release} quorums`;
   const ready = (n) => pct(n / d.masternodes);
+  // The protocol check counts only once the release is out (PROTOCOL_CHECK in readiness.rs); summaries
+  // from before the flag counted it.
+  const proto = rules.protocol_check !== false && d.checks.protocol;
   $("dkg-lede").textContent = `Masternodes running ${rules.release} vote nodes that fail these checks bad when they set up a quorum (DKG), ` +
     "which costs PoSe score. Reachability and Platform bans count already. " +
-    `${ready(d.checks.protocol.pass)} of ${fmt(d.masternodes)} enabled masternodes already run protocol ${rules.min_protocol} or newer, ` +
-    `and ${ready(d.overall.pass)} pass every check. ` +
-    (d.version_only ? `${fmt(d.version_only)} fail only the version check and need just the upgrade. ` : "") +
-    (d.beyond_version ? `${fmt(d.beyond_version)} fail another check that needs a fix.` : "");
+    (proto ? `${ready(proto.pass)} of ${fmt(d.masternodes)} enabled masternodes already run protocol ${rules.min_protocol} or newer, ` +
+      `and ${ready(d.overall.pass)} pass every check. ` +
+      (d.version_only ? `${fmt(d.version_only)} fail only the version check and need just the upgrade. ` : "") +
+      (d.beyond_version ? `${fmt(d.beyond_version)} fail another check that needs a fix.` : "")
+      : `${ready(d.overall.pass)} of ${fmt(d.masternodes)} enabled masternodes pass every check. ` +
+        `The version check starts once ${rules.release} is released.`);
   const notes = { protocol: `needs ${rules.min_protocol}+`, platform_ban: "evonodes only" };
   const stat = (label, c, filter) => el("div", { class: c.fail ? "stat-warning" : c.pass ? "stat-good" : null },
     el("dt", { text: label }),

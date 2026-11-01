@@ -1,5 +1,5 @@
 import { api, chrome, currentNet, el, fmt, pct, href, countryName, flag, shortHash, badge, ago, nodeStatus, registration, poseBadge, uptimeKind, evoPill,
-  MN_FILTERS, mnFilters, mnMatches, rememberParams, filterQuery, filterControls } from "./common.js";
+  MN_FILTERS, mnFilters, mnMatches, rememberParams, filterQuery, filterControls, blocksAgo, behind, listTip } from "./common.js";
 
 chrome("masternodes");
 const net = currentNet();
@@ -69,11 +69,22 @@ const COLUMNS = [
   { key: "uptime_7d", label: "Uptime 7d", r: true, get: (m) => m.uptime_7d ?? -1, cell: (m) => el("td", { class: "r" }, uptimeBadge(m.uptime_7d)) },
   { key: "uptime_30d", label: "30d", r: true, get: (m) => m.uptime_30d ?? -1, cell: (m) => el("td", { class: "r" }, uptimeBadge(m.uptime_30d)) },
   { key: "last_paid_height", label: "Last paid", r: true, get: (m) => m.last_paid_height || 0,
-    cell: (m) => el("td", { class: "r", title: m.last_paid_height ? `block ${fmt(m.last_paid_height)}` : "" },
-      m.last_paid_height ? (tip ? `${fmt(tip - m.last_paid_height)} blocks ago` : fmt(m.last_paid_height)) : "never") },
-  { key: "registered_height", label: "Registered", r: true, get: (m) => m.registered_height || 0, cell: (m) => el("td", { class: "r", text: fmt(m.registered_height) }) },
+    cell: (m) => {
+      const h = m.last_paid_height;
+      if (!h) return el("td", { class: "r", text: "never" });
+      if (!tip) return blockCell(`block ${fmt(h)}`);
+      const b = behind(tip, h);
+      return blockCell(b ? b[0] : "latest block", b?.[1], `block ${fmt(h)}`);
+    } },
+  { key: "registered_height", label: "Registered", r: true, get: (m) => m.registered_height || 0,
+    cell: (m) => blockCell(fmt(m.registered_height), m.registered_height > 0 && tip ? behind(tip, m.registered_height)?.[0] : null) },
   { key: "pose_penalty", label: "PoSe", r: true, get: (m) => m.pose_penalty || 0, cell: (m) => el("td", { class: "r", text: m.pose_penalty ?? "–" }) },
 ];
+
+/** A cell with a value and, under it, the same in the other unit (time or blocks). */
+function blockCell(main, under, title) {
+  return el("td", { class: "r", title }, main, under ? el("small", { class: "under", text: under }) : null);
+}
 
 function filtered() {
   const out = rows.filter((m) => mnMatches(m, state));
@@ -134,14 +145,16 @@ function turn(by) {
 /** Phones: one card per masternode with what matters most; the whole card opens it. */
 function cardFor(m) {
   const [k, l] = nodeStatus(m);
-  const paid = !m.last_paid_height ? "never paid" : tip ? `paid ${fmt(tip - m.last_paid_height)} blocks ago` : `paid at ${fmt(m.last_paid_height)}`;
+  const paid = !m.last_paid_height ? "never paid" : tip ? `paid ${blocksAgo(tip, m.last_paid_height)}` : `paid at block ${fmt(m.last_paid_height)}`;
   return el("li", {}, el("a", { class: "mn-card", href: href(`/mn/${m.protx}`) },
     el("div", { class: "mn-card-top" }, badge(k, l), poseBadge(m), m.type === "Evo" ? el("span", { class: "pill evo", text: "Evo" }) : null,
       el("span", { class: "mn-card-version", text: m.version || "–" })),
     el("div", { class: "mono mn-card-addr", text: m.service || shortHash(m.protx) }),
     el("div", { class: "mn-card-sub" },
-      [m.country ? `${flag(m.country)} ${m.country}` : null, m.as_org, m.uptime_7d != null ? `${uptimePct(m.uptime_7d)} up 7d` : null, paid]
-        .filter(Boolean).join(" · "))));
+      [m.country ? `${flag(m.country)} ${m.country}` : null, m.as_org, m.uptime_7d != null ? `${uptimePct(m.uptime_7d)} up 7d` : null]
+        .filter(Boolean).join(" · ")),
+    // Its own line: time and blocks don't fit beside the rest on a phone.
+    el("div", { class: "mn-card-sub", text: paid })));
 }
 
 function sortBy(key) {
@@ -192,7 +205,7 @@ async function main() {
   try {
     const data = await api(`${net}/masternodes`);
     rows = data.masternodes;
-    tip = data.tip;
+    tip = listTip(data);
     const reach = rows.filter((m) => m.status === "enabled" && m.reachable === true).length;
     const enabled = rows.filter((m) => m.status === "enabled").length;
     document.getElementById("lede").textContent =

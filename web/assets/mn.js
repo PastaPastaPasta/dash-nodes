@@ -1,5 +1,5 @@
 import { api, chrome, currentNet, NETWORKS, el, fmt, pct, href, countryName, flag, place, badge, ago, dateTime, dash, nodeStatus, poseBadge, uptimeKind, tile, card,
-  changeText, changeKind, DKG_CHECKS, DKG_OVERALL } from "./common.js";
+  changeText, changeKind, DKG_CHECKS, DKG_OVERALL, blockSpan, blocks, blocksIn, behind, heightWhen } from "./common.js";
 
 chrome("masternodes");
 const net = currentNet();
@@ -90,7 +90,9 @@ async function main() {
   document.getElementById("lede").textContent = m.protx;
 
   const ps = m.payments_summary;
-  const tip = ps.indexed?.to;
+  // The payments index's top, or this node's last payment if the index has fallen behind the list.
+  const tip = Math.max(ps.indexed?.to || 0, m.last_paid_height || 0) || null;
+  const paidAgo = m.last_paid_height && tip ? behind(tip, m.last_paid_height) : null;
   const up30 = m.uptime_daily.slice(-30);
   const ok30 = up30.reduce((a, d) => a + d.ok, 0), at30 = up30.reduce((a, d) => a + d.attempts, 0);
   root.append(el("div", { class: "tiles" },
@@ -98,8 +100,8 @@ async function main() {
       m.last_seen ? `last answered ${ago(m.last_seen)}` : "never answered our crawler"),
     tile("Version", m.version || "–", m.protocol ? `protocol ${m.protocol}` : "no handshake yet"),
     tile("Uptime, 30 days", at30 ? pct(ok30 / at30) : "–", at30 ? `${fmt(ok30)} of ${fmt(at30)} port checks` : "no checks yet"),
-    tile("Last paid", m.last_paid_height ? (tip ? `${fmt(tip - m.last_paid_height)} blocks ago` : fmt(m.last_paid_height)) : "never",
-      m.last_paid_height ? `block ${fmt(m.last_paid_height)}` : ""),
+    tile("Last paid", !m.last_paid_height ? "never" : paidAgo ? paidAgo[0] : "in the latest block",
+      m.last_paid_height ? [paidAgo && `${paidAgo[1]} ago`, `block ${fmt(m.last_paid_height)}`].filter(Boolean).join(" · ") : ""),
     earnedTile(m),
   ));
 
@@ -130,12 +132,12 @@ async function main() {
         ["Owner address", m.owner_address ? el("span", {}, ...m.owner_address.split(",").flatMap((a, i) => [i ? ", " : "", link("address", a)])) : null],
         ["Voting address", link("address", m.voting_address)],
         ["Operator public key", el("span", { class: "mono", text: m.pubkey_operator || "–" })],
-        ["Registered at block", fmt(m.registered_height)],
-        ["Last paid at block", m.last_paid_height ? fmt(m.last_paid_height) : "never"],
+        ["Registered at block", heightWhen(m.registered_height, tip)],
+        ["Last paid at block", m.last_paid_height ? heightWhen(m.last_paid_height, tip) : "never"],
         // Banned says it all; otherwise the penalty is what matters (it's what gets a node banned).
-        ["PoSe", m.pose_ban_height > 0 ? badge("serious", `Banned at block ${fmt(m.pose_ban_height)}`)
+        ["PoSe", m.pose_ban_height > 0 ? badge("serious", `Banned at block ${heightWhen(m.pose_ban_height, tip)}`)
           : m.pose_penalty ? `Penalty ${fmt(m.pose_penalty)}, not banned` : "No penalty"],
-        m.pose_revived_height > 0 && ["PoSe revived at", fmt(m.pose_revived_height)],
+        m.pose_revived_height > 0 && ["PoSe revived at block", heightWhen(m.pose_revived_height, tip)],
         m.revocation_reason ? ["Revocation reason", String(m.revocation_reason)] : null,
         m.removed && ["Left the list", dateTime(m.removed)],
       ])),
@@ -191,7 +193,8 @@ function dkgTexts(m, d) {
       pass: ["Relays transactions."],
       fail: ["Relay is off, so it won't have the transactions it must sign InstantSend locks for.",
         `Remove blocksonly=1 from dash.conf. ${rules.release} won't start a masternode with it.`],
-      unknown: [d.checks.protocol !== "unknown" ? "Not recorded yet; the next crawl will tell." : noHandshake],
+      // Filters come from the same handshake: known filters mean only the relay flag is missing.
+      unknown: [d.checks.filters !== "unknown" ? "Not recorded yet; the next crawl will tell." : noHandshake],
     },
     filters: {
       pass: [`Serves compact block filters (${bit}).`],
@@ -260,6 +263,7 @@ function dkgSection(m) {
     el("p", { class: "muted small" },
       "When a DKG starts, each quorum member votes against members it can't reach or that fail these checks on their masternode connections. ",
       `Reachability and Platform bans count already; ${rules.release} raises the minimum protocol and adds the relay and filter checks. `,
+      rules.protocol_check === false ? `The version check starts once ${rules.release} is released. ` : null,
       "We see the handshake this node sends our crawler, an ordinary inbound connection, so relay and services can differ only if the operator set something unusual. ",
       "Rules from Dash Core ", el("a", { href: `https://github.com/dashpay/dash/blob/${rules.core_commit}/src/active/dkgsession.cpp`, text: `develop at ${rules.core_commit}` }), "."));
 }
@@ -284,16 +288,18 @@ async function notFound() {
     el("a", { href: href(`/masternodes?q=${encodeURIComponent(protx.slice(0, 16))}`), text: "Search the list" }), "."));
 }
 
-/** What it earned over the last year, and the yield on its collateral that works out to. */
+/**
+ * What it was paid and the yield, over one window: the last 90 days (as the home page's medians), or
+ * since it registered or the payments index began, if later.
+ */
 function earnedTile(m) {
   const r = m.returns;
-  if (!r) return tile("Earned, last 365 days", "–", "");
-  // While the payments index covers less than a year, say how far it goes back.
-  const partial = r.indexed_since && Date.now() / 1000 - r.indexed_since < 365 * 86400;
-  const label = partial ? `Earned since ${new Date(r.indexed_since * 1000).toLocaleDateString("en-GB", { dateStyle: "medium", timeZone: "UTC" })}` : "Earned, last 365 days";
-  const y = r.annual_yield != null ? `≈ ${pct(r.annual_yield)} a year on its ${m.type === "Evo" ? "4,000" : "1,000"} DASH (last ${r.window_days} days)`
+  if (!r) return tile("Earned, last 90 days", "–", "");
+  const days = r.window_days;
+  const label = days ? `Earned, last ${days} day${days === 1 ? "" : "s"}` : "Earned so far";
+  const y = r.annual_yield != null ? `≈ ${pct(r.annual_yield)} a year on its ${m.type === "Evo" ? "4,000" : "1,000"} DASH`
     : m.removed ? "no longer in the list" : "too new to tell its yield";
-  return tile(label, dash(r.paid_365d), y);
+  return tile(label, dash(r.paid_90d), y);
 }
 
 /** Registration changes we've recorded, newest first. */
@@ -445,7 +451,7 @@ function speedSection(box, b) {
       el("thead", {}, el("tr", {}, ...SPEED_HEADS.map((h, i) =>
         el("th", { class: i > 1 ? "r" : null, text: h })))),
       el("tbody", {}, ...tested.map(speedRow))))),
-    el("p", { class: "muted small" }, "Each test downloads the latest 50,000 block headers and the masternode list from this node and checks them against our own node. Grades use the scoring of ",
+    el("p", { class: "muted small" }, `Each test downloads the latest 50,000 block headers (about ${blockSpan(50000)} of blocks) and the masternode list from this node and checks them against our own node. Grades use the scoring of `,
       el("a", { href: "https://github.com/dashpay/spv-network-health", text: "spv-network-health" }), "."));
   box.hidden = false;
 }
@@ -501,13 +507,14 @@ function paymentsSection(m) {
       more.disabled = false;
     }
   });
-  const note = ps.indexed ? `indexed blocks ${fmt(ps.indexed.from)}–${fmt(ps.indexed.to)}` : "payment index not started yet";
+  const note = ps.indexed ? `indexed blocks ${fmt(ps.indexed.from)}–${fmt(ps.indexed.to)}, about ${blockSpan(ps.indexed.to - ps.indexed.from)}`
+    : "payment index not started yet";
   // How often it gets paid lately: the spacing of its latest payment rounds. An evonode is paid several
   // blocks in a row, so a run of consecutive blocks counts as one round.
   const rounds = m.payments.filter((p, i, all) => i === 0 || all[i - 1].height - p.height > 1).slice(0, 6);
   const every = rounds.length > 2 ? (rounds[0].time - rounds.at(-1).time) / (rounds.length - 1) / 86400 : null;
   const lede = ps.count
-    ? `${fmt(ps.count)} payments, ${dash(ps.total_duffs)} in total${every ? `; lately one every ${every < 2 ? every.toFixed(1) : Math.round(every)} days` : ""}.`
+    ? `${fmt(ps.count)} payments, ${dash(ps.total_duffs)} in total${every ? `; lately one every ${every < 2 ? every.toFixed(1) : Math.round(every)} days, about ${blocks(blocksIn(every * 86400))}` : ""}.`
     : null;
   return el("section", {}, el("div", { class: "card-head" }, el("h2", { text: "Payments" }), el("span", { class: "sub", text: note })),
     lede ? el("p", { class: "sub", text: lede }) : null,

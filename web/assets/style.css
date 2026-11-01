@@ -80,7 +80,6 @@ header.top {
 .brand { display: flex; align-items: center; gap: 9px; color: var(--ink); font-weight: 650; font-size: 15px; }
 .brand:hover { text-decoration: none; }
 .brand img { width: 22px; height: 22px; display: block; }
-.brand small { font-weight: 450; color: var(--muted); font-size: 13px; }
 nav.main { display: flex; gap: 2px; }
 nav.main a { color: var(--ink-2); padding: 6px 10px; border-radius: 6px; font-weight: 500; }
 nav.main a:hover { background: var(--surface-2); text-decoration: none; color: var(--ink); }
@@ -89,13 +88,11 @@ nav.main a[aria-current="page"] { color: var(--ink); background: var(--surface-2
 .net-badge { font-size: 11.5px; font-weight: 650; padding: 2px 7px; border-radius: 999px; background: color-mix(in srgb, var(--warning) 25%, transparent); color: var(--ink); }
 .more-toggle { display: none; font: inherit; background: none; border: 0; color: var(--ink-2); padding: 6px; border-radius: 8px; cursor: pointer; margin-left: auto; }
 .more-toggle svg { width: 20px; height: 20px; display: block; }
-/* Narrow desktops: the hostname under the name goes before the header needs a second row. */
-@media (max-width: 1180px) { .brand small { display: none; } }
 /* Phones and small tablets: one header row (logo, nav, menu button); the rest drops down from the
    button. Same breakpoint as the map's bottom sheet, so the map never gets a two-row header. */
 @media (max-width: 900px) {
   .top-inner { flex-wrap: nowrap; gap: 6px; padding: 6px 10px; position: relative; }
-  .brand span, .brand small { display: none; }
+  .brand span { display: none; }
   .brand img { width: 26px; height: 26px; }
   nav.main { overflow-x: auto; scrollbar-width: none; flex: 1; min-width: 0; }
   nav.main::-webkit-scrollbar { display: none; }
@@ -372,6 +369,8 @@ pre.code { background: var(--surface-2); padding: 10px 12px; border-radius: 8px;
 
 /* ---- overview ---- */
 .small { font-size: 13px; }
+/* A table value's other unit (time under blocks, or blocks under time). */
+td small.under { display: block; font-size: 12px; color: var(--muted); }
 .btn.primary { background: var(--brand); color: var(--brand-ink); box-shadow: none; font-weight: 600; }
 .btn.primary:hover { background: color-mix(in srgb, var(--brand) 88%, var(--ink)); }
 .hero { position: relative; overflow: hidden; border-bottom: 1px solid var(--ring); }
@@ -379,7 +378,9 @@ pre.code { background: var(--surface-2); padding: 10px 12px; border-radius: 8px;
 .hero-inner > * { max-width: 520px; }
 .hero h1 { font-size: clamp(30px, 4.2vw, 48px); line-height: 1.06; font-weight: 680; font-stretch: 118%; letter-spacing: -0.02em; text-wrap: balance; }
 .hero-sub { margin: 16px 0 0; font-size: 17px; color: var(--ink-2); text-wrap: pretty; }
-.hero-inner > .hero-stats { max-width: 700px; display: grid; grid-template-columns: repeat(auto-fill, minmax(122px, 1fr)); gap: 18px 24px; margin: 30px 0 0; }
+/* Six figures: two rows of three, or three of two where three won't fit. A column is at least a third,
+   and at most 122px or half, so the narrowest phones still get two. */
+.hero-inner > .hero-stats { max-width: 700px; display: grid; grid-template-columns: repeat(auto-fill, minmax(max(min(122px, (100% - 24px) / 2), (100% - 48px) / 3), 1fr)); gap: 18px 24px; margin: 30px 0 0; }
 .hero-stats div { border-left: 2px solid var(--grid); padding-left: 12px; }
 .hero-stats dt { color: var(--muted); font-size: 13px; }
 .hero-stats dd { margin: 2px 0 0; font-size: 24px; font-weight: 650; font-stretch: 110%; line-height: 1.2; }

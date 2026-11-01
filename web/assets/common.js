@@ -83,6 +83,55 @@ export function ago(ts) {
   return `${Math.round(s / 86400)} d ago`;
 }
 
+// Block counts become time at the chain's average spacing, an estimate: Dash targets 2.5 minutes, but
+// since the masternode list began (block 1,028,160, February 2019) blocks have come about every 158 s.
+const BLOCK_SECONDS = 158;
+
+/** A span in seconds the way people say it: "40 min", "5 h", "12 days", "8 months", "2.4 years". */
+function duration(s) {
+  if (s < 5400) return `${Math.max(1, Math.round(s / 60))} min`;
+  if (s < 129600) return `${Math.round(s / 3600)} h`;
+  const d = s / 86400;
+  if (d < 60) return `${Math.round(d)} days`;
+  if (d < 365) return `${Math.round(d / 30.44)} months`;
+  const y = Number((d / 365.25).toFixed(1));
+  return `${y} year${y === 1 ? "" : "s"}`;
+}
+
+export const blocks = (n) => `${fmt(n)} block${n === 1 ? "" : "s"}`;
+/** About how long n blocks take: "8 months". */
+export const blockSpan = (n) => duration(n * BLOCK_SECONDS);
+/** About how many blocks come in s seconds. */
+export const blocksIn = (s) => Math.round(s / BLOCK_SECONDS);
+
+/**
+ * How far a height is behind the tip, as ["8 months ago", "129,400 blocks"]; null at the tip or past
+ * it (the masternode list can be a block ahead of the payments index the tip comes from).
+ */
+export function behind(tip, height) {
+  const n = tip - height;
+  return n > 0 ? [`${blockSpan(n)} ago`, blocks(n)] : null;
+}
+
+/** A past height in time and blocks: "8 months ago · 129,400 blocks". */
+export function blocksAgo(tip, height) {
+  const b = behind(tip, height);
+  return b ? b.join(" · ") : "in the latest block";
+}
+
+/** A height, and about when it was if the tip is known: "2,435,262, about 8 months ago". */
+export function heightWhen(height, tip) {
+  if (!(height > 0) || !tip) return fmt(height);
+  const b = behind(tip, height);
+  return `${fmt(height)}, ${b ? `about ${b[0]}` : "the latest block"}`;
+}
+
+/**
+ * The tip for a masternode list: the API's (the payments index's top), or the latest payment the list
+ * knows of if that's higher, since the index can fall behind the list.
+ */
+export const listTip = (data) => Math.max(data.tip ?? 0, ...data.masternodes.map((m) => m.last_paid_height || 0)) || null;
+
 export function dateTime(ts) {
   return new Date(ts * 1000).toLocaleString("en-GB", { dateStyle: "medium", timeStyle: "short", timeZone: "UTC" }) + " UTC";
 }
@@ -131,8 +180,9 @@ export const poseBadge = (m) => (m.status === "pose_banned" ? badge("serious", "
 
 // DKG readiness (readiness.rs): would quorum members vote this masternode a bad connection under the
 // next Core release's rules? Each check is "pass", "fail" or "unknown"; the thresholds come from the API.
+// The protocol check is off until that release is out (PROTOCOL_CHECK in readiness.rs); add
+// ["protocol", "Protocol version"] back when it's turned on.
 export const DKG_CHECKS = [
-  ["protocol", "Protocol version"],
   ["relay", "Transaction relay"],
   ["filters", "Compact block filters"],
   ["reachable", "Reachable"],
@@ -311,7 +361,7 @@ export function chrome(page, { footer = true } = {}) {
   // Named here because narrow screens hide the text and the logo is decoration.
   const brand = el("a", { class: "brand", href: href("/"), "aria-label": net === "testnet" ? "DashHQ Radar, testnet" : "DashHQ Radar" });
   brand.append(el("img", { src: "/assets/icons/mark-96.png", alt: "", width: 22, height: 22 }));
-  brand.append(el("span", { text: "DashHQ Radar" }), el("small", { text: "radar.dashhq.org" }));
+  brand.append(el("span", { text: "DashHQ Radar" }));
   if (net === "testnet") brand.append(el("b", { class: "net-badge", text: "Testnet" }));
   // Phones: the network switch, theme and status fold into a menu behind one button.
   const more = el("button", { class: "more-toggle", type: "button", "aria-label": "Network and display settings", "aria-expanded": "false", "aria-controls": "top-right" });

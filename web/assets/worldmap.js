@@ -32,8 +32,11 @@ async function landPath() {
     for (const f of fc.features) {
       if (f.properties.k !== "land") continue;
       const polys = f.geometry.type === "Polygon" ? [f.geometry.coordinates] : f.geometry.coordinates;
-      // Antarctica has no nodes and would take a fifth of the height.
-      for (const p of polys) if (p[0].some(([, lat]) => lat > -58)) d += ringPath(p[0]);
+      // Antarctica has no nodes and would take a fifth of the height. The islands in the Pacific west of
+      // the Americas (Hawaii, and Fiji's sliver across the date line) would float alone under the text.
+      for (const p of polys) {
+        if (p[0].some(([, lat]) => lat > -58) && !p[0].every(([lon, lat]) => lon < -150 && lat < 30)) d += ringPath(p[0]);
+      }
     }
     return d;
   });
