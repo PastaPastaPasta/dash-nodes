@@ -32,6 +32,8 @@ const NETS = (process.env.NETWORKS || "mainnet testnet").split(/\s+/).filter(Boo
 const STATE_FILE = process.env.STATE_FILE || "";
 /** A network is republished at least this often even without a new crawl (list and payments move). */
 const REFRESH_EVERY = 60 * 60_000;
+/** Dash Core's releases are fetched from GitHub this often (unauthenticated: 60 requests an hour). */
+const RELEASES_EVERY = 60 * 60_000;
 const once = process.argv.includes("--once");
 
 /** A secret from env `name`, else from the file in `${name}_FILE` (or `file`); "" if neither has one. */
@@ -136,6 +138,23 @@ async function put(key, doc) {
   puts++;
 }
 
+/**
+ * Dash Core's published releases, so pages can tell a release from a release candidate or a build that
+ * matches none: [{tag, version, prerelease, published}], newest first, drafts left out.
+ */
+async function publishReleases() {
+  const r = await fetch("https://api.github.com/repos/dashpay/dash/releases?per_page=100", {
+    headers: { accept: "application/vnd.github+json", "user-agent": "dash-nodes (radar.dashhq.org)" },
+    // A stalled connection would hold up the whole loop (status and every network).
+    signal: AbortSignal.timeout(20_000),
+  });
+  if (!r.ok) throw new Error(`GitHub releases: ${r.status}`);
+  const releases = (await r.json()).filter((x) => !x.draft && x.published_at).map((x) => ({
+    tag: x.tag_name, version: x.tag_name.replace(/^v/, "").replace(/-.*$/, ""), prerelease: x.prerelease, published: x.published_at,
+  }));
+  await put("v1/releases.json", { releases });
+}
+
 /** Uploads a document an older crawler may not have yet (its endpoint answers 400/404); skips it if so. */
 async function putIfServed(key, load) {
   // Only "this build doesn't have it" is skipped; any other failure fails the pass, which is retried.
@@ -225,6 +244,7 @@ async function main() {
   const lastPass = new Map(); // net -> time of the last successful pass
   const failures = new Map(); // net -> consecutive failed passes
   const retryAt = new Map(); // net -> earliest next attempt after a failure
+  let releasesAt = 0; // when to fetch Dash Core's releases next
   for (;;) {
     const started = Date.now();
     let status = null;
@@ -233,6 +253,11 @@ async function main() {
       await put("v1/status.json", status);
     } catch (e) {
       log("status failed:", e.message);
+    }
+    if (started >= releasesAt) {
+      // A failure tries again in 10 minutes; pages keep the last list meanwhile.
+      releasesAt = started + RELEASES_EVERY;
+      await publishReleases().catch((e) => { releasesAt = started + 10 * 60_000; log("releases failed:", e.message); });
     }
     for (const net of NETS) {
       const id = status?.networks?.[net]?.crawl?.last_id ?? null;

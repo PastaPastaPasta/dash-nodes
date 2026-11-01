@@ -25,6 +25,8 @@
   --brand-ink: #ffffff;
   --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100; --s5: #e87ba4; --s6: #008300;
   --other: #aab5c3;
+  /* Versions that aren't a release: release candidates, and builds that match no release. */
+  --rel-candidate: #0f8a78; --rel-build: #b0772a;
   --good: #0ca30c; --warning: #fab219; --serious: #ec835a; --critical: #d03b3b;
   --none: #e2e8f0;
   /* map */
@@ -41,6 +43,7 @@
     --ring: rgba(170, 200, 235, 0.13); --brand: #3ba3f2; --brand-ink: #06111f;
     --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181; --s6: #008300;
     --other: #4d607a; --good: #22b04b; --none: #1d2e46;
+    --rel-candidate: #2bb59c; --rel-build: #c9913f;
     --ocean: #0a1321; --land: #15243a; --border-line: #2c4060; --state-line: #1d2f48; --label: #6b819e;
     --shadow: 0 1px 2px rgba(0, 0, 0, .3), 0 10px 32px rgba(0, 0, 0, .38);
   }
@@ -52,6 +55,7 @@
   --ring: rgba(170, 200, 235, 0.13); --brand: #3ba3f2; --brand-ink: #06111f;
   --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181; --s6: #008300;
   --other: #4d607a; --good: #22b04b; --none: #1d2e46;
+  --rel-candidate: #2bb59c; --rel-build: #c9913f;
   --ocean: #0a1321; --land: #15243a; --border-line: #2c4060; --state-line: #1d2f48; --label: #6b819e;
   --shadow: 0 1px 2px rgba(0, 0, 0, .3), 0 10px 32px rgba(0, 0, 0, .38);
 }
@@ -442,6 +446,33 @@ main.overview { padding-top: 26px; }
 .sharebar { display: flex; gap: 2px; height: 30px; border-radius: 7px; overflow: hidden; }
 .sharebar.thin { height: 12px; border-radius: 4px; margin-bottom: 14px; }
 .sharebar div { min-width: 3px; }
+/* The release ladder: versions newest first, grouped by release line, each with its share as a bar. */
+.ladder-wrap { overflow-x: auto; }
+.ladder { width: 100%; border-collapse: collapse; font-size: 14px; font-variant-numeric: tabular-nums; }
+.ladder thead th { font-size: 12.5px; font-weight: 450; color: var(--muted); text-align: left; padding: 0 8px 8px 0; white-space: nowrap; }
+.ladder tbody { border-top: 1px solid var(--grid); }
+.ladder th.line { width: 1%; padding: 8px 14px 0 0; text-align: left; vertical-align: top; white-space: nowrap; font-size: 15px; font-weight: 680; font-stretch: 112%; }
+.ladder td, .ladder th.ver { padding: 6px 8px 6px 0; white-space: nowrap; color: var(--ink-2); }
+.ladder tbody tr:first-child > * { padding-top: 9px; }
+.ladder tbody tr:last-child > * { padding-bottom: 9px; }
+/* The version, and what it is (a note that wraps under it as a whole when the column is tight). */
+.ladder th.ver { text-align: left; white-space: normal; color: var(--ink); font-weight: 550; padding-right: 14px; }
+.ladder th.ver span { white-space: nowrap; }
+.ladder th.ver small { margin-left: 8px; font-size: 12.5px; font-weight: 450; color: var(--muted); white-space: nowrap; }
+.ladder td.bar { width: 100%; min-width: 56px; }
+.ladder td.bar i { display: block; height: 10px; min-width: 3px; border-radius: 2px; }
+.ladder .r { text-align: right; padding-left: 12px; }
+.ladder td.chg { color: var(--muted); }
+.ladder tbody.unknown th.ver { color: var(--muted); font-weight: 450; }
+@media (max-width: 560px) {
+  .ladder .n { display: none; }
+  .ladder th.line { padding-right: 4px; }
+  .ladder th.ver { min-width: 7.4em; padding-right: 6px; }
+  .ladder th.ver small { display: block; margin: 1px 0 0; font-size: 12px; }
+  .ladder td.bar { min-width: 32px; }
+  .ladder .r { padding-left: 8px; }
+  .ladder .unit { display: none; }
+}
 .share-legend { display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 12px 0 0; font-size: 13.5px; color: var(--ink-2); }
 .share-legend > span { display: inline-flex; align-items: center; gap: 7px; min-width: 0; max-width: 100%; overflow-wrap: anywhere; } /* long dev version names wrap */
 .share-legend i { width: 10px; height: 10px; border-radius: 3px; }
@@ -612,7 +643,7 @@ button.link { font: inherit; font-size: 13px; background: none; border: 0; paddi
 
 @media (max-width: 640px) { input[type="search"] { min-width: 0; width: 100%; } }
 @media (forced-colors: active) {
-  .sharebar div, .ranked i, .share-legend i, .chip i, .map-donut, .wm-dots circle { forced-color-adjust: none; }
+  .sharebar div, .ladder td.bar i, .ranked i, .share-legend i, .chip i, .map-donut, .wm-dots circle { forced-color-adjust: none; }
   .wm-pings { display: none; }
   .strip div, .legend i { forced-color-adjust: none; }
 }

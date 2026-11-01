@@ -69,6 +69,32 @@ function radarPings(box, dots) {
 }
 
 /**
+ * Cities as bubbles, biggest first, merged wherever two would overlap: a merge sits at the node-weighted
+ * centre and is sized by the total, so a dense region reads as one bubble rather than a pile. Repeats
+ * until nothing overlaps, since a merge grows its bubble.
+ */
+function bubbles(points) {
+  const radius = (n, max) => 1.6 + Math.sqrt(n / max) * 13;
+  let cs = points.map((p) => { const [x, y] = project(p.lon, p.lat); return { x, y, nodes: p.nodes }; });
+  for (let pass = 0; pass < 8; pass++) {
+    const max = Math.max(1, ...cs.map((c) => c.nodes));
+    const out = [];
+    for (const c of cs.sort((a, b) => b.nodes - a.nodes)) {
+      const r = radius(c.nodes, max);
+      const into = out.find((o) => Math.hypot(o.x - c.x, o.y - c.y) < o.r + r);
+      if (!into) { out.push({ ...c, r }); continue; }
+      const n = into.nodes + c.nodes;
+      Object.assign(into, { x: (into.x * into.nodes + c.x * c.nodes) / n, y: (into.y * into.nodes + c.y * c.nodes) / n, nodes: n, r: radius(n, max) });
+    }
+    const done = out.length === cs.length;
+    cs = out;
+    if (done) break;
+  }
+  const max = Math.max(1, ...cs.map((c) => c.nodes));
+  return cs.sort((a, b) => b.nodes - a.nodes).map((c) => ({ ...c, r: radius(c.nodes, max) }));
+}
+
+/**
  * Draws the map into `root` (an <svg>). points: [{lat, lon, nodes}]. Dots fade in west to east once,
  * like a crawl sweeping the globe; skipped when the reader prefers reduced motion. Then, if `pings`
  * (the overlay over `root`) is given, the biggest clusters send out radar pings (also off then, in CSS).
@@ -79,15 +105,11 @@ export async function worldMap(root, points, pings) {
   root.setAttribute("preserveAspectRatio", "xMidYMid meet");
   root.replaceChildren(svg("path", { class: "wm-land", d: await landPath() }));
   const dots = svg("g", { class: "wm-dots" });
-  const max = Math.max(1, ...points.map((p) => p.nodes));
-  const placed = [];
-  for (const p of [...points].sort((a, b) => b.nodes - a.nodes)) {
-    const [x, y] = project(p.lon, p.lat);
-    const r = 1.6 + Math.sqrt(p.nodes / max) * 13;
+  const placed = bubbles(points);
+  for (const { x, y, r } of placed) {
     const c = svg("circle", { cx: x.toFixed(1), cy: y.toFixed(1), r: r.toFixed(1) });
     c.style.setProperty("--d", `${Math.round((x / 1000) * 900)}ms`);
     dots.append(c);
-    placed.push({ x, y, r });
   }
   root.append(dots);
   if (pings) radarPings(pings, placed);

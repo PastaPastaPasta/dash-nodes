@@ -17,8 +17,8 @@ const json = (status, body, cache) =>
   new Response(JSON.stringify(body), { status, headers: { ...API_HEADERS, "cache-control": cache } });
 const fail = (status, message) => json(status, { error: message }, "no-store");
 
-/** Paths whose stored document is served as is. */
-const PASSTHROUGH = new RegExp(`^(status|(${NETWORKS.join("|")})/(${DOCS.join("|")}))$`);
+/** Paths whose stored document is served as is (`releases`: Dash Core's, from the publisher). */
+const PASSTHROUGH = new RegExp(`^(status|releases|(${NETWORKS.join("|")})/(${DOCS.join("|")}))$`);
 
 const getJson = async (env, key) => {
   const obj = await env.DATA.get(key);
