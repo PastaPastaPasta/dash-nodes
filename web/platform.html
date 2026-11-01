@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DashHQ Radar: Platform rewards</title>
+  <meta name="description" content="What Dash evonodes earn on Platform: rewards per epoch, the protocol upgrade vote, who proposes next, and every evonode compared.">
+  <link rel="canonical" href="https://radar.dashhq.org/platform">
+  <meta property="og:site_name" content="DashHQ Radar">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="DashHQ Radar: Platform rewards">
+  <meta property="og:description" content="What Dash evonodes earn on Platform: rewards per epoch, the protocol upgrade vote, who proposes next, and every evonode compared.">
+  <meta property="og:url" content="https://radar.dashhq.org/platform">
+  <meta name="twitter:card" content="summary">
+  <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
+  <!-- TODO(icon): worker/scripts/build.mjs puts the PNG icon set and og:image here once
+       web/assets/icons/ has it (see the README there). Until then favicon.svg is the icon. -->
+  <link rel="manifest" href="/assets/site.webmanifest">
+  <link rel="stylesheet" href="/assets/style.css">
+  <script type="module" src="/assets/platform.js"></script>
+</head>
+<body>
+<main class="platform">
+  <div class="page-head">
+    <div>
+      <h1>Platform rewards</h1>
+      <p class="sub" id="lede">Each Platform epoch's pool goes to the evonodes that proposed its blocks, in proportion to how many
+        each proposed. Here's what that comes to, worked out the way Drive pays it.</p>
+    </div>
+  </div>
+  <div id="banner"></div>
+
+  <section class="epoch-now" id="now" aria-labelledby="now-title" hidden>
+    <h2 id="now-title"></h2>
+    <div class="epoch-rail" id="now-rail"></div>
+    <p class="sub" id="now-sub"></p>
+    <dl class="stat-row" id="now-stats"></dl>
+  </section>
+
+  <section class="ov-section" aria-labelledby="upgrade-title" id="upgrade" hidden>
+    <div class="ov-head">
+      <h2 id="upgrade-title">Protocol upgrade</h2>
+      <p class="ov-lede" id="upgrade-lede"></p>
+    </div>
+    <div class="vote-meter" id="upgrade-meter"></div>
+    <dl class="stat-row" id="upgrade-stats"></dl>
+    <p class="muted small" id="upgrade-note"></p>
+  </section>
+
+  <section class="ov-section" aria-labelledby="next-title" id="next" hidden>
+    <div class="ov-head">
+      <h2 id="next-title">Who proposes next</h2>
+      <p class="ov-lede" id="next-lede"></p>
+    </div>
+    <ol class="next-list" id="next-list"></ol>
+  </section>
+
+  <section class="ov-section" aria-labelledby="epochs-title" id="epochs" hidden>
+    <div class="ov-head">
+      <h2 id="epochs-title">Epochs</h2>
+      <p class="ov-lede" id="epochs-lede"></p>
+    </div>
+    <div class="ov-chart"><div class="chart-head"><h3>What one evonode earned per epoch</h3><span class="muted small" id="epochs-key"></span></div>
+      <div id="epochs-chart"></div></div>
+    <div class="table-wrap section"><table class="data stack" id="epochs-table"></table></div>
+    <div class="pager" id="epochs-pager"></div>
+  </section>
+
+  <section class="ov-section" aria-labelledby="all-title" id="all" hidden>
+    <div class="ov-head">
+      <h2 id="all-title">Every evonode</h2>
+      <p class="ov-lede" id="all-lede"></p>
+    </div>
+    <div class="filters open" id="all-filters"></div>
+    <div class="table-wrap"><table class="data stack" id="all-table"></table></div>
+    <div class="pager" id="all-pager"></div>
+  </section>
+</main>
+</body>
+</html>

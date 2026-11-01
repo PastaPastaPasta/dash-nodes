@@ -4,6 +4,7 @@
 import { connect } from "cloudflare:sockets";
 import { route, ApiError, KEY, NETWORKS, DOCS, PARAMS, VANTAGE, shardKey } from "./api.js";
 import { checkNode, parseAddress } from "./check.js";
+import { MN_PAGE, mnPage } from "./pages.js";
 
 const API_HEADERS = {
   "content-type": "application/json; charset=utf-8",
@@ -254,8 +255,7 @@ export default {
     if (url.pathname.startsWith("/api/v1/")) return api(request, env, ctx, url);
     if (url.pathname.startsWith("/_ingest/")) return ingest(request, env, url);
     if (url.pathname.startsWith("/_state/")) return state(request, env, url);
-    // Masternode pages share one HTML file; the script reads the ProTx from the path.
-    if (/^\/mn\/[0-9a-fA-F]{64}\/?$/.test(url.pathname)) return env.ASSETS.fetch(new Request(new URL("/mn", url), request));
+    if (MN_PAGE.test(url.pathname)) return mnPage(env, request, url);
     return env.ASSETS.fetch(request);
   },
 };

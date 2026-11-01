@@ -19,10 +19,10 @@ test("shards spread the first byte over 64 documents", () => {
 });
 
 test("ingest keys are an allow-list", () => {
-  for (const k of ["v1/status.json", "v1/releases.json", "v1/mainnet/summary.json", "v1/testnet/changes.json", "v1/testnet/mn/3f.json", "v1/mainnet/history/totals.json",
+  for (const k of ["v1/status.json", "v1/releases.json", "v1/mainnet/summary.json", "v1/testnet/changes.json", "v1/mainnet/platform.json", "v1/testnet/platform.json", "v1/testnet/mn/3f.json", "v1/mainnet/history/totals.json",
     "v1/mainnet/history/mn/version.json", `v1/mainnet/payments/${"a".repeat(64)}.json`,
     `v1/mainnet/payments/${"a".repeat(64)}/25.json`]) assert.ok(KEY.test(k), k);
-  for (const k of ["v1/devnet/summary.json", "v1/mainnet/../x.json", "v1/mainnet/history/mn/totals.json", "v1/mainnet/mn/3F.json",
+  for (const k of ["v1/devnet/platform.json", "v1/mainnet/platform/x.json", "v1/platform.json", "v1/devnet/summary.json", "v1/mainnet/../x.json", "v1/mainnet/history/mn/totals.json", "v1/mainnet/mn/3F.json",
     "status.json", "v1/mainnet/history/x/version.json"]) assert.ok(!KEY.test(k), k);
 });
 
@@ -91,4 +91,12 @@ test("health fails when a network's crawl or chain data is stale, or dashd errs"
   assert.equal((await h({ "app-mainnet": { saved: now - 3600, error: null }, "app-testnet": { saved: null, error: null } })).ok, true);
   await assert.rejects(h({ "app-mainnet": { saved: now - 3600, error: "not saved: the latest snapshot is 2" } }), (e) => e.status === 503);
   await assert.rejects(h({ "app-mainnet": { saved: now - 20 * 3600, error: null } }), (e) => e.status === 503);
+});
+
+test("the Platform rewards document is served as published", async () => {
+  const doc = { now: { epoch: 87 }, evonodes: [] };
+  const get = async (k) => (k === "v1/mainnet/platform.json" ? doc : null);
+  assert.equal(await route(["mainnet", "platform"], new URLSearchParams(""), get), doc);
+  await assert.rejects(route(["testnet", "platform"], new URLSearchParams(""), get), (e) => e.status === 503);
+  await assert.rejects(route(["mainnet", "platform", "x"], new URLSearchParams(""), get), (e) => e.status === 404);
 });

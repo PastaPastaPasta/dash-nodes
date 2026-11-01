@@ -50,13 +50,16 @@ pub struct Status {
     pub tenderdash: Option<String>,
     pub drive_protocol_latest: Option<u64>,
     pub drive_protocol_current: Option<u64>,
+    /// The protocol version Drive will run from the next epoch: higher than current once an upgrade
+    /// has locked in.
+    pub drive_protocol_next: Option<u64>,
     pub height: Option<u64>,
     pub catching_up: bool,
     pub peers: Option<u64>,
     pub pro_tx_hash: Option<String>,
 }
 
-fn client() -> reqwest::Client {
+pub(crate) fn client() -> reqwest::Client {
     // The other side is whoever registered the evonode: no redirects (they could point us anywhere and
     // have the answer published) and no compression (a small answer could inflate without bound).
     reqwest::Client::builder()
@@ -136,8 +139,8 @@ fn store(c: &mut rusqlite::Connection, results: &[(String, Check)]) -> Result<()
         let mut latest = tx.prepare_cached(
             "INSERT OR REPLACE INTO platform_status (protx, ts, p2p_ms, p2p_error, https_ms, https_error, cert_issuer,
                 cert_expires, dapi, drive, tenderdash, drive_protocol_latest, drive_protocol_current, height,
-                catching_up, peers, node_protx)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)",
+                catching_up, peers, node_protx, drive_protocol_next)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18)",
         )?;
         let mut daily = tx.prepare_cached(
             "INSERT INTO platform_daily (protx, day, attempts, ok) VALUES (?1, ?2, 1, ?3)
@@ -163,6 +166,7 @@ fn store(c: &mut rusqlite::Connection, results: &[(String, Check)]) -> Result<()
                 s.map(|s| s.catching_up),
                 s.and_then(|s| s.peers.map(|v| v as i64)),
                 s.and_then(|s| s.pro_tx_hash.clone()),
+                s.and_then(|s| s.drive_protocol_next.map(|v| v as i64)),
             ])?;
             daily.execute(params![protx, day, i64::from(healthy(protx, r))])?;
         }
@@ -174,7 +178,7 @@ fn store(c: &mut rusqlite::Connection, results: &[(String, Check)]) -> Result<()
 /// A registered Platform address we're willing to connect to: an IP literal (all of them are, since
 /// Core registers IPs) that's publicly routable, so a registration can't aim the checker at private,
 /// loopback or link-local hosts.
-fn target(addr: &str) -> Result<SocketAddr, String> {
+pub(crate) fn target(addr: &str) -> Result<SocketAddr, String> {
     let sa: SocketAddr = addr.parse().map_err(|_| "not an IP address and port".to_owned())?;
     let peer = PeerAddr::from_socket(sa);
     if peer.public_ip().is_none() || !peer.is_routable() {
@@ -219,10 +223,25 @@ async fn check(client: &reqwest::Client, p2p: Option<&str>, https: Option<&str>)
 
 /// `getStatus` over gRPC-web. Returns the decoded status and the server's leaf certificate (DER).
 async fn get_status(client: &reqwest::Client, addr: SocketAddr) -> Result<(Status, Option<Vec<u8>>)> {
-    // GetStatusRequest { v0: {} }, in one gRPC-web data frame.
-    let body: &[u8] = &[0, 0, 0, 0, 2, 0x0a, 0x00];
+    // GetStatusRequest { v0: {} }.
+    let (msg, cert) = unary(client, addr, "getStatus", &[0x0a, 0x00], MAX_ANSWER).await?;
+    Ok((parse_status(&msg)?, cert))
+}
+
+/// One unary Platform call over gRPC-web: `request` is the protobuf message, framed here. Returns the
+/// answer's message and the server's leaf certificate (DER). Answers over `max` bytes are refused.
+pub(crate) async fn unary(
+    client: &reqwest::Client,
+    addr: SocketAddr,
+    method: &str,
+    request: &[u8],
+    max: usize,
+) -> Result<(Vec<u8>, Option<Vec<u8>>)> {
+    let mut body = vec![0];
+    body.extend((request.len() as u32).to_be_bytes());
+    body.extend(request);
     let mut resp = client
-        .post(format!("https://{addr}/org.dash.platform.dapi.v0.Platform/getStatus"))
+        .post(format!("https://{addr}/org.dash.platform.dapi.v0.Platform/{method}"))
         .header("content-type", "application/grpc-web+proto")
         .header("x-grpc-web", "1")
         .body(body)
@@ -234,19 +253,37 @@ async fn get_status(client: &reqwest::Client, addr: SocketAddr) -> Result<(Statu
         bail!("HTTP {}", resp.status());
     }
     let grpc_message = resp.headers().get("grpc-message").and_then(|v| v.to_str().ok()).map(str::to_owned);
-    if resp.content_length().is_some_and(|n| n > MAX_ANSWER as u64) {
+    if resp.content_length().is_some_and(|n| n > max as u64) {
         bail!("answer too large");
     }
     let mut bytes = Vec::new();
     while let Some(chunk) = resp.chunk().await.map_err(|e| anyhow!(describe(&e)))? {
-        if bytes.len() + chunk.len() > MAX_ANSWER {
+        if bytes.len() + chunk.len() > max {
             bail!("answer too large");
         }
         bytes.extend_from_slice(&chunk);
     }
-    let msg = first_data_frame(&bytes)
-        .ok_or_else(|| anyhow!("no answer ({})", grpc_message.as_deref().unwrap_or("empty")))?;
-    Ok((parse_status(msg)?, cert))
+    let msg = first_data_frame(&bytes).ok_or_else(|| {
+        // An error comes back as trailers only; their grpc-message says what went wrong.
+        let trailer = grpc_message.or_else(|| trailer_message(&bytes));
+        anyhow!("no answer ({})", trailer.as_deref().unwrap_or("empty"))
+    })?;
+    Ok((msg.to_vec(), cert))
+}
+
+/// The `grpc-message` of a trailer frame, when the server put it in the body rather than a header.
+fn trailer_message(buf: &[u8]) -> Option<String> {
+    let mut rest = buf;
+    while rest.len() >= 5 {
+        let len = u32::from_be_bytes(rest[1..5].try_into().ok()?) as usize;
+        let body = rest.get(5..5 + len)?;
+        if rest[0] & 0x80 != 0 {
+            let text = std::str::from_utf8(body).ok()?;
+            return text.lines().find_map(|l| l.strip_prefix("grpc-message:")).map(|m| m.trim().to_owned());
+        }
+        rest = &rest[5 + len..];
+    }
+    None
 }
 
 /// A reqwest error as one line, with the TLS or connection reason it wraps.
@@ -272,7 +309,7 @@ fn describe(e: &reqwest::Error) -> String {
 
 /// The payload of the first gRPC-web data frame (flag 0x00): frames are a flag byte, a big-endian
 /// length and the message; trailers come in a frame flagged 0x80.
-fn first_data_frame(buf: &[u8]) -> Option<&[u8]> {
+pub(crate) fn first_data_frame(buf: &[u8]) -> Option<&[u8]> {
     let mut rest = buf;
     while rest.len() >= 5 {
         let len = u32::from_be_bytes(rest[1..5].try_into().ok()?) as usize;
@@ -286,7 +323,7 @@ fn first_data_frame(buf: &[u8]) -> Option<&[u8]> {
 }
 
 /// One protobuf field: its number and either a varint or length-delimited bytes.
-enum Field<'a> {
+pub(crate) enum Field<'a> {
     Varint(u64),
     Bytes(&'a [u8]),
 }
@@ -304,38 +341,82 @@ fn varint(buf: &mut &[u8]) -> Option<u64> {
     None
 }
 
-/// The fields of a protobuf message, in order (fixed-width fields are skipped).
-fn fields(mut buf: &[u8]) -> Result<Vec<(u64, Field<'_>)>> {
-    let bad = || anyhow!("bad protobuf");
-    let mut out = Vec::new();
-    while !buf.is_empty() {
-        let key = varint(&mut buf).ok_or_else(bad)?;
-        let (num, wire) = (key >> 3, key & 7);
-        match wire {
-            0 => out.push((num, Field::Varint(varint(&mut buf).ok_or_else(bad)?))),
-            2 => {
-                let len = varint(&mut buf).ok_or_else(bad)? as usize;
-                let b = buf.get(..len).ok_or_else(bad)?;
-                out.push((num, Field::Bytes(b)));
-                buf = &buf[len..];
-            }
-            1 => buf = buf.get(8..).ok_or_else(bad)?,
-            5 => buf = buf.get(4..).ok_or_else(bad)?,
-            _ => return Err(bad()),
-        }
-    }
-    Ok(out)
+/// The fields of a protobuf message, in order (fixed-width fields are skipped), read as they're
+/// iterated so a big answer isn't copied into a list first. A malformed field ends it with an error.
+pub(crate) fn fields(buf: &[u8]) -> Fields<'_> {
+    Fields { buf }
 }
 
-fn msg(buf: &[u8], num: u64) -> Option<&[u8]> {
-    fields(buf).ok()?.into_iter().find_map(|(n, f)| match f {
+pub(crate) struct Fields<'a> {
+    buf: &'a [u8],
+}
+
+impl<'a> Iterator for Fields<'a> {
+    type Item = Result<(u64, Field<'a>)>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while !self.buf.is_empty() {
+            match self.step() {
+                Ok(Some(f)) => return Some(Ok(f)),
+                Ok(None) => {}
+                Err(e) => {
+                    self.buf = &[];
+                    return Some(Err(e));
+                }
+            }
+        }
+        None
+    }
+}
+
+impl<'a> Fields<'a> {
+    /// Reads one field; None for a fixed-width one, which is skipped.
+    fn step(&mut self) -> Result<Option<(u64, Field<'a>)>> {
+        let bad = || anyhow!("bad protobuf");
+        let key = varint(&mut self.buf).ok_or_else(bad)?;
+        let (num, wire) = (key >> 3, key & 7);
+        Ok(match wire {
+            0 => Some((num, Field::Varint(varint(&mut self.buf).ok_or_else(bad)?))),
+            2 => {
+                let len = varint(&mut self.buf).ok_or_else(bad)? as usize;
+                let b = self.buf.get(..len).ok_or_else(bad)?;
+                self.buf = &self.buf[len..];
+                Some((num, Field::Bytes(b)))
+            }
+            1 => {
+                self.buf = self.buf.get(8..).ok_or_else(bad)?;
+                None
+            }
+            5 => {
+                self.buf = self.buf.get(4..).ok_or_else(bad)?;
+                None
+            }
+            _ => return Err(bad()),
+        })
+    }
+}
+
+/// The first field `num` that `pick` accepts, if the whole message is well formed.
+fn first<'a, T>(buf: &'a [u8], pick: impl Fn(u64, Field<'a>) -> Option<T>) -> Option<T> {
+    let mut found = None;
+    for f in fields(buf) {
+        let (n, f) = f.ok()?;
+        if found.is_none() {
+            found = pick(n, f);
+        }
+    }
+    found
+}
+
+pub(crate) fn msg(buf: &[u8], num: u64) -> Option<&[u8]> {
+    first(buf, |n, f| match f {
         Field::Bytes(b) if n == num => Some(b),
         _ => None,
     })
 }
 
-fn uint(buf: &[u8], num: u64) -> Option<u64> {
-    fields(buf).ok()?.into_iter().find_map(|(n, f)| match f {
+pub(crate) fn uint(buf: &[u8], num: u64) -> Option<u64> {
+    first(buf, |n, f| match f {
         Field::Varint(v) if n == num => Some(v),
         _ => None,
     })
@@ -346,7 +427,7 @@ fn text(buf: &[u8], num: u64) -> Option<String> {
 }
 
 /// GetStatusResponse (dapi-grpc platform.proto): v0 = 1 { version = 1 { software = 1 { dapi = 1,
-/// drive = 2, tenderdash = 3 }, protocol = 2 { drive = 2 { latest = 3, current = 4 } } }, node = 2
+/// drive = 2, tenderdash = 3 }, protocol = 2 { drive = 2 { latest = 3, current = 4, next_epoch = 5 } } }, node = 2
 /// { pro_tx_hash = 2 }, chain = 3 { catching_up = 1, latest_block_height = 4 }, network = 4
 /// { peers_count = 2 } }.
 fn parse_status(resp: &[u8]) -> Result<Status> {
@@ -361,6 +442,7 @@ fn parse_status(resp: &[u8]) -> Result<Status> {
         tenderdash: text(software, 3),
         drive_protocol_latest: uint(drive_protocol, 3),
         drive_protocol_current: uint(drive_protocol, 4),
+        drive_protocol_next: uint(drive_protocol, 5),
         height: uint(chain, 4),
         catching_up: uint(chain, 1) == Some(1),
         peers: msg(v0, 4).and_then(|n| uint(n, 2)),
@@ -390,7 +472,10 @@ pub fn status_json(r: &rusqlite::Row) -> rusqlite::Result<Value> {
             "dapi": r.get::<_, Option<String>>("dapi")?, "drive": r.get::<_, Option<String>>("drive")?,
             "tenderdash": r.get::<_, Option<String>>("tenderdash")?,
         },
-        "drive_protocol": {"latest": r.get::<_, Option<i64>>("drive_protocol_latest")?, "current": r.get::<_, Option<i64>>("drive_protocol_current")?},
+        "drive_protocol": {
+            "latest": r.get::<_, Option<i64>>("drive_protocol_latest")?, "current": r.get::<_, Option<i64>>("drive_protocol_current")?,
+            "next_epoch": r.get::<_, Option<i64>>("drive_protocol_next")?,
+        },
         "height": r.get::<_, Option<i64>>("height")?,
         "catching_up": r.get::<_, Option<bool>>("catching_up")?,
         "peers": r.get::<_, Option<i64>>("peers")?,
@@ -451,14 +536,20 @@ mod tests {
                 tenderdash: Some("1.8.2".into()),
                 drive_protocol_latest: Some(14),
                 drive_protocol_current: Some(13),
+                drive_protocol_next: Some(14),
                 height: Some(198_452),
                 catching_up: false,
                 peers: Some(42),
                 pro_tx_hash: Some("ee".repeat(32)),
             }
         );
-        // Only trailers (an error answer): no data frame.
+        // Only trailers (an error answer): no data frame, and the trailer says why.
         assert!(first_data_frame(&[0x80, 0, 0, 0, 2, b'a', b'b']).is_none());
+        let trailer = b"grpc-status:3\r\ngrpc-message:limit out of bounds\r\n";
+        let mut error = vec![0x80, 0, 0, 0, trailer.len() as u8];
+        error.extend(trailer);
+        assert_eq!(trailer_message(&error).as_deref(), Some("limit out of bounds"));
+        assert_eq!(trailer_message(&framed), None);
         assert!(parse_status(&[0x0a]).is_err());
     }
 

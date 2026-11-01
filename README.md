@@ -19,6 +19,16 @@ mnowatch.org/user-agents and the old dashninja.pl:
   coinbase and the masternode list at its height, backfilled newest first). A payment is what the
   payee's addresses got: since MN_RR, 37.5% of the masternode subsidy share goes to Platform's credit
   pool instead, and isn't counted (Core's `masternode payments` counts it as the payee's).
+- **Platform rewards:** what each evonode earned per Platform epoch, worked out from Drive's own record of each
+  finished epoch (from epoch 34 on mainnet) with Drive's integer arithmetic, plus its withdrawable balance, blocks
+  this epoch, when its next turn to propose comes, missed turns, and the protocol upgrade vote (`src/rewards.rs`,
+  page `/platform`). It's read over gRPC-web from evonodes (no SDK on the server), and an answer counts only when
+  two evonodes at different IPs give the same one; finished epochs are also checked against Drive's rules and our
+  dashd's tip before they're stored. An evonode's page loads Dash's Platform SDK (`@dashevo/evo-sdk`, pinned in
+  `worker/package.json`, served from `/assets/vendor/` by the Worker build) to show its live balance and
+  withdrawals with proofs and check our numbers against them, and to estimate what it earned before epoch 34 from
+  its balance and withdrawals (no record has those per evonode). Platform Explorer's lifetime totals (third party,
+  fetched for a few evonodes per round, each at most daily) are kept as a cross-check.
 - **Map:** every masternode (or every reachable node, counted per city) placed by the city its IP
   geolocates to (DB-IP City Lite), clustered, colored by port-check status, version or type, with the
   list's filters. It replaces the old map.dashhq.org / map.thepasta.org (`PastaPastaPasta/dash-mn-map`).

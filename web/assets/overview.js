@@ -486,11 +486,21 @@ function renderEarn() {
   const reg = r?.regular?.median_annual_yield, evo = r?.evo?.median_annual_yield;
   $("earn-section").hidden = reg == null && evo == null;
   if ($("earn-section").hidden) return;
-  $("earn-lede").textContent = `What masternodes were actually paid over the last ${r.window_days} days, against their collateral, ` +
-    "counting every enabled masternode registered for at least that long. Each masternode's page shows its own.";
-  $("earn-stats").replaceChildren(
+  // Evonodes also earn Platform rewards: shown on their own and with Core payments, when collected.
+  const e = r.evo;
+  const withPlatform = e?.median_total_yield != null;
+  $("earn-lede").replaceChildren(...[`What masternodes were actually paid over the last ${r.window_days} days, against their collateral, ` +
+    "counting every enabled masternode registered for at least that long. " +
+    (withPlatform ? "Evonodes are also paid Platform rewards for the Platform blocks they propose. " : "") + "Each masternode's page shows its own.",
+  ...(withPlatform ? [" ", el("a", { href: href("/platform"), text: "Platform rewards in detail" }), "."] : [])]);
+  $("earn-stats").replaceChildren(...[
     plainStat("Regular masternodes", reg != null ? `${pct(reg)} a year` : "–", `median of ${fmt(r.regular.masternodes)}, on 1,000 DASH`),
-    plainStat("Evonodes", evo != null ? `${pct(evo)} a year` : "–", `median of ${fmt(r.evo.masternodes)}, on 4,000 DASH; core-chain payments only, Platform rewards aren't counted`));
+    withPlatform
+      ? plainStat("Evonodes", `${pct(e.median_total_yield)} a year`, `median of ${fmt(e.masternodes)}, on 4,000 DASH, Core payments and Platform rewards together`)
+      : plainStat("Evonodes", evo != null ? `${pct(evo)} a year` : "–", `median of ${fmt(r.evo.masternodes)}, on 4,000 DASH; core-chain payments only, Platform rewards aren't counted`),
+    withPlatform ? plainStat("Evonodes, Core payments", evo != null ? `${pct(evo)} a year` : "–", "median, from the Core blocks that paid them") : null,
+    withPlatform ? plainStat("Evonodes, Platform rewards", `${pct(e.median_platform_yield)} a year`,
+      `median, from the Platform epochs of the last ${Math.round(e.platform_span_days)} days`) : null].filter(Boolean));
 }
 
 /** Evonode Platform health (summary.platform): the latest check of every evonode's Platform endpoints. */

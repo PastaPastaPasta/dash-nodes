@@ -28,6 +28,10 @@ pub struct NetCtx {
     pub pay_lock: tokio::sync::Mutex<()>,
     /// Block hashes the bench checks headers against (see reference.rs); None until dashd is synced.
     pub reference: RwLock<Option<Reference>>,
+    /// When each evonode proposes next, from the latest validator-set sample (see rewards.rs).
+    pub platform_schedule: RwLock<Option<std::sync::Arc<crate::rewards::Schedule>>>,
+    /// Platform rewards per evonode, built once per collector round (see rewards.rs).
+    pub platform_board: RwLock<Option<std::sync::Arc<crate::rewards::Board>>>,
 }
 
 #[derive(Clone, Debug)]

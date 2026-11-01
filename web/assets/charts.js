@@ -229,3 +229,46 @@ export function timeChart(container, data, opts) {
     loading() { container.classList.add("loading"); },
   };
 }
+
+/**
+ * Fills `container` with `draw(width)` (an svg drawn at that many pixels, so text stays its real size)
+ * and draws again when its width changes.
+ */
+export function sized(container, draw) {
+  let last = 0;
+  const paint = () => {
+    const w = Math.round(container.clientWidth);
+    if (w && w !== last) { last = w; container.replaceChildren(draw(w)); }
+  };
+  new ResizeObserver(paint).observe(container);
+}
+
+/** A round gridline `step` (1, 2 or 5 × 10^k, fractions allowed) for about `n` lines up to `top`, and the axis `max` it reaches. */
+export function axisScale(top, n = 3) {
+  const raw = top / n || 1;
+  const p = 10 ** Math.floor(Math.log10(raw));
+  const step = [1, 2, 5, 10].map((m) => m * p).find((s) => s >= raw);
+  return { step, max: Math.ceil(top / step) * step };
+}
+
+/** Gridlines with their values down the left edge, every `step` up to `max`; `row(v)` is a value's pixel row. */
+export function valueAxis(chart, { L, W, step, max, row }) {
+  for (let v = 0; v <= max + 1e-9; v += step) {
+    const y = row(v);
+    chart.append(svg("line", { x1: L, x2: W, y1: y, y2: y, class: v ? "gridline" : "baseline" }));
+    const tx = svg("text", { x: L - 6, y: y + 4, "text-anchor": "end", class: "tick" });
+    tx.textContent = +v.toFixed(2);
+    chart.append(tx);
+  }
+}
+
+/** Epoch numbers along the bottom at height `y`, thinned to fit `W`; `x(i)` is the center of epoch `i` of `list`. */
+export function epochAxis(chart, list, { W, x, y }) {
+  const every = Math.ceil(list.length / Math.max(2, Math.floor(W / 70)));
+  list.forEach((e, i) => {
+    if ((list.length - 1 - i) % every) return;
+    const tx = svg("text", { x: x(i), y, "text-anchor": "middle", class: "tick" });
+    tx.textContent = e.epoch;
+    chart.append(tx);
+  });
+}

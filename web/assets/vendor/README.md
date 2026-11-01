@@ -11,3 +11,7 @@ Other third-party assets:
 - `../map/glyphs/`: Noto Sans map label glyphs from [protomaps/basemaps-assets](https://github.com/protomaps/basemaps-assets),
   SIL Open Font License 1.1.
 - `../map/*.json`: built from [Natural Earth](https://www.naturalearthdata.com) (public domain) by `tools/basemap.py`.
+
+Not committed here: the Worker build (`worker/scripts/build.mjs`) copies `@dashevo/evo-sdk`'s `dist/evo-sdk.module.js`
+(the version pinned in `worker/package.json`, MIT) to `evo-sdk-<version>/`, for evonode pages (`assets/platform-live.js`).
+The Rust server's own copy of the site doesn't have it; those pages then skip the live, proof-checked part.

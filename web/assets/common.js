@@ -68,6 +68,16 @@ export const fmt = (n) => (n == null ? "–" : nf.format(Math.round(n)));
 export const pct = (x, digits = 1) => (x == null ? "–" : `${(x * 100).toFixed(digits)}%`);
 export const dash = (duffs) => (duffs == null ? "–" : `${(duffs / 1e8).toLocaleString("en-US", { maximumFractionDigits: 4 })} DASH`);
 
+/** Platform credits (1 DASH = 100,000,000,000 credits) as DASH: "6.4321 DASH". */
+const CREDITS_PER_DASH = 1e11;
+export const toDash = (c) => c / CREDITS_PER_DASH;
+export const credits = (c, digits = 4) => (c == null ? "–" : `${toDash(c).toLocaleString("en-US", { maximumFractionDigits: digits })} DASH`);
+/** Credits as DASH with as many decimals as the size needs: 2,317 DASH, 6.43 DASH, 0.0412 DASH. */
+export const amount = (c) => {
+  const d = Math.abs(toDash(c));
+  return credits(c, d >= 100 ? 0 : d >= 1 ? 2 : 4);
+};
+
 export function compact(n) {
   if (Math.abs(n) >= 1e6) return `${+(n / 1e6).toFixed(1)}M`;
   if (Math.abs(n) >= 1e3) return `${+(n / 1e3).toFixed(1)}K`;
@@ -88,7 +98,7 @@ export function ago(ts) {
 const BLOCK_SECONDS = 158;
 
 /** A span in seconds the way people say it: "40 min", "5 h", "12 days", "8 months", "2.4 years". */
-function duration(s) {
+export function duration(s) {
   if (s < 5400) return `${Math.max(1, Math.round(s / 60))} min`;
   if (s < 129600) return `${Math.round(s / 3600)} h`;
   const d = s / 86400;
@@ -97,6 +107,15 @@ function duration(s) {
   const y = Number((d / 365.25).toFixed(1));
   return `${y} year${y === 1 ? "" : "s"}`;
 }
+
+/** A time to come, roughly: "in 40 min", "in 5 h", "in 3 days"; "any moment" when it's due or past. */
+export function inAbout(ts) {
+  const s = ts - Date.now() / 1000;
+  return s < 60 ? "any moment" : `in ${duration(s)}`;
+}
+
+/** "the last 55 days", "the last 6 h": the span a pace is over, given in days; null when there's none. */
+export const lastSpan = (d) => (d > 0 ? `the last ${duration(d * 86400)}` : null);
 
 export const blocks = (n) => `${fmt(n)} block${n === 1 ? "" : "s"}`;
 /** About how long n blocks take: "8 months". */
@@ -320,6 +339,21 @@ export function card(title, sub, body) {
   return el("section", { class: "card" }, el("div", { class: "card-head" }, el("h2", { text: title }), el("span", { class: "sub", text: sub })), body);
 }
 
+/** Gives each cell its column's name, which stacked tables show as the row label on phones. */
+export function labelled(heads, tr) {
+  let i = 0;
+  for (const td of tr.children) {
+    td.dataset.label ||= heads[i];
+    i += Number(td.getAttribute("colspan") || 1);
+  }
+  return tr;
+}
+
+/** A two-column table of [label, value] rows; falsy rows are skipped and a missing value shows "–". */
+export function kv(rows) {
+  return el("table", { class: "data kv" }, el("tbody", {}, ...rows.filter(Boolean).map(([k, v]) => el("tr", {}, el("td", { text: k }), el("td", {}, v ?? "–")))));
+}
+
 const SUN = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>`;
 const MORE = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h10"/></svg>`;
 const MOON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>`;
@@ -340,8 +374,8 @@ export function chrome(page, { footer = true } = {}) {
   const net = currentNet();
   document.title = `${document.title}${net === "testnet" ? " · testnet" : ""}`;
   const nav = el("nav", { class: "main" },
-    ...[["overview", "/", "Overview"], ["masternodes", "/masternodes", "Masternodes"], ["changes", "/changes", "Changes"], ["map", "/map", "Map"], ["api", "/api", "API"]].map(([id, path, label]) =>
-      el("a", { href: href(path), class: id === "api" ? "nav-api" : null, "aria-current": id === page ? "page" : null, text: label })));
+    ...[["overview", "/", "Overview"], ["masternodes", "/masternodes", "Masternodes"], ["platform", "/platform", "Platform"], ["changes", "/changes", "Changes"], ["map", "/map", "Map"], ["api", "/api", "API"]].map(([id, path, label]) =>
+      el("a", { href: href(path), class: id === "api" || id === "changes" ? `nav-${id}` : null, "aria-current": id === page ? "page" : null, text: label })));
   const seg = el("div", { class: "seg net", role: "group", "aria-label": "Network" },
     ...NETWORKS.map((n) => el("button", {
       type: "button", "data-net": n, "aria-pressed": String(n === net),
@@ -367,7 +401,8 @@ export function chrome(page, { footer = true } = {}) {
   const more = el("button", { class: "more-toggle", type: "button", "aria-label": "Network and display settings", "aria-expanded": "false", "aria-controls": "top-right" });
   more.innerHTML = MORE;
   const right = el("div", { class: "top-right", id: "top-right" }, status, seg,
-    el("div", { class: "menu-row" }, theme, el("a", { class: "menu-only", href: href("/api"), text: "API" })));
+    el("div", { class: "menu-row" }, theme, el("a", { class: "menu-only", href: href("/api"), text: "API" }),
+      el("a", { class: "menu-narrow", href: href("/changes"), text: "Changes" })));
   const header = el("header", { class: "top" }, el("div", { class: "top-inner" }, brand, nav, more, right));
   const setMenu = (open) => { header.classList.toggle("menu-open", open); more.setAttribute("aria-expanded", String(open)); };
   more.addEventListener("click", (e) => { e.stopPropagation(); setMenu(!header.classList.contains("menu-open")); });

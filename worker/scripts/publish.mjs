@@ -221,6 +221,8 @@ async function publishNetwork(net) {
   known.set(net, new Set(ids));
   await put(`v1/${net}/masternodes.json`, list);
   await put(`v1/${net}/summary.json`, await get(`${net}/summary`));
+  // Evonodes' Platform rewards (the crawler's rewards.rs).
+  await putIfServed(`v1/${net}/platform.json`, () => get(`${net}/platform`));
   await putIfServed(`v1/${net}/geo.json`, () => get(`${net}/geo`));
   // The latest registration changes (see the crawler's collector.rs).
   if (changes) await put(`v1/${net}/changes.json`, changes);

@@ -1,5 +1,6 @@
 import { api, chrome, currentNet, NETWORKS, el, fmt, pct, href, countryName, flag, place, badge, ago, dateTime, dash, nodeStatus, poseBadge, uptimeKind, tile, card,
-  changeText, changeKind, DKG_CHECKS, DKG_OVERALL, blockSpan, blocks, blocksIn, behind, heightWhen } from "./common.js";
+  changeText, changeKind, DKG_CHECKS, DKG_OVERALL, blockSpan, blocks, blocksIn, behind, heightWhen, credits, amount, inAbout, toDash, labelled, kv, lastSpan } from "./common.js";
+import { svg, sized, axisScale, valueAxis, epochAxis } from "./charts.js";
 
 chrome("masternodes");
 const net = currentNet();
@@ -9,11 +10,6 @@ const root = document.getElementById("main");
 // Blockchair covers mainnet only; on testnet values are shown without explorer links.
 const explorer = net === "mainnet" ? "https://blockchair.com/dash" : null;
 const link = (kind, id, text = id) => (explorer && id ? el("a", { class: "mono", href: `${explorer}/${kind}/${id}`, rel: "noopener", text }) : el("span", { class: "mono", text: text ?? "–" }));
-
-function kv(rows) {
-  return el("table", { class: "data kv" }, el("tbody", {}, ...rows.filter(Boolean).map(([k, v]) =>
-    el("tr", {}, el("td", { text: k }), el("td", {}, v ?? "–")))));
-}
 
 function statusOf(m) {
   return m.removed ? ["none", "Unregistered"] : nodeStatus(m, "Not checked yet");
@@ -104,6 +100,9 @@ async function main() {
       m.last_paid_height ? [paidAgo && `${paidAgo[1]} ago`, `block ${fmt(m.last_paid_height)}`].filter(Boolean).join(" · ") : ""),
     earnedTile(m),
   ));
+
+  const rewards = m.platform_rewards ? rewardsSection(m) : null;
+  if (rewards) root.append(rewards);
 
   const dkg = dkgSection(m);
   if (dkg) root.append(dkg);
@@ -297,9 +296,192 @@ function earnedTile(m) {
   if (!r) return tile("Earned, last 90 days", "–", "");
   const days = r.window_days;
   const label = days ? `Earned, last ${days} day${days === 1 ? "" : "s"}` : "Earned so far";
+  const p = m.platform_rewards;
+  // An evonode also earns Platform rewards: Core and Platform side by side, and the yield of both.
+  if (p?.totals) {
+    const platform = toDash(p.totals.d90), core = r.paid_90d / 1e8;
+    const y = r.annual_yield != null && p.annual_yield != null ? `≈ ${pct(r.annual_yield + p.annual_yield)} a year on 4,000 DASH`
+      : m.removed ? "no longer in the list" : "too new to tell its yield";
+    return tile(label, `${(core + platform).toLocaleString("en-US", { maximumFractionDigits: 2 })} DASH`,
+      `${dash(r.paid_90d)} Core + ${credits(p.totals.d90, 2)} Platform; ${y}`);
+  }
   const y = r.annual_yield != null ? `≈ ${pct(r.annual_yield)} a year on its ${m.type === "Evo" ? "4,000" : "1,000"} DASH`
     : m.removed ? "no longer in the list" : "too new to tell its yield";
   return tile(label, dash(r.paid_90d), y);
+}
+
+// ---- Platform rewards (evonodes) ----
+
+const ordinal = (n) => `${fmt(n)}${["th", "st", "nd", "rd"][(n % 100 > 10 && n % 100 < 14) || n % 10 > 3 ? 0 : n % 10]}`;
+
+/**
+ * What this evonode earns on Platform, from the crawler's reading of Drive's finished epochs: what it
+ * can claim, its latest epoch, this epoch so far, its next block, how it compares, and every epoch.
+ * Live, proof-checked numbers follow once the SDK loads.
+ */
+function rewardsSection(m) {
+  const p = m.platform_rewards;
+  const t = p.totals;
+  const c = p.current;
+  const lastEpoch = p.epochs.find((e) => e.epoch === t.last_epoch_index);
+  const box = el("section", { class: "card rewards", id: "platform-rewards" },
+    el("div", { class: "card-head" }, el("h2", { text: "Platform rewards" }),
+      el("span", { class: "sub", text: `per finished epoch since epoch ${fmt(p.first_epoch)}, worked out the way Drive pays them` })));
+  const next = p.next;
+  box.append(el("div", { class: "tiles" },
+    tile("Claimable now", p.balance?.credits != null ? amount(p.balance.credits) : "–",
+      p.balance ? `its masternode identity's balance, ${ago(p.balance.ts)}` : "not read yet"),
+    tile(`Last epoch (${fmt(t.last_epoch_index)})`, amount(t.last_epoch), lastEpoch?.blocks
+      ? `${blocks(lastEpoch.blocks)}, ${ordinal(lastEpoch.rank)} of ${fmt(lastEpoch.of)} evonodes` : "it proposed no blocks"),
+    tile("This epoch so far", c ? blocks(c.blocks) : "–", c?.accrued != null
+      ? `≈ ${amount(c.accrued)} if it ended now (an estimate)` : "nothing yet"),
+    tile("Next block", next?.eta ? inAbout(next.eta) : "–", next ? `its turn is ${next.slots === 1 ? "next" : `${fmt(next.slots)} blocks away`}; an estimate`
+      : p.in_validator_sets === false ? "not in a validator set that takes turns now" : "unknown: the validator sets haven't been read lately")));
+  box.append(el("div", { class: "rewards-where" }, el("h3", { text: "Where it sits" }), rankStrip(p)));
+  box.append(el("div", { class: "cols-2" }, earnedTable(m, p), estimateTable(m, p)));
+  box.append(epochHistory(p));
+  const liveBox = el("div", { class: "live-body" });
+  box.append(el("div", { class: "live" }, el("div", { class: "card-head" }, el("h3", { text: "Live from Platform" }),
+    el("span", { class: "sub", text: "proof-checked in your browser" })), liveBox));
+  startLive(liveBox, m, p);
+  return box;
+}
+
+/**
+ * Last epoch's rewards across evonodes: how many earned each amount (rewards go by whole blocks, so
+ * they bunch up), this one marked, the middle 80% shaded.
+ */
+function rankStrip(p) {
+  const wrap = el("div", { class: "rank-strip" }, el("p", { class: "muted small", text: "Loading the other evonodes…" }));
+  const pctl = p.d30_percentile;
+  api(`${net}/platform`).then((doc) => {
+    const mine = p.totals.last_epoch;
+    const vals = doc.evonodes.filter((e) => e.last_blocks > 0).map((e) => e.last_epoch).sort((a, b) => a - b);
+    if (!vals.length) { wrap.replaceChildren(); return; }
+    const max = vals.at(-1) || 1;
+    const counts = new Map();
+    for (const v of vals) counts.set(v, (counts.get(v) || 0) + 1);
+    const most = Math.max(...counts.values());
+    const q = (f) => vals[Math.round((vals.length - 1) * f)];
+    const W = 1000, H = 44;
+    const x = (v) => (v / max) * (W - 6) + 3;
+    const strip = svg("svg", { viewBox: `0 0 ${W} ${H}`, preserveAspectRatio: "none", class: "ticks", role: "img",
+      "aria-label": `${vals.length} evonodes' rewards last epoch, from ${amount(vals[0])} to ${amount(max)}; this one ${amount(mine)}` });
+    strip.append(svg("rect", { x: x(q(0.1)), y: 0, width: x(q(0.9)) - x(q(0.1)), height: H, class: "mid" }));
+    for (const [v, n] of counts) {
+      const h = 4 + ((H - 8) * n) / most;
+      strip.append(svg("rect", { x: x(v) - 2, y: H - h, width: 4, height: h, class: v === mine ? "me" : "tick" }));
+    }
+    strip.append(svg("rect", { x: x(q(0.5)) - 0.75, y: 0, width: 1.5, height: H, class: "median" }));
+    const below = vals.filter((v) => v < mine).length;
+    wrap.replaceChildren(strip,
+      el("div", { class: "strip-axis" }, el("span", { text: amount(vals[0]) }), el("span", { text: `median ${amount(q(0.5))}` }), el("span", { text: amount(max) })),
+      el("p", { class: "sub" }, mine > 0
+        ? `The bars count evonodes by what they earned last epoch; this one is the blue bar. It earned more than ${pct(below / vals.length, 0)} of the ${fmt(vals.length)} that proposed blocks. `
+        : "It proposed no blocks last epoch. ",
+      pctl != null ? `Over the last 30 days, more than ${pct(pctl, 0)} of all ${fmt(p.d30_of)} enabled evonodes. ` : "",
+      "Rewards go by blocks proposed, so luck in the turn order evens out over a few epochs."));
+  }, () => wrap.replaceChildren());
+  return wrap;
+}
+
+function earnedTable(m, p) {
+  const t = p.totals, x = p.explorer;
+  // Platform Explorer counts from the same epoch records, so it should match ours to the credit.
+  const beyond = x?.before_ours > 1e8 ? x.before_ours : null;
+  return el("div", {}, el("h3", { text: "Earned on Platform" }), kv([
+    ["Last 30 days", amount(t.d30)],
+    ["Last 90 days", amount(t.d90)],
+    ["Last 365 days", amount(t.d365)],
+    [`Since epoch ${fmt(p.first_epoch)}`, el("span", {}, amount(t.lifetime), el("span", { class: "muted", text: ` · ${fmt(t.epochs_paid)} epochs paid` }))],
+    x?.total_reward != null && ["Platform Explorer says", el("span", {}, amount(x.total_reward),
+      el("span", { class: "muted", text: beyond ? `, ${amount(beyond)} more than ours` : x.epoch != null ? `, the same as ours up to epoch ${fmt(x.epoch - 1)}` : ", the same as ours" }))],
+  ]), el("p", { class: "muted small" }, `Drive keeps per-evonode records only from epoch ${fmt(p.first_epoch)} on, so rewards before it can't be checked; `,
+    "the live section below estimates them from its balance and withdrawals. ",
+    x?.total_reward != null ? ["Platform Explorer is a third party whose numbers we haven't verified; fetched ", ago(x.fetched), " from ",
+      el("a", { href: `https://platform-explorer.com/validator/${m.protx.toUpperCase()}`, rel: "noopener", text: "its page for this evonode" }), "."] : null));
+}
+
+function estimateTable(m, p) {
+  const r = m.returns;
+  const coreMonthly = r?.window_days ? (r.paid_90d / r.window_days) * 30 : null;
+  const yearly = r?.annual_yield != null && p.annual_yield != null ? r.annual_yield + p.annual_yield : null;
+  const c = p.current;
+  const watched = c?.turns;
+  const missed30 = p.turns_30d;
+  return el("div", {}, el("h3", { text: "Estimates" }), kv([
+    ["Platform, a month", el("span", {}, amount(p.monthly), el("span", { class: "muted", text: lastSpan(p.monthly_basis_days) ? ` at its pace of ${lastSpan(p.monthly_basis_days)}` : " once six epochs have finished" }))],
+    ["Core, a month", coreMonthly != null ? el("span", {}, `${(coreMonthly / 1e8).toFixed(2)} DASH`, el("span", { class: "muted", text: ` from its payments over ${r.window_days} days` })) : null],
+    coreMonthly != null ? ["Both, a month", el("span", {}, `≈ ${(toDash(p.monthly) + coreMonthly / 1e8).toFixed(2)} DASH`)] : null,
+    ["Both, a year", yearly != null ? el("span", {}, `${pct(yearly)} on 4,000 DASH`,
+      el("span", { class: "muted", text: ` (${pct(p.annual_yield)} Platform, ${pct(r.annual_yield)} Core)` })) : "too new to tell"],
+    c?.turns?.expected_blocks != null && c.blocks_total > 0 ? ["This epoch, blocks", `${fmt(c.blocks)} made, ≈ ${c.turns.expected_blocks} expected for its validator sets`] : null,
+    lastWatched(p),
+    watched?.turns || missed30?.turns ? ["Missed turns we saw", `${fmt(missed30.missed)} of ${fmt(missed30.turns)} turns, last 30 days`] : null,
+    ["Upgrade vote", p.vote ? el("span", {}, `protocol ${p.vote.version}`, el("span", { class: "muted", text: " (from its blocks this epoch)" }))
+      : el("span", { class: "muted", text: "none yet this epoch: it votes with the blocks it proposes" })],
+  ]), el("p", { class: "muted small", text: "Expected blocks follow from how many validator sets it was in while we watched; missed turns are ones we saw skipped " +
+    "(we read the validator sets every few minutes, so some turns go unseen). Platform rewards are gross: reward shares (none on mainnet today) aren't deducted." }));
+}
+
+/** The latest finished epoch we watched the validator sets through: blocks made against expected. */
+function lastWatched(p) {
+  const w = (p.watched || []).find((x) => x.coverage >= 0.8 && x.expected != null);
+  return w ? [`Epoch ${fmt(w.epoch)}, blocks`, `${fmt(w.actual)} made, ≈ ${w.expected} expected${w.missed ? `; ${fmt(w.missed)} missed turns seen` : ""}`] : null;
+}
+
+/** Rewards per epoch as bars, newest right, and every epoch in a table. */
+function epochHistory(p) {
+  const list = [...p.epochs].reverse();
+  if (!list.length) return el("p", { class: "muted", text: "It hasn't proposed a block in a finished epoch yet." });
+  const box = el("div", { class: "chart" });
+  sized(box, (W) => {
+    const H = 150, B = 20, L = 34;
+    const { step, max } = axisScale(Math.max(...list.map((e) => toDash(e.credits))) || 1);
+    const slot = (W - L) / list.length;
+    const chart = svg("svg", { viewBox: `0 0 ${W} ${H}`, width: W, height: H, class: "epoch-bars", role: "img",
+      "aria-label": `Platform rewards per epoch, epochs ${list[0].epoch}–${list.at(-1).epoch}` });
+    valueAxis(chart, { L, W, step, max, row: (v) => (H - B) * (1 - v / max) });
+    list.forEach((e, i) => {
+      const h = ((H - B) * toDash(e.credits)) / max;
+      const r = svg("rect", { x: L + i * slot + slot * 0.15, y: H - B - h, width: Math.max(1, slot * 0.7), height: Math.max(e.credits ? 1 : 0, h), rx: 1.5, tabindex: 0 });
+      const tt = svg("title");
+      tt.textContent = `Epoch ${e.epoch}, ${dateTime(e.start)}: ${amount(e.credits)} for ${blocks(e.blocks)}${e.rank ? `, ${ordinal(e.rank)} of ${e.of}` : ""}`;
+      r.append(tt);
+      chart.append(r);
+    });
+    epochAxis(chart, list, { W, x: (i) => L + i * slot + slot / 2, y: H - 4 });
+    return chart;
+  });
+  const heads = ["Epoch", "Started", "Blocks", "Share", "Earned", "Rank"];
+  const rows = p.epochs.map((e) => labelled(heads, el("tr", {},
+    el("td", { text: fmt(e.epoch) }), el("td", { text: dateTime(e.start) }), el("td", { class: "r", text: fmt(e.blocks) }),
+    el("td", { class: "r", text: pct(e.share, 2) }), el("td", { class: "r", text: amount(e.credits) }),
+    el("td", { class: "r", text: e.rank ? `${ordinal(e.rank)} of ${fmt(e.of)}` : "–" }))));
+  return el("div", { class: "section" }, el("h3", { text: "Every epoch, in DASH" }), box,
+    el("details", { class: "ov-details" }, el("summary", { text: `The numbers, ${fmt(p.epochs.length)} epochs` }),
+      el("div", { class: "table-wrap" }, el("table", { class: "data stack" },
+        el("thead", {}, el("tr", {}, ...heads.map((h, i) => el("th", { class: i > 1 ? "r" : null, text: h })))), el("tbody", {}, ...rows)))));
+}
+
+/**
+ * Starts the live, proof-checked part once it's on screen: the SDK is big, so it never loads for a
+ * page nobody scrolls to, and a data-saving browser asks first.
+ */
+function startLive(box, m, p) {
+  if (m.removed) { box.replaceChildren(el("p", { class: "muted", text: "It left the masternode list." })); return; }
+  const go = () => import("./platform-live.js").then((x) => x.live(box, net, m.protx, p),
+    (e) => box.replaceChildren(el("p", { class: "muted", text: `Couldn't load: ${e.message}` })));
+  const button = el("button", { class: "btn", type: "button", text: "Check live (a 9 MB download, once)", onclick: () => { button.disabled = true; go(); } });
+  box.replaceChildren(el("p", { class: "muted small", text: "Its claimable balance, blocks this epoch and every withdrawal, read from Platform with proofs, and our epoch numbers checked against them." }), button);
+  if (navigator.connection?.saveData || !("IntersectionObserver" in window)) return;
+  const seen = new IntersectionObserver((entries) => {
+    if (!entries.some((e) => e.isIntersecting)) return;
+    seen.disconnect();
+    button.disabled = true;
+    go();
+  }, { rootMargin: "200px" });
+  seen.observe(box);
 }
 
 /** Registration changes we've recorded, newest first. */
@@ -379,16 +561,6 @@ function platformSection(m) {
     box.append(el("p", { class: "muted small", text: `Healthy in ${pct(ok / at)} of ${n(at, "check")} over the last ${n(daily.length, "day")} (both endpoints answered, as this evonode).` }));
   }
   return box;
-}
-
-/** Gives each cell its column's name, which stacked tables show as the row label on phones. */
-function labelled(heads, tr) {
-  let i = 0;
-  for (const td of tr.children) {
-    td.dataset.label ||= heads[i];
-    i += Number(td.getAttribute("colspan") || 1);
-  }
-  return tr;
 }
 
 const GRADE_KIND = { A: "good", B: "good", C: "warning", D: "serious", F: "critical" };
