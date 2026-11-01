@@ -240,7 +240,7 @@ async fn summary(State(nets): State<Nets>, UrlPath(net): UrlPath<String>) -> Api
                 // Crawls from before per-network stats were recorded.
                 None => json!(network_stats(c, id, started, None)?),
             };
-            let returns = network_returns(c, view.platform_yields(c, RETURN_WINDOW)?)?;
+            let returns = network_returns(c, view.platform_yields(c)?)?;
             let platform = platform_summary(c)?;
             let dkg_readiness = readiness_summary(c, id)?;
             Ok(json!({
@@ -646,7 +646,7 @@ async fn masternode(State(nets): State<Nets>, UrlPath((net, protx)): UrlPath<(St
 // against its collateral. The yield is
 // annualized over the last RETURN_WINDOW days, or since registration for a newer masternode.
 
-const RETURN_WINDOW: i64 = 90;
+const RETURN_WINDOW: i64 = rewards::YIELD_DAYS;
 const DAY: i64 = 86_400;
 const COIN: f64 = 1e8;
 
@@ -728,7 +728,7 @@ pub(crate) fn median4(mut ys: Vec<f64>) -> Option<f64> {
 /// The median annualized yield of enabled masternodes registered for the whole window, by type, and
 /// how many that is. None until the payments index covers the window. Evonodes' Platform yields over
 /// the same window come in as `platform` (from the rewards board, which reads every payout in it).
-fn network_returns(c: &Connection, platform: (HashMap<String, f64>, f64)) -> Result<Value> {
+fn network_returns(c: &Connection, (platform, span): (HashMap<String, f64>, f64)) -> Result<Value> {
     let since = db::now() - RETURN_WINDOW * DAY;
     let covered = index_start(c)?.is_some_and(|t| t <= since);
     let from = if covered { height_at(c, since)? } else { None };
@@ -751,7 +751,6 @@ fn network_returns(c: &Connection, platform: (HashMap<String, f64>, f64)) -> Res
             .map(move |(_, paid, p)| (p, annualized(*paid, RETURN_WINDOW, evo)))
     };
     // Evonodes also earn Platform rewards: annualized over the finalized epochs in the same window.
-    let (platform, span) = platform;
     let with_platform = span > 0.0;
     let regular: Vec<f64> = core(false).map(|(_, y)| y).collect();
     // (Core yield, Platform yield) of each evonode.
