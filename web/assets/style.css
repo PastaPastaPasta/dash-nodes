@@ -492,7 +492,8 @@ main.overview { padding-top: 26px; }
 .pie-legend i { width: 10px; height: 10px; border-radius: 3px; }
 .pie-legend span { overflow-wrap: anywhere; }
 .pie-legend b { color: var(--ink); font-weight: 600; text-align: right; }
-.pie-legend li.empty { display: block; color: var(--muted); }
+.pie-legend li.empty { display: block; color: var(--muted); text-align: center; }
+.versions-pie:has(> .donut[hidden]) { grid-template-columns: minmax(0, 1fr); }
 @media (max-width: 560px) {
   .versions-pie { grid-template-columns: minmax(0, 1fr); padding-top: 4px; }
   .versions-pie .donut { max-width: 210px; margin: 0 auto; }

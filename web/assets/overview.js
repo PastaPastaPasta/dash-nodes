@@ -321,7 +321,8 @@ function renderLadder() {
 
 /** "Share now": the ladder's rows as a pie, the latest release's share in the middle (0% before anything runs it). */
 function renderVersionPie() {
-  const rows = ladderRows.filter((r) => r.n > 0);
+  // With no answered version at all (only "no answer"), there's nothing to compare: show the empty state.
+  const rows = ladderRows.some((r) => r.n > 0 && r.key !== "Unknown") ? ladderRows.filter((r) => r.n > 0) : [];
   const sum = rows.reduce((a, r) => a + r.n, 0);
   const color = (r) => (r.key === "Unknown" ? "var(--axis)" : r.merged ? "var(--other)" : versionPalette.color(r.key));
   const latest = finals[0] && ladderRows.find((r) => r.key === finals[0] && !r.merged);
