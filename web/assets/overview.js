@@ -496,7 +496,7 @@ const median = (sorted) => (sorted?.length ? sorted[sorted.length >> 1] : null);
 async function renderSpeed() {
   const b = await api(`${net}/bench`).catch(() => null);
   const vs = (b?.vantages || []).filter((v) => v.tested);
-  $("speed-section").hidden = !vs.length;
+  $("speed").hidden = !vs.length;
   if (!vs.length) return;
   // Failed tests have no score but still count as tests that didn't earn an A or B.
   const all = vs.flatMap((v) => v.scores || []);
@@ -526,8 +526,8 @@ const plainStat = (label, value, note, tone) =>
 function renderEarn() {
   const r = summary.returns;
   const reg = r?.regular?.median_annual_yield, evo = r?.evo?.median_annual_yield;
-  $("earn-section").hidden = reg == null && evo == null;
-  if ($("earn-section").hidden) return;
+  $("earnings").hidden = reg == null && evo == null;
+  if ($("earnings").hidden) return;
   // Evonodes also earn Platform rewards: shown on their own and with Core payments, when collected.
   const e = r.evo;
   const withPlatform = e?.median_total_yield != null;
@@ -548,7 +548,7 @@ function renderEarn() {
 /** Evonode Platform health (summary.platform): the latest check of every evonode's Platform endpoints. */
 function renderPlatform() {
   const p = summary.platform;
-  $("platform-section").hidden = !p?.checked;
+  $("platform").hidden = !p?.checked;
   if (!p?.checked) return;
   $("platform-lede").textContent = `${pct(p.healthy / p.checked)} of ${fmt(p.checked)} enabled evonodes passed our latest Platform check: ` +
     `their Tenderdash P2P port was open and their DAPI answered over valid TLS, as themselves. Checked every 15 minutes, last ${ago(p.updated)}.`;
@@ -571,7 +571,7 @@ function renderPlatform() {
 function renderDkg() {
   const d = summary.dkg_readiness;
   const hidden = !d?.masternodes;
-  $("dkg-section").hidden = hidden;
+  $("readiness").hidden = hidden;
   if (hidden) return;
   const { rules } = d;
   const list = (filter) => href(`/masternodes?dkg=${filter}&status=Enabled`);

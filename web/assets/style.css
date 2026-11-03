@@ -252,6 +252,22 @@ input[type="search"]:focus, select:focus, button:focus-visible { outline: 2px so
 .btn:hover { background: var(--surface-2); }
 .btn:disabled { opacity: .5; cursor: default; }
 #cards, #table { scroll-margin-top: 64px; } /* clear of the sticky header */
+/* Section links: a link icon beside a section's heading, shown on hover and focus (always, a little faded, on touch
+   screens); it takes its space all the time, so it never moves the heading. */
+[data-anchor] { scroll-margin-top: 72px; }
+.anchored { display: flex; align-items: baseline; gap: 6px; min-width: 0; } /* the icon sits on the heading's baseline, whatever its margins */
+.anchored > :is(h1, h2, h3) { min-width: 0; }
+a.anchor { flex: none; display: inline-flex; padding: 4px; margin-block: -4px; border-radius: 6px; color: var(--muted); opacity: 0; transition: opacity 0.15s; }
+a.anchor svg { width: 14px; height: 14px; display: block; }
+/* An endpoint's heading keeps its margin collapsing with the description under it, as before the wrapper. */
+.api-ep .anchored { margin-bottom: 8px; }
+.api-ep .anchored h3 { margin: 0; }
+.anchored:hover > a.anchor, a.anchor:focus-visible, a.anchor.copied { opacity: 1; }
+a.anchor:hover { color: var(--brand); background: var(--surface-2); text-decoration: none; }
+a.anchor.copied { color: var(--good); }
+@media (hover: none) { a.anchor { opacity: 0.75; } }
+@media (pointer: coarse) { a.anchor { padding: 10px; margin: -10px; margin-left: -4px; } }
+@media (prefers-reduced-motion: reduce) { a.anchor { transition: none; } }
 .pager { display: flex; align-items: center; gap: 10px; justify-content: flex-end; margin-top: 10px; color: var(--ink-2); font-size: 12.5px; }
 
 /* uptime strip */
@@ -263,7 +279,7 @@ input[type="search"]:focus, select:focus, button:focus-visible { outline: 2px so
 .strip-axis { display: flex; justify-content: space-between; color: var(--muted); font-size: 11px; margin-top: 4px; }
 
 .section { margin-top: 22px; }
-.section > h2 { margin-bottom: 10px; }
+.section > h2, .section > .anchored { margin-bottom: 10px; }
 .cols-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(460px, 1fr)); gap: 14px; }
 
 footer.bottom { border-top: 1px solid var(--ring); color: var(--muted); font-size: 12px; }
