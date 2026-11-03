@@ -355,6 +355,8 @@ export function kv(rows) {
 }
 
 const SUN = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>`;
+const LINK = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/></svg>`;
+const CHECK = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>`;
 const MORE = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h10"/></svg>`;
 const MOON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>`;
 
@@ -369,8 +371,9 @@ function isDark() {
   return t ? t === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
 }
 
-/** Renders header and footer. `page` marks the current nav item; full-screen pages skip the footer. */
-export function chrome(page, { footer = true } = {}) {
+/** Renders header and footer. `page` marks the current nav item; full-screen pages skip the footer; `ownScroll` pages
+ * restore their own scroll position, so a `#section` in the address isn't followed there. */
+export function chrome(page, { footer = true, ownScroll = false } = {}) {
   const net = currentNet();
   document.title = `${document.title}${net === "testnet" ? " · testnet" : ""}`;
   const nav = el("nav", { class: "main" },
@@ -421,6 +424,8 @@ export function chrome(page, { footer = true } = {}) {
     if (inside) more.focus();
   });
   document.body.prepend(header);
+  sectionLinks();
+  if (!ownScroll) followHash();
 
   matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { if (!localStorage.getItem("theme")) themeChanged(); });
   if (footer) document.body.append(el("footer", { class: "bottom" }, el("div", { class: "inner" },
@@ -430,6 +435,77 @@ export function chrome(page, { footer = true } = {}) {
       "IP geolocation by ", el("a", { href: "https://db-ip.com", text: "DB-IP" }), " (CC BY 4.0)"))));
   refreshStatus();
   setInterval(refreshStatus, 60_000);
+}
+
+// ---- section links: every section marked `data-anchor="<name>"` (with a stable id) gets a link beside its heading ----
+
+/** Puts a link beside each `[data-anchor][id]` section's first heading, now and whenever a page (re)renders one. The
+ * link sits next to the heading, not in it, so headings and the regions they label keep their own names. */
+function sectionLinks() {
+  const status = el("div", { class: "sr-only", role: "status" }); // the icon change is invisible to screen readers
+  document.body.append(status);
+  let statusTimer;
+  const add = () => {
+    for (const section of document.querySelectorAll("[data-anchor][id]")) {
+      const heading = section.querySelector("h1, h2, h3");
+      if (!heading || heading.parentElement.classList.contains("anchored")) continue;
+      const name = section.dataset.anchor || heading.textContent.trim();
+      const link = el("a", { class: "anchor", href: `#${section.id}`, title: "Copy a link to this section", "aria-label": `Link to this section: ${name}` });
+      const show = (copied) => { link.classList.toggle("copied", copied); link.innerHTML = copied ? CHECK : LINK; };
+      let timer;
+      // A plain click follows the link (the address keeps its query: scope, filters, network) and copies it.
+      link.addEventListener("click", (e) => {
+        if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+        const say = (text) => {
+          status.textContent = text;
+          clearTimeout(statusTimer);
+          statusTimer = setTimeout(() => { status.textContent = ""; }, 1600);
+        };
+        // No clipboard (an insecure context, an old browser) or a refused write: say so; the address still has the link.
+        const copy = navigator.clipboard ? navigator.clipboard.writeText(link.href) : Promise.reject(new Error("no clipboard"));
+        copy.then(() => {
+          show(true);
+          say(`Link copied: ${name}`);
+          clearTimeout(timer);
+          timer = setTimeout(() => show(false), 1600);
+        }, () => say(`Couldn't copy the link: ${name}`));
+      });
+      show(false);
+      const wrap = el("div", { class: "anchored" });
+      heading.replaceWith(wrap);
+      wrap.append(heading, link);
+    }
+  };
+  add();
+  new MutationObserver(add).observe(document.querySelector("main") || document.body, { childList: true, subtree: true });
+}
+
+/** Sections fill in after their data arrives, so the browser's own jump to `#section` lands too early, or on a
+ * hidden section. Until the reader scrolls, taps or types, keep the section at the top as the page grows. Back and
+ * Forward are left to the browser, which puts the reader where they were. */
+function followHash() {
+  let id;
+  try { id = decodeURIComponent(location.hash.slice(1)); } catch { return; } // a malformed hash isn't ours
+  if (!id) return;
+  if (performance.getEntriesByType("navigation")[0]?.type === "back_forward") {
+    history.scrollRestoration = "auto"; // in case an earlier visit left before following stopped
+    return;
+  }
+  const land = () => {
+    const target = document.getElementById(id);
+    if (target?.hasAttribute("data-anchor") && target.getClientRects().length) target.scrollIntoView({ block: "start" });
+  };
+  const resize = new ResizeObserver(land);
+  const reader = new AbortController();
+  // Manual only while following: a reload lands on the section too, but later Back/Forward between sections
+  // (entries copy this mode) scroll as usual.
+  history.scrollRestoration = "manual";
+  const stop = () => { resize.disconnect(); reader.abort(); history.scrollRestoration = "auto"; };
+  for (const type of ["wheel", "touchstart", "pointerdown", "keydown", "hashchange", "pagehide"]) {
+    addEventListener(type, stop, { capture: true, passive: true, signal: reader.signal });
+  }
+  resize.observe(document.body);
+  setTimeout(stop, 20_000);
 }
 
 const STALE_AFTER = 45 * 60; // three missed crawls

@@ -1,7 +1,7 @@
 import { api, chrome, currentNet, el, fmt, pct, href, countryName, flag, shortHash, badge, ago, nodeStatus, registration, poseBadge, uptimeKind, evoPill,
   MN_FILTERS, mnFilters, mnMatches, rememberParams, filterQuery, filterControls, blocksAgo, behind, listTip, credits, inAbout, blocks } from "./common.js";
 
-chrome("masternodes");
+chrome("masternodes", { ownScroll: true });
 const net = currentNet();
 const PAGE = 100;
 

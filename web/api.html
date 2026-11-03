@@ -29,17 +29,17 @@
   </div></div>
 
   <section class="card">
-    <div class="api-ep">
+    <div class="api-ep" id="status" data-anchor="GET /api/v1/status">
       <h3>GET /api/v1/status</h3>
       <p class="sub">Our dashd's sync state, the crawler's state and the payment index range, per network.</p>
     </div>
-    <div class="api-ep">
+    <div class="api-ep" id="releases" data-anchor="GET /api/v1/releases">
       <h3>GET /api/v1/releases</h3>
       <p class="sub">Dash Core's published releases from GitHub, refreshed hourly: <code>releases</code> as
         <code>[{tag, version, prerelease, published}]</code>, newest first. A release candidate's <code>version</code> is the
         version it reports (<code>v24.0.0-rc.5</code> is <code>24.0.0</code>).</p>
     </div>
-    <div class="api-ep">
+    <div class="api-ep" id="summary" data-anchor="GET /api/v1/{net}/summary">
       <h3>GET /api/v1/{net}/summary</h3>
       <p class="sub">The latest finished crawl, the crawl about 24 hours before it, every distribution from the latest crawl
         (<code>dists[scope][dim] = [[key, count], …]</code>, largest first) and <code>networks</code>: per address network
@@ -71,20 +71,20 @@
         false): it's left out of each masternode's result and of <code>overall</code>, and <code>version_only</code> is 0.</p>
       <pre class="code">curl https://radar.dashhq.org/api/v1/mainnet/summary | jq '.dists.mn.version'</pre>
     </div>
-    <div class="api-ep">
+    <div class="api-ep" id="history" data-anchor="GET /api/v1/{net}/history">
       <h3>GET /api/v1/{net}/history?scope=mn&amp;dim=version&amp;days=30&amp;top=8</h3>
       <p class="sub">A time series of one distribution: <code>{resolution, t: [...], series: [{key, values}]}</code>. Up to 14 days back
         it has one point per crawl; past that, daily averages. Keys outside the top <code>top</code> (by total over the window) fold into
         <code>Other</code>. <code>dim=totals</code> returns reachable nodes, enabled masternodes and reachable masternodes instead.
         <code>days</code> is one of 1, 7, 14, 30, 90 and 365 (default 30); <code>top</code> is 1 to 20 (default 8).</p>
     </div>
-    <div class="api-ep">
+    <div class="api-ep" id="geo" data-anchor="GET /api/v1/{net}/geo">
       <h3>GET /api/v1/{net}/geo</h3>
       <p class="sub">Every node that answered the latest crawl, counted per city and never by address:
         <code>{crawl_id, points: [{lat, lon, city, country, nodes, masternodes}], unlocated}</code>. Onion and I2P nodes have no
         location and only count in <code>unlocated</code>.</p>
     </div>
-    <div class="api-ep">
+    <div class="api-ep" id="masternodes" data-anchor="GET /api/v1/{net}/masternodes">
       <h3>GET /api/v1/{net}/masternodes</h3>
       <p class="sub">Every registered masternode with its latest port check (<code>reachable</code> is <code>null</code> when the latest
         crawl didn't check it), announced user agent, geolocation and 7- and 30-day port-check uptime. Geolocation is
@@ -97,7 +97,7 @@
         they're in no validator set that takes turns, or when <code>in_sets</code>, whether they are, is <code>null</code> too: the
         validator sets haven't been read lately). The map page is drawn from this endpoint.</p>
     </div>
-    <div class="api-ep">
+    <div class="api-ep" id="masternode" data-anchor="GET /api/v1/{net}/masternodes/{protx}">
       <h3>GET /api/v1/{net}/masternodes/{protx}</h3>
       <p class="sub">One masternode: everything from the list plus collateral and keys, every registered Core address
         (<code>core_p2p: [{address, network}]</code>), version history, 90 days of daily uptime, its 25 latest payments,
@@ -122,18 +122,18 @@
         protocol version its blocks this epoch voted for); and <code>explorer</code>, Platform Explorer's lifetime
         <code>total_reward</code> (third party, unverified; <code>before_ours</code> is what it counts beyond our epochs).</p>
     </div>
-    <div class="api-ep">
+    <div class="api-ep" id="payments" data-anchor="GET /api/v1/{net}/masternodes/{protx}/payments">
       <h3>GET /api/v1/{net}/masternodes/{protx}/payments?before={height}&amp;limit=100</h3>
       <p class="sub">Older payments, newest first. Page with <code>before</code> set to the last height you got.</p>
     </div>
-    <div class="api-ep">
+    <div class="api-ep" id="check" data-anchor="POST /api/v1/{net}/masternodes/{protx}/check">
       <h3>POST /api/v1/{net}/masternodes/{protx}/check</h3>
       <p class="sub">Checks a registered masternode now: a P2P version handshake with its registered Core address from the Cloudflare
         location serving you. Returns <code>ok</code>, <code>connect_ms</code>, <code>handshake_ms</code>, <code>user_agent</code>,
         <code>protocol</code>, <code>height</code> or an <code>error</code>, and <code>from</code>. Five checks a minute per client; a
         masternode checked in the last minute gets that result again (<code>cached: true</code>).</p>
     </div>
-    <div class="api-ep">
+    <div class="api-ep" id="platform" data-anchor="GET /api/v1/{net}/platform">
       <h3>GET /api/v1/{net}/platform</h3>
       <p class="sub">Evonodes' Platform rewards, in credits. Each finished epoch's pool (Core block rewards paid into Platform, plus
         fees) goes to the evonodes that proposed its blocks, pro rata by blocks, in Drive's integer arithmetic. We read Drive's record of
@@ -156,21 +156,21 @@
         (<code>supports</code> is the newest protocol its Drive supports; <code>balance</code> its masternode identity's credits).</p>
       <pre class="code">curl https://radar.dashhq.org/api/v1/mainnet/platform | jq '.upgrade'</pre>
     </div>
-    <div class="api-ep">
+    <div class="api-ep" id="changes" data-anchor="GET /api/v1/{net}/changes">
       <h3>GET /api/v1/{net}/changes</h3>
       <p class="sub">The 300 latest registration changes, newest first, in <code>changes</code>: <code>{ts, height, protx, type, field, old, new}</code>,
         and <code>since</code>, when recording started.
         <code>field</code> is <code>registered</code>, <code>removed</code>, <code>pose</code> (enabled or banned at a height) or the
         changed field (<code>service</code>, <code>payout_address</code>, <code>pubkey_operator</code>, …). Recorded since 30 Oct 2026.</p>
     </div>
-    <div class="api-ep">
+    <div class="api-ep" id="health" data-anchor="GET /api/v1/health">
       <h3>GET /api/v1/health</h3>
       <p class="sub">200 while every network's data is fresh (crawled and read from the chain within 45 minutes) and its snapshots are
         saved; 503 with what's wrong otherwise. For uptime checks.</p>
     </div>
   </section>
 
-  <section class="section card">
+  <section class="section card" id="data-collection" data-anchor="How the data is collected">
     <h2>How the data is collected</h2>
     <p class="sub">Every 15 minutes the crawler opens a P2P connection to every registered masternode's Core address, to every
       node that answered in the past week, and to new addresses learned from our dashd and from other nodes' <code>getaddr</code>

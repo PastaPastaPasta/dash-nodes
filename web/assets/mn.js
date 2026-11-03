@@ -109,7 +109,7 @@ async function main() {
 
   // Speed tests come from the Worker's API; the crawler's own server doesn't have them, so the card
   // only appears when there's something to show. Their handshakes also feed the latency row.
-  const speed = el("section", { class: "card speed", hidden: true, id: "speed" });
+  const speed = el("section", { class: "card speed", hidden: true, id: "speed", "data-anchor": "Speed test" });
   root.append(speed);
   const latencyCell = el("span", {}, m.latency_ms != null ? `${fmt(m.latency_ms)} ms from our crawler` : "–");
   const crawlerAt = api("status").then((s) => s.crawler_location, () => null);
@@ -159,7 +159,7 @@ async function main() {
 
   if (m.platform) root.append(platformSection(m));
 
-  root.append(el("section", { class: "section card" },
+  root.append(el("section", { class: "section card", id: "uptime", "data-anchor": "Port-check uptime" },
     el("div", { class: "card-head" }, el("h2", { text: "Port-check uptime" }),
       el("span", { class: "sub", text: `daily, last ${stripDays(m.uptime_daily)} days (UTC)` })),
     uptimeStrip(m.uptime_daily)));
@@ -167,7 +167,7 @@ async function main() {
   root.append(changesSection(m));
 
   root.append(el("div", { class: "cols-2 section" },
-    el("section", {}, el("h2", { text: "Version history", style: { marginBottom: "10px" } }),
+    el("section", { id: "versions", "data-anchor": "Version history" }, el("h2", { text: "Version history", style: { marginBottom: "10px" } }),
       el("div", { class: "table-wrap" }, el("table", { class: "data stack" },
         el("thead", {}, el("tr", {}, el("th", { text: "First seen" }), el("th", { text: "User agent" }), el("th", { class: "r", text: "Protocol" }))),
         el("tbody", {}, ...(m.versions.length ? m.versions.map((v) => labelled(["First seen", "User agent", "Protocol"], el("tr", {},
@@ -251,7 +251,7 @@ function dkgSection(m) {
     }, () => {});
   }
   const [kind, text] = DKG_OVERALL[d.overall];
-  return el("section", { class: "card dkg" },
+  return el("section", { class: "card dkg", id: "readiness", "data-anchor": "Readiness for the next Core release" },
     el("div", { class: "card-head" }, el("h2", {}, `Ready for ${rules.release} quorums? `, badge(kind, text)),
       el("span", { class: "sub", text: "an estimate, from what our crawler sees" })),
     lede,
@@ -324,7 +324,7 @@ function rewardsSection(m) {
   const t = p.totals;
   const c = p.current;
   const lastEpoch = p.epochs.find((e) => e.epoch === t.last_epoch_index);
-  const box = el("section", { class: "card rewards", id: "platform-rewards" },
+  const box = el("section", { class: "card rewards", id: "platform-rewards", "data-anchor": "Platform rewards" },
     el("div", { class: "card-head" }, el("h2", { text: "Platform rewards" }),
       el("span", { class: "sub", text: `per finished epoch since epoch ${fmt(p.first_epoch)}, worked out the way Drive pays them` })));
   const next = p.next;
@@ -490,7 +490,7 @@ function changesSection(m) {
     el("td", { text: dateTime(c.ts) }),
     el("td", { class: "r", text: c.height != null ? fmt(c.height) : "–" }),
     el("td", {}, badge(changeKind(c), changeText(c))))));
-  return el("section", { class: "section card" },
+  return el("section", { class: "section card", id: "changes", "data-anchor": "Registration changes" },
     el("div", { class: "card-head" }, el("h2", { text: "Registration changes" }),
       el("span", { class: "sub", text: "addresses, keys, PoSe status; recorded since 30 Oct 2026" })),
     el("div", { class: "table-wrap" }, el("table", { class: "data stack" },
@@ -525,7 +525,7 @@ function checkNow(m) {
 /** An evonode's Platform endpoints as our latest check found them, and the last 30 days of checks. */
 function platformSection(m) {
   const s = m.platform.latest;
-  const box = el("section", { class: "section card" },
+  const box = el("section", { class: "section card", id: "platform", "data-anchor": "Platform" },
     el("div", { class: "card-head" }, el("h2", { text: "Platform" }),
       el("span", { class: "sub", text: s ? `checked ${ago(s.ts)}, every 15 minutes` : "not checked yet" })));
   if (!s) return box;
@@ -688,7 +688,7 @@ function paymentsSection(m) {
   const lede = ps.count
     ? `${fmt(ps.count)} payments, ${dash(ps.total_duffs)} in total${every ? `; lately one every ${every < 2 ? every.toFixed(1) : Math.round(every)} days, about ${blocks(blocksIn(every * 86400))}` : ""}.`
     : null;
-  return el("section", {}, el("div", { class: "card-head" }, el("h2", { text: "Payments" }), el("span", { class: "sub", text: note })),
+  return el("section", { id: "payments", "data-anchor": "Payments" }, el("div", { class: "card-head" }, el("h2", { text: "Payments" }), el("span", { class: "sub", text: note })),
     lede ? el("p", { class: "sub", text: lede }) : null,
     el("div", { class: "table-wrap" }, el("table", { class: "data" },
       el("thead", {}, el("tr", {}, el("th", { text: "Block" }), el("th", { text: "Time" }), el("th", { class: "r", text: "Amount" }))),
