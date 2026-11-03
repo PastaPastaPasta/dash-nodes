@@ -481,11 +481,23 @@ main.overview { padding-top: 26px; }
 }
 /* The versions card's two pickers (chart kind, time range) and the pie view. */
 .chart-tools { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
-.versions-pie { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 24px; align-items: center; padding: 8px 0 4px; }
+/* Beside the ladder, the pie's card runs as tall as the ladder, with the pie centred in it. */
+.ov-chart.is-pie { align-self: stretch; display: flex; flex-direction: column; }
+.versions-pie { flex: 1; display: grid; grid-template-columns: minmax(150px, 260px) minmax(190px, 300px); justify-content: center; gap: 20px 28px; align-items: center; padding: 12px 0 8px; }
 .versions-pie[hidden] { display: none; }
-.versions-pie .legend { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
-.versions-pie .legend b { color: var(--ink); font-weight: 600; }
-@media (max-width: 560px) { .versions-pie { grid-template-columns: 1fr; } .versions-pie .donut { max-width: 220px; margin: 0 auto; } }
+/* The legend reads like the ladder: swatch, version, share in a right-aligned column, a rule between groups. */
+.pie-legend { list-style: none; margin: 0; padding: 0; display: grid; gap: 7px; font-size: 13px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.pie-legend li { display: grid; grid-template-columns: 10px minmax(0, 1fr) auto; gap: 8px; align-items: center; }
+.pie-legend li.next-group { margin-top: 3px; padding-top: 10px; border-top: 1px solid var(--grid); }
+.pie-legend i { width: 10px; height: 10px; border-radius: 3px; }
+.pie-legend span { overflow-wrap: anywhere; }
+.pie-legend b { color: var(--ink); font-weight: 600; text-align: right; }
+.pie-legend li.empty { display: block; color: var(--muted); text-align: center; }
+.versions-pie:has(> .donut[hidden]) { grid-template-columns: minmax(0, 1fr); }
+@media (max-width: 560px) {
+  .versions-pie { grid-template-columns: minmax(0, 1fr); padding-top: 4px; }
+  .versions-pie .donut { max-width: 210px; margin: 0 auto; }
+}
 .share-legend { display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 12px 0 0; font-size: 13.5px; color: var(--ink-2); }
 .share-legend > span { display: inline-flex; align-items: center; gap: 7px; min-width: 0; max-width: 100%; overflow-wrap: anywhere; } /* long dev version names wrap */
 .share-legend i { width: 10px; height: 10px; border-radius: 3px; }
@@ -658,13 +670,14 @@ button.link { font: inherit; font-size: 13px; background: none; border: 0; paddi
 @media (forced-colors: active) {
   .sharebar div, .ladder td.bar i, .ranked i, .share-legend i, .chip i, .map-donut, .wm-dots circle { forced-color-adjust: none; }
   .wm-pings { display: none; }
-  .strip div, .legend i { forced-color-adjust: none; }
+  .strip div, .legend i, .pie-legend i { forced-color-adjust: none; }
 }
 .ov-section:has(+ .ov-section[hidden]) { border-bottom: 0; }
 
 /* ---- donuts (overview: hosting providers, countries) ---- */
 .donut-row { display: grid; grid-template-columns: 148px minmax(0, 1fr); gap: 22px; align-items: start; margin-top: 12px; }
 .donut { width: 100%; height: auto; display: block; }
+.donut[hidden] { display: none; }
 .donut path { transition: opacity 0.15s; }
 .donut path:hover { opacity: 0.8; }
 .donut-value { font-size: 28px; font-weight: 650; font-stretch: 110%; fill: var(--ink); }
