@@ -11,9 +11,9 @@ const ADDRESS_NETWORKS = { ipv4: "IPv4", ipv6: "IPv6", onion: "Tor", i2p: "I2P",
 const params = new URLSearchParams(location.search);
 let scope = SCOPES.some(([s]) => s === params.get("scope")) ? params.get("scope") : "mn";
 let days = RANGES.some(([d]) => d === params.get("days")) ? params.get("days") : "30";
-/** The versions chart: share over time, or share now as a pie. */
-const SW_VIEWS = [["time", "Over time"], ["now", "Now"]];
-let swView = params.get("versions") === "now" ? "now" : "time";
+/** The versions chart: share now as a pie (the default), or share over time. */
+const SW_VIEWS = [["now", "Now"], ["time", "Over time"]];
+let swView = params.get("versions") === "time" ? "time" : "now";
 
 const sizePalette = new Palette();
 let versionsChart, sizeChart, summary;
@@ -23,13 +23,15 @@ function remember() {
   const u = new URL(location.href);
   u.searchParams.set("scope", scope);
   u.searchParams.set("days", days);
-  if (swView === "now") u.searchParams.set("versions", "now");
+  if (swView === "time") u.searchParams.set("versions", "time");
   else u.searchParams.delete("versions");
   history.replaceState(null, "", u);
 }
 
 const noun = () => ({ all: "nodes", mn: "masternodes", evo: "evonodes", nonmn: "other full nodes" })[scope];
 const total = (rows) => rows.reduce((a, r) => a + r[1], 0);
+/** A share for the versions section: "<0.1%" rather than "0.0%" when a few nodes run it. */
+const shareText = (n, sum) => (n > 0 && n / sum < 0.0005 ? "<0.1%" : pct(sum ? n / sum : 0));
 
 /** "Hetzner Online GmbH" from "AS24940 Hetzner Online GmbH"; one provider can run several ASNs. */
 const orgOf = (asn) => asn.replace(/^AS\d+\s*/, "") || asn;
@@ -65,8 +67,9 @@ function shareBar(bar, legend, rows, { color, label = (k) => k, limit = 5 }) {
  * the hole. Each slice names itself on hover; the ranked list beside it carries the numbers.
  */
 function donut(root, rows, { color, label = (k) => k, limit = 5, center }) {
-  root.hidden = !rows.length;
-  if (!rows.length) return;
+  // An SVG element has no `hidden` property: set the attribute, and clear the last slices.
+  root.toggleAttribute("hidden", !rows.length);
+  if (!rows.length) { root.replaceChildren(); return; }
   const sum = total(rows);
   const top = rows.slice(0, limit);
   const rest = sum - total(top);
@@ -75,7 +78,7 @@ function donut(root, rows, { color, label = (k) => k, limit = 5, center }) {
   const at = (a, rad) => `${(C + rad * Math.sin(a)).toFixed(2)} ${(C - rad * Math.cos(a)).toFixed(2)}`;
   root.setAttribute("viewBox", "0 0 160 160");
   root.setAttribute("role", "img");
-  root.setAttribute("aria-label", parts.map((p) => `${typeof p.l === "string" ? p.l : p.l.textContent} ${pct(p.n / sum)}`).join(", "));
+  root.setAttribute("aria-label", parts.map((p) => `${typeof p.l === "string" ? p.l : p.l.textContent} ${shareText(p.n, sum)}`).join(", "));
   root.replaceChildren();
   let a0 = 0;
   for (const p of parts) {
@@ -86,7 +89,7 @@ function donut(root, rows, { color, label = (k) => k, limit = 5, center }) {
       : `M${at(a0, R)}A${R} ${R} 0 ${a1 - a0 > Math.PI ? 1 : 0} 1 ${at(a1, R)}L${at(a1, r)}A${r} ${r} 0 ${a1 - a0 > Math.PI ? 1 : 0} 0 ${at(a0, r)}Z`;
     const slice = svg("path", { d, fill: p.c, stroke: "var(--surface)", "stroke-width": 2, "fill-rule": "evenodd" });
     const t = svg("title");
-    t.textContent = `${typeof p.l === "string" ? p.l : p.l.textContent}: ${fmt(p.n)} (${pct(p.n / sum)})`;
+    t.textContent = `${typeof p.l === "string" ? p.l : p.l.textContent}: ${fmt(p.n)} (${shareText(p.n, sum)})`;
     slice.append(t);
     root.append(slice);
     a0 = a1;
@@ -302,10 +305,11 @@ function renderLadder() {
   const row = (r) => el("tr", {},
     el("th", { class: "ver", scope: "row" }, el("span", { text: r.label }), note(r) ? [" ", el("small", { text: note(r) })] : null),
     el("td", { class: "bar", "aria-hidden": "true" }, r.n ? el("i", { style: { width: `${(r.n / sum) * 100}%`, background: r.merged ? "var(--other)" : versionPalette.color(r.key) } }) : null),
-    el("td", { class: "r", text: pct(sum ? r.n / sum : 0) }), el("td", { class: "r n", text: fmt(r.n) }));
+    el("td", { class: "r", text: shareText(r.n, sum) }), el("td", { class: "r n", text: fmt(r.n) }));
   const groups = ladderGroups(versions, sum);
   const none = unknown ? [{ key: "Unknown", label: "No answer this week", n: unknown }] : [];
-  ladderRows = [...groups.flatMap((g) => g.rows), ...none];
+  // `group` lets the pie's legend leave a gap where the ladder starts a new group.
+  ladderRows = [...groups.flatMap((g, i) => g.rows.map((r) => ({ ...r, group: i }))), ...none.map((r) => ({ ...r, group: groups.length }))];
   const head = (label) => el("tr", { class: "group" }, el("th", { colspan: 4, scope: "rowgroup", text: label }));
   $("sw-ladder").replaceChildren(
     el("thead", {}, el("tr", {}, el("th", { text: "Version" }), el("td", { "aria-hidden": "true" }),
@@ -325,9 +329,11 @@ function renderVersionPie() {
     limit: rows.length,
     color: (_, i) => color(rows[i]),
     label: (k) => rows.find((r) => r.key === k).label,
-    center: latest ? [pct(sum ? latest.n / sum : 0), "latest release"] : null,
+    center: latest ? [shareText(latest.n, sum), "latest release"] : null,
   });
-  $("versions-pie-legend").replaceChildren(...rows.map((r) => el("span", {}, el("i", { style: { background: color(r) } }), r.label, el("b", { text: ` ${pct(r.n / sum)}` }))));
+  if (!rows.length) { $("versions-pie-legend").replaceChildren(el("li", { class: "empty", text: `No ${noun()} have told us their version yet.` })); return; }
+  $("versions-pie-legend").replaceChildren(...rows.map((r, i) => el("li", { class: i && r.group !== rows[i - 1].group ? "next-group" : null },
+    el("i", { style: { background: color(r) } }), el("span", { text: r.label }), el("b", { text: shareText(r.n, sum) }))));
 }
 
 function renderSoftware() {
@@ -619,6 +625,7 @@ function showVersionsView() {
   $("sw-chart-title").textContent = now ? "Share now" : "Share over time";
   for (const id of ["sw-range", "versions-chart", "sw-since"]) $(id).hidden = now;
   $("versions-pie-box").hidden = !now;
+  $("sw-chart").classList.toggle("is-pie", now);
   if (now) renderVersionPie();
 }
 

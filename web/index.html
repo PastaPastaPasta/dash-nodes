@@ -48,18 +48,18 @@
       <div>
         <div class="ladder-wrap"><table class="ladder" id="sw-ladder" aria-label="Versions, the latest release first"></table></div>
         <p class="muted small" id="sw-proto"></p>
-        <details class="ov-details">
-          <summary>Every version and user agent</summary>
-          <div class="table-wrap"><table class="data" id="sw-table"></table></div>
-        </details>
       </div>
-      <div class="ov-chart">
-        <div class="chart-head"><h3 id="sw-chart-title">Share over time</h3><span class="chart-tools"><span id="sw-view"></span><span id="sw-range"></span></span></div>
-        <div id="versions-chart"></div>
-        <div class="versions-pie" id="versions-pie-box" hidden><svg class="donut" id="versions-pie"></svg><div class="legend" id="versions-pie-legend"></div></div>
+      <div class="ov-chart is-pie" id="sw-chart">
+        <div class="chart-head"><h3 id="sw-chart-title">Share now</h3><span class="chart-tools"><span id="sw-view"></span><span id="sw-range"></span></span></div>
+        <div id="versions-chart" hidden></div>
+        <div class="versions-pie" id="versions-pie-box"><svg class="donut" id="versions-pie"></svg><ul class="pie-legend" id="versions-pie-legend" role="list" aria-label="Share by version"></ul></div>
         <p class="muted small" id="sw-since"></p>
       </div>
     </div>
+    <details class="ov-details">
+      <summary>Every version and user agent</summary>
+      <div class="table-wrap"><table class="data" id="sw-table"></table></div>
+    </details>
   </section>
 
   <section class="ov-section" aria-labelledby="where-title" id="where">
