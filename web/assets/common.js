@@ -456,14 +456,19 @@ function sectionLinks() {
       // A plain click follows the link (the address keeps its query: scope, filters, network) and copies it.
       link.addEventListener("click", (e) => {
         if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
-        navigator.clipboard?.writeText(link.href).then(() => {
-          show(true);
-          status.textContent = `Link copied: ${name}`;
-          clearTimeout(timer);
+        const say = (text) => {
+          status.textContent = text;
           clearTimeout(statusTimer);
-          timer = setTimeout(() => show(false), 1600);
           statusTimer = setTimeout(() => { status.textContent = ""; }, 1600);
-        }, () => {});
+        };
+        // No clipboard (an insecure context, an old browser) or a refused write: say so; the address still has the link.
+        const copy = navigator.clipboard ? navigator.clipboard.writeText(link.href) : Promise.reject(new Error("no clipboard"));
+        copy.then(() => {
+          show(true);
+          say(`Link copied: ${name}`);
+          clearTimeout(timer);
+          timer = setTimeout(() => show(false), 1600);
+        }, () => say(`Couldn't copy the link: ${name}`));
       });
       show(false);
       const wrap = el("div", { class: "anchored" });
