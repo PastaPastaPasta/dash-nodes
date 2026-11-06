@@ -222,6 +222,10 @@ export const dkgOptions = (rows) => {
     ? DKG_OPTIONS.filter(([k]) => k in DKG_OVERALL_OF || withChecks.some((r) => k in r.dkg_readiness.checks))
     : DKG_OPTIONS;
 };
+/** Clears a `dkg` filter on a check the data leaves out (a link from when it had it), rather than match nothing. */
+export function dropUnavailableDkg(f, rows) {
+  if (f.dkg && !dkgOptions(rows).some(([k]) => k === f.dkg)) f.dkg = "";
+}
 
 /** Data published before readiness existed has none: such rows aren't filtered out. */
 function dkgMatches(m, v) {

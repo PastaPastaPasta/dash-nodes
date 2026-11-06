@@ -1,5 +1,5 @@
 import { api, chrome, currentNet, el, fmt, pct, href, countryName, flag, shortHash, badge, ago, nodeStatus, registration, poseBadge, uptimeKind, evoPill,
-  MN_FILTERS, mnFilters, mnMatches, rememberParams, filterQuery, filterControls, blocksAgo, behind, listTip, credits, inAbout, blocks } from "./common.js";
+  MN_FILTERS, mnFilters, mnMatches, dropUnavailableDkg, rememberParams, filterQuery, filterControls, blocksAgo, behind, listTip, credits, inAbout, blocks } from "./common.js";
 
 chrome("masternodes", { ownScroll: true });
 const net = currentNet();
@@ -236,6 +236,7 @@ async function main() {
   try {
     const data = await api(`${net}/masternodes`);
     rows = data.masternodes;
+    dropUnavailableDkg(state, rows);
     tip = listTip(data);
     const reach = rows.filter((m) => m.status === "enabled" && m.reachable === true).length;
     const enabled = rows.filter((m) => m.status === "enabled").length;
