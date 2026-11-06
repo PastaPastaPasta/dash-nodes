@@ -212,6 +212,16 @@ export const DKG_OVERALL = { pass: ["good", "Ready"], fail: ["critical", "Not re
 export const DKG_OPTIONS = [["ready", "Ready"], ["not-ready", "Not ready"], ["unknown", "Unknown"],
   ...DKG_CHECKS.map(([k, label]) => [k, `Fails: ${label.toLowerCase()}`])];
 const DKG_OVERALL_OF = { ready: "pass", "not-ready": "fail", unknown: "unknown" };
+/**
+ * DKG_OPTIONS without the checks the data leaves out (the protocol check while `rules.protocol_check` is
+ * false), which no row could match.
+ */
+export const dkgOptions = (rows) => {
+  const withChecks = rows.filter((r) => r.dkg_readiness?.checks);
+  return withChecks.length
+    ? DKG_OPTIONS.filter(([k]) => k in DKG_OVERALL_OF || withChecks.some((r) => k in r.dkg_readiness.checks))
+    : DKG_OPTIONS;
+};
 
 /** Data published before readiness existed has none: such rows aren't filtered out. */
 function dkgMatches(m, v) {
@@ -320,7 +330,7 @@ export function filterControls(rows, f, onChange) {
     select("version", "Version", versionOptions(rows)),
     select("country", "Country", countryOptions(rows)),
     select("host", "Hosting", hostOptions(rows, f.host)),
-    select("dkg", "DKG readiness", DKG_OPTIONS),
+    select("dkg", "DKG readiness", dkgOptions(rows)),
   ];
 }
 
