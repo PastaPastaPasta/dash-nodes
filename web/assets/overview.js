@@ -617,7 +617,8 @@ async function renderV24() {
   const doc = await api(`${net}/activation`).catch(() => null);
   const d = doc?.deployments?.find((x) => x.name === "v24");
   const o = d?.outlook;
-  if (!d || !o || (o.phase === "active" && o.activation?.time && Date.now() / 1000 - o.activation.time > 30 * 86400)) return;
+  // Active for a month (or since a time we no longer know): old news.
+  if (!d || !o || (o.phase === "active" && !(o.activation?.time && Date.now() / 1000 - o.activation.time < 30 * 86400))) return;
   const p = d.params;
   const w = d.window;
   const at = (m) => `block ${fmt(m.height)}`;

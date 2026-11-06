@@ -316,6 +316,8 @@ struct Memo {
     gate: HashMap<String, (i64, Value)>,
     last_error: Option<(i64, String)>,
     failures: u32,
+    /// Times of blocks that matter but are older than the tracked headers (see Chain).
+    older: HashMap<i64, i64>,
 }
 
 pub async fn run(ctx: Arc<NetCtx>) {
@@ -384,8 +386,8 @@ async fn tick(src: &Source<'_>, memo: &mut Memo) -> Result<Value> {
         }
     };
     sync_headers(src, from, tip).await?;
-    // Our headers and dashd's reading must describe the same chain: a block found in between (or a
-    // reorg) makes this reading stale, so try again next tick.
+    // Our headers and dashd's reading must describe the same chain: a reorg in between makes this
+    // reading stale, so try again next tick.
     let ours: Option<String> = src
         .db
         .read(move |c| {
@@ -426,13 +428,27 @@ async fn tick(src: &Source<'_>, memo: &mut Memo) -> Result<Value> {
         }
     }
 
+    // Blocks that matter but fell below the tracked headers when tracking moved on: keep their times.
+    for d in deps {
+        let b = &rpc_deps[d.name];
+        let heights = [ehf_height(&rpc_deps, d), b["bip9"]["since"].as_i64().filter(|h| *h > 0), b["height"].as_i64()];
+        let missing: Vec<i64> =
+            heights.into_iter().flatten().filter(|h| *h < from && !memo.older.contains_key(h)).collect();
+        for h in missing {
+            let hash: String = src.rpc.call("getblockhash", json!([h])).await?;
+            let header: Value = src.rpc.call("getblockheader", json!([hash, true])).await?;
+            memo.older.insert(h, header["time"].as_i64().context("header time")?);
+        }
+    }
+
     let net = src.net;
     let gate = memo.gate.clone();
+    let older = memo.older.clone();
     let dashd = src.dashd.clone();
     src.db
         .read(move |c| {
             let headers = load_headers(c, from)?;
-            build(net, &headers, tip, &rpc_deps, &seeds, &gate, dashd, now)
+            build(net, &headers, tip, &rpc_deps, &seeds, &gate, dashd, now, &older)
         })
         .await
 }
@@ -637,15 +653,27 @@ async fn signing_quorum(src: &Source<'_>, d: &Deployment) -> Result<Value> {
 
 // ---- the document ----
 
-/// A height with its time: the block's own if it's mined, else an estimate from the average pace.
-fn at(height: i64, headers: &[Header], tip: &Header, pace: f64) -> Value {
-    if height <= tip.height {
-        let first = headers.first().map_or(i64::MAX, |h| h.height);
-        let time = usize::try_from(height - first).ok().and_then(|i| headers.get(i)).map(|h| h.time);
-        return json!({"height": height, "time": time, "estimated": false});
+/// The chain as far as a reading needs it: the tracked headers (contiguous, up to the tip), the times of
+/// a few older blocks that matter (the signal's, a decided state's first), and the recent pace.
+pub struct Chain<'a> {
+    pub headers: &'a [Header],
+    pub tip: Header,
+    pub pace: f64,
+    pub older: &'a HashMap<i64, i64>,
+}
+
+impl Chain<'_> {
+    /// A height with its time: the block's own if it's mined, else an estimate from the average pace.
+    fn at(&self, height: i64) -> Value {
+        if height <= self.tip.height {
+            let first = self.headers.first().map_or(i64::MAX, |h| h.height);
+            let time = usize::try_from(height - first).ok().and_then(|i| self.headers.get(i)).map(|h| h.time);
+            let time = time.or_else(|| self.older.get(&height).copied());
+            return json!({"height": height, "time": time, "estimated": false});
+        }
+        let t = self.tip.time as f64 + (height - self.tip.height) as f64 * self.pace;
+        json!({"height": height, "time": t.round() as i64, "estimated": true})
     }
-    let t = tip.time as f64 + (height - tip.height) as f64 * pace;
-    json!({"height": height, "time": t.round() as i64, "estimated": true})
 }
 
 /// Seconds per block over the last PACE_BLOCKS blocks (150 if we have too few).
@@ -668,14 +696,15 @@ fn build(
     gate: &HashMap<String, (i64, Value)>,
     dashd: Option<String>,
     now: i64,
+    older: &HashMap<i64, i64>,
 ) -> Result<Value> {
     let tip = *headers.last().ok_or_else(|| anyhow!("no headers yet"))?;
     if tip.height != tip_height {
         bail!("headers end at {}, the tip is {tip_height}", tip.height);
     }
     let pace = pace(headers);
-    let out: Vec<Value> =
-        deployments(net).iter().map(|d| deployment_json(d, headers, &tip, pace, rpc, seeds, gate)).collect();
+    let chain = Chain { headers, tip, pace, older };
+    let out: Vec<Value> = deployments(net).iter().map(|d| deployment_json(d, &chain, rpc, seeds, gate)).collect();
     Ok(json!({
         "network": net.name(),
         "updated": now,
@@ -691,13 +720,12 @@ fn build(
 
 fn deployment_json(
     d: &Deployment,
-    headers: &[Header],
-    tip: &Header,
-    pace: f64,
+    chain: &Chain,
     rpc: &Value,
     seeds: &HashMap<String, (State, i64)>,
     gate: &HashMap<String, (i64, Value)>,
 ) -> Value {
+    let headers = chain.headers;
     let r = &rpc[d.name]["bip9"];
     let known = !r.is_null();
     let ehf_height = r["ehf_height"].as_i64();
@@ -751,8 +779,8 @@ fn deployment_json(
     let window_json = |j: &Judged| {
         let end = j.window.start + d.window - 1;
         let mut v = json!({
-            "start": at(j.window.start, headers, tip, pace),
-            "end": at(end, headers, tip, pace),
+            "start": chain.at(j.window.start),
+            "end": chain.at(end),
             "state": j.state.name(),
             "since": j.since,
             "mined": j.window.mined,
@@ -805,7 +833,7 @@ fn deployment_json(
         // Nothing this release runs signs it, so no window can start yet.
         json!({"phase": "not_signed"})
     } else {
-        outlook(d, headers, tip, pace, current.as_ref(), ehf_height)
+        outlook(d, chain, current.as_ref(), ehf_height)
     };
     let schedule: Vec<Value> = (0..)
         .map(|a| (a, threshold(d, a)))
@@ -828,7 +856,7 @@ fn deployment_json(
         "since": current.as_ref().map(|c| c.since),
         "ehf": {
             "height": ehf_height,
-            "block": ehf_height.map(|h| at(h, headers, tip, pace)),
+            "block": ehf_height.map(|h| chain.at(h)),
             "gate": gate.get(d.name).map(|(_, v)| v.clone()),
         },
         "window": current_json,
@@ -840,21 +868,17 @@ fn deployment_json(
 }
 
 /// What happens next and when (estimates beyond the tip).
-fn outlook(
-    d: &Deployment,
-    headers: &[Header],
-    tip: &Header,
-    pace: f64,
-    current: Option<&Judged>,
-    ehf: Option<i64>,
-) -> Value {
+fn outlook(d: &Deployment, chain: &Chain, current: Option<&Judged>, ehf: Option<i64>) -> Value {
     let Some(c) = current else { return Value::Null };
+    let (headers, tip, pace) = (chain.headers, &chain.tip, chain.pace);
     let w = d.window;
     let end = c.window.start + w - 1;
-    let a = |h: i64| at(h, headers, tip, pace);
+    let a = |h: i64| chain.at(h);
     match c.state {
-        State::Defined if d.timeout != NO_TIMEOUT && tip.mediantime >= d.timeout => {
-            // Masternodes stop signing at the timeout, and no signal can be mined after it.
+        // A signal mined before the timeout still starts the next window (Core's DEFINED → STARTED doesn't
+        // look at the timeout); without one, nothing can start: signing and mining it need median time
+        // at most the timeout (IsValidMNActivation).
+        State::Defined if ehf.is_none() && d.timeout != NO_TIMEOUT && tip.mediantime > d.timeout => {
             json!({"phase": "timed_out", "timeout": d.timeout})
         }
         State::Defined => {
@@ -868,7 +892,8 @@ fn outlook(
             };
             // The signal can't be mined before then (its block's median time must be past the start), and
             // the first window that counts is the first to start after it.
-            let signal = ehf.unwrap_or(reach + 1).max(reach);
+            // Not mined yet: the next block at the earliest.
+            let signal = ehf.unwrap_or((reach + 1).max(tip.height + 1)).max(reach);
             let started = signal / w * w + w;
             json!({
                 "phase": if ehf.is_some() { "waiting_for_window" } else { "waiting_for_signal" },
@@ -1036,7 +1061,7 @@ mod tests {
         let hs = headers(1000, 330, |h| if (1200..1280).contains(&h) { 0x2000_2000 } else { 0x2000_0000 });
         let rpc = json!({"v24": {"bip9": {"status": "locked_in", "status_next": "locked_in", "since": 1300, "ehf_height": 1040, "activation_height": 1400}}});
         let seeds = HashMap::from([("v24".to_owned(), (State::Defined, 0))]);
-        let doc = build(Network::Testnet, &hs, 1329, &rpc, &seeds, &HashMap::new(), None, 0).unwrap();
+        let doc = build(Network::Testnet, &hs, 1329, &rpc, &seeds, &HashMap::new(), None, 0, &HashMap::new()).unwrap();
         let v = &doc["deployments"][0];
         assert_eq!(v["state"], "locked_in");
         assert_eq!(v["consistent"], true, "{}", v["mismatches"]);
@@ -1044,7 +1069,7 @@ mod tests {
         assert_eq!(v["window"]["signalling"].as_str().unwrap().len(), 30);
         // A disagreement is reported, not hidden.
         let rpc = json!({"v24": {"bip9": {"status": "started", "status_next": "started", "since": 1100, "ehf_height": 1040}}});
-        let doc = build(Network::Testnet, &hs, 1329, &rpc, &seeds, &HashMap::new(), None, 0).unwrap();
+        let doc = build(Network::Testnet, &hs, 1329, &rpc, &seeds, &HashMap::new(), None, 0, &HashMap::new()).unwrap();
         assert_eq!(doc["deployments"][0]["consistent"], false);
     }
 
@@ -1058,7 +1083,7 @@ mod tests {
             "status": "started", "status_next": "started", "since": 1100, "ehf_height": 1040,
             "statistics": {"period": 100, "elapsed": 100, "count": 50, "threshold": 80, "possible": false}}}});
         let seeds = HashMap::from([("v24".to_owned(), (State::Defined, 0))]);
-        let doc = build(Network::Testnet, &hs, 1299, &rpc, &seeds, &HashMap::new(), None, 0).unwrap();
+        let doc = build(Network::Testnet, &hs, 1299, &rpc, &seeds, &HashMap::new(), None, 0, &HashMap::new()).unwrap();
         let v = &doc["deployments"][0];
         assert_eq!(v["consistent"], true, "{}", v["mismatches"]);
         // Testnet's integer falloff keeps 80 until attempt 3: 80 - a²·100/100/5.
@@ -1077,7 +1102,9 @@ mod tests {
             })
             .collect();
         let seeds = HashMap::from([("v24".to_owned(), (State::Defined, 0))]);
-        let doc = build(Network::Mainnet, &hs, 2_568_200, &json!({}), &seeds, &HashMap::new(), None, 0).unwrap();
+        let doc =
+            build(Network::Mainnet, &hs, 2_568_200, &json!({}), &seeds, &HashMap::new(), None, 0, &HashMap::new())
+                .unwrap();
         let o = &doc["deployments"][0]["outlook"];
         assert_eq!(o["start_time_reached"], true);
         assert_eq!(
@@ -1087,9 +1114,75 @@ mod tests {
         // The signal can be mined from 2,568,001, so the window from 2,568,384 is the first that counts.
         assert_eq!(o["earliest_start"]["height"], 2_568_384);
         let late: Vec<Header> =
-            hs.iter().map(|h| Header { mediantime: d.timeout, time: d.timeout + 900, ..*h }).collect();
-        let doc = build(Network::Mainnet, &late, 2_568_200, &json!({}), &seeds, &HashMap::new(), None, 0).unwrap();
+            hs.iter().map(|h| Header { mediantime: d.timeout + 1, time: d.timeout + 900, ..*h }).collect();
+        let doc =
+            build(Network::Mainnet, &late, 2_568_200, &json!({}), &seeds, &HashMap::new(), None, 0, &HashMap::new())
+                .unwrap();
         assert_eq!(doc["deployments"][0]["outlook"]["phase"], "timed_out");
+    }
+
+    #[test]
+    fn a_late_signal_never_points_at_a_mined_window() {
+        // The median time crossed the start at 2,568,000, but no signal yet with the tip well past the
+        // window after it: the first window that can count is the next one to start, not a mined one.
+        let d = MAINNET[0];
+        let tip = 2_572_600;
+        let hs: Vec<Header> = (2_564_352..=tip)
+            .map(|h| {
+                let t = d.start + 900 + (h - 2_568_000) * 150;
+                Header { height: h, time: t, mediantime: t - 900, version: 0x2000_0000 }
+            })
+            .collect();
+        let seeds = HashMap::from([("v24".to_owned(), (State::Defined, 0))]);
+        let doc =
+            build(Network::Mainnet, &hs, tip, &json!({}), &seeds, &HashMap::new(), None, 0, &HashMap::new()).unwrap();
+        let o = &doc["deployments"][0]["outlook"];
+        assert_eq!(o["earliest_start"]["height"], 2_576_448);
+        assert_eq!(o["earliest_start"]["estimated"], true);
+        assert!(o["margin_blocks"].as_i64().unwrap() >= 0);
+    }
+
+    #[test]
+    fn a_signal_mined_before_the_timeout_still_starts() {
+        let d = MAINNET[0];
+        let hs: Vec<Header> = (2_564_352..=2_568_200)
+            .map(|h| Header { height: h, time: d.timeout + 900, mediantime: d.timeout + 1, version: 0x2000_0000 })
+            .collect();
+        let seeds = HashMap::from([("v24".to_owned(), (State::Defined, 0))]);
+        let rpc = json!({"v24": {"bip9": {"status": "defined", "status_next": "defined", "since": 0, "ehf_height": 2_568_100}}});
+        let doc =
+            build(Network::Mainnet, &hs, 2_568_200, &rpc, &seeds, &HashMap::new(), None, 0, &HashMap::new()).unwrap();
+        assert_eq!(doc["deployments"][0]["outlook"]["phase"], "waiting_for_window");
+        // Exactly at the timeout a signal is still valid; only past it does it give up.
+        let at_timeout: Vec<Header> = hs.iter().map(|h| Header { mediantime: d.timeout, ..*h }).collect();
+        let doc = build(
+            Network::Mainnet,
+            &at_timeout,
+            2_568_200,
+            &json!({}),
+            &seeds,
+            &HashMap::new(),
+            None,
+            0,
+            &HashMap::new(),
+        )
+        .unwrap();
+        assert_eq!(doc["deployments"][0]["outlook"]["phase"], "waiting_for_signal");
+    }
+
+    #[test]
+    fn decided_heights_below_the_headers_keep_their_times() {
+        // Testnet after tracking moved on past its activation: the signal's and the activation's times
+        // come from `older`.
+        let hs = headers(1_590_000, 300, |_| 0x2000_0000);
+        let rpc = json!({"v24": {"type": "bip9", "height": 1_578_000, "bip9": {"status": "active", "status_next": "active", "since": 1_578_000, "ehf_height": 1_565_132}}});
+        let seeds = HashMap::from([("v24".to_owned(), (State::Active, 1_578_000))]);
+        let older = HashMap::from([(1_578_000, 1_792_771_823), (1_565_132, 1_791_000_000)]);
+        let doc = build(Network::Testnet, &hs, 1_590_299, &rpc, &seeds, &HashMap::new(), None, 0, &older).unwrap();
+        let v = &doc["deployments"][0];
+        assert_eq!(v["consistent"], true, "{}", v["mismatches"]);
+        assert_eq!(v["outlook"]["activation"]["time"], 1_792_771_823);
+        assert_eq!(v["ehf"]["block"]["time"], 1_791_000_000);
     }
 
     #[test]
@@ -1107,7 +1200,8 @@ mod tests {
             })
             .collect();
         let seeds = HashMap::from([("v24".to_owned(), (State::Defined, 0))]);
-        let doc = build(Network::Mainnet, &hs, tip, &json!({}), &seeds, &HashMap::new(), None, 0).unwrap();
+        let doc =
+            build(Network::Mainnet, &hs, tip, &json!({}), &seeds, &HashMap::new(), None, 0, &HashMap::new()).unwrap();
         let o = &doc["deployments"][0]["outlook"];
         assert_eq!(o["phase"], "waiting_for_signal");
         assert_eq!(o["earliest_start"]["height"], B);
@@ -1154,9 +1248,18 @@ mod fixture {
         let rpc = json!({"v24": {"type": "bip9", "bip9": {"status": "started", "status_next": "started", "since": 2_572_416, "ehf_height": 2_569_300, "ehf": true}}});
         let seeds =
             HashMap::from([("v24".to_owned(), (State::Defined, 0)), ("evo_shares".to_owned(), (State::Defined, 0))]);
-        let doc =
-            build(Network::Mainnet, &hs, tip, &rpc, &seeds, &HashMap::new(), Some("/Dash Core:24.0.0/".into()), t0)
-                .unwrap();
+        let doc = build(
+            Network::Mainnet,
+            &hs,
+            tip,
+            &rpc,
+            &seeds,
+            &HashMap::new(),
+            Some("/Dash Core:24.0.0/".into()),
+            t0,
+            &HashMap::new(),
+        )
+        .unwrap();
         std::fs::write(path, serde_json::to_string_pretty(&doc).unwrap()).unwrap();
     }
 }

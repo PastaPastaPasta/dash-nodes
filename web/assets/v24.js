@@ -50,7 +50,6 @@ function render(doc) {
   const stale = Date.now() / 1000 - doc.updated > STALE_AFTER;
   const key = JSON.stringify([doc.tip.height, doc.error?.message, stale, d.ehf.gate?.checked]);
   if (key === shown) return;
-  shown = key;
   const focused = document.activeElement?.dataset?.key;
   const o = d.outlook || {};
   const pace = doc.block_seconds;
@@ -61,6 +60,7 @@ function render(doc) {
   renderThresholds(d, o, pace);
   renderHow(doc, d);
   if (focused) document.querySelector(`[data-key="${focused}"]`)?.focus();
+  shown = key; // only once drawn, so a reading that failed to draw is tried again
 }
 
 // ---- freshness and trust ----
@@ -188,6 +188,14 @@ function renderSignal(d, o) {
       "miners' blocks decide.";
     $("signal-meter").replaceChildren();
     $("signal-table").replaceChildren();
+    $("signal-table").parentElement.hidden = true;
+    $("signal-note").textContent = "";
+    $("signal").hidden = false;
+    return;
+  }
+  if (o.phase === "timed_out") {
+    $("signal-lede").textContent = `The timeout (${dateTime(o.timeout)}) passed without the signal: masternodes no longer sign it, and no block may carry it.`;
+    $("signal-meter").replaceChildren();
     $("signal-table").parentElement.hidden = true;
     $("signal-note").textContent = "";
     $("signal").hidden = false;
@@ -333,7 +341,10 @@ function renderWindows(d, o, pace) {
     // A group of focusable windows, each an image with its own description; the table below has the numbers.
     const root = svg("svg", { viewBox: `0 0 ${W} ${H}`, width: W, height: H, class: "windows-chart", role: "group",
       "aria-label": `Signalling share and threshold for ${list.length} windows` });
-    valueAxis(root, { L, W, step: 0.2, max: 1, row, format: (v) => `${Math.round(v * 100)}%` });
+    // Axes are for the eye; each window's own label says it all.
+    const axis = svg("g", { "aria-hidden": "true" });
+    root.append(axis);
+    valueAxis(axis, { L, W, step: 0.2, max: 1, row, format: (v) => `${Math.round(v * 100)}%` });
     const bw = Math.max(3, Math.min(26, slot * 0.62));
     list.forEach((s, i) => {
       const x = center(i);
@@ -360,7 +371,7 @@ function renderWindows(d, o, pace) {
       t.textContent = `#${s.attempt + 1}`;
       const t2 = svg("text", { x: center(i), y: H - 5, "text-anchor": "middle", class: "tick" });
       t2.textContent = s.start.time != null ? day(s.start) : fmt(s.start.height);
-      root.append(t, t2);
+      axis.append(t, t2);
     });
     return root;
   });
@@ -376,7 +387,7 @@ function renderThresholds(d, o, pace) {
   // earliest first window while waiting, the next window while signalling, none once it's decided.
   const anchor = o.phase === "signalling" ? [d.window.attempt + 1, o.next_window]
     : o.earliest_start ? [0, o.earliest_start] : null;
-  const decided = ["locked_in", "active", "failed"].includes(d.state);
+  const decided = ["locked_in", "active", "failed"].includes(d.state) || o.phase === "timed_out";
   // The schedule's windows, then (on a network where it took longer) the last ones that counted.
   const beyond = [...done.keys()].filter((a) => a >= d.schedule.length).sort((a, b) => a - b).slice(-3);
   const floor = d.schedule.at(-1).threshold;
