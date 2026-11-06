@@ -255,6 +255,15 @@ CREATE TABLE IF NOT EXISTS blocks (
     mn_amount INTEGER NOT NULL               -- duffs paid to masternodes in this block
 );
 
+-- Block headers since a little before the version-bits windows that matter (see activation.rs).
+CREATE TABLE IF NOT EXISTS activation_headers (
+    height     INTEGER PRIMARY KEY,
+    hash       TEXT NOT NULL,
+    time       INTEGER NOT NULL,
+    mediantime INTEGER NOT NULL,
+    version    INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS payments (
     height INTEGER NOT NULL,
     protx  TEXT NOT NULL,

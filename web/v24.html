@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DashHQ Radar: Dash Core 24 activation</title>
+  <meta name="description" content="Where Dash Core 24's activation stands: the masternode signal, miners' signalling window by window, the lock-in threshold and when the next window opens.">
+  <link rel="canonical" href="https://radar.dashhq.org/v24">
+  <meta property="og:site_name" content="DashHQ Radar">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="DashHQ Radar: Dash Core 24 activation">
+  <meta property="og:description" content="Where Dash Core 24's activation stands: the masternode signal, miners' signalling window by window, the lock-in threshold and when the next window opens.">
+  <meta property="og:url" content="https://radar.dashhq.org/v24">
+  <meta name="twitter:card" content="summary">
+  <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
+  <!-- TODO(icon): worker/scripts/build.mjs puts the PNG icon set and og:image here once
+       web/assets/icons/ has it (see the README there). Until then favicon.svg is the icon. -->
+  <link rel="manifest" href="/assets/site.webmanifest">
+  <link rel="stylesheet" href="/assets/style.css">
+  <script type="module" src="/assets/v24.js"></script>
+</head>
+<body>
+<main class="activation">
+  <div class="page-head">
+    <div>
+      <h1 id="title">Dash Core 24 activation</h1>
+      <p class="sub" id="lede">Reading the chain…</p>
+    </div>
+  </div>
+  <div id="banner" role="status"></div>
+
+  <section class="ov-section first" aria-labelledby="status-title" id="status" data-anchor="Where it stands" hidden>
+    <h2 id="status-title">Where it stands</h2>
+    <dl class="stat-row" id="status-stats"></dl>
+    <ol class="milestones" id="milestones" aria-label="What happens next"></ol>
+    <p class="muted small" id="status-note"></p>
+  </section>
+
+  <section class="ov-section" aria-labelledby="signal-title" id="signal" data-anchor="The masternode signal" hidden>
+    <div class="ov-head">
+      <h2 id="signal-title">1. The masternode signal</h2>
+      <p class="ov-lede" id="signal-lede"></p>
+    </div>
+    <div class="vote-meter" id="signal-meter"></div>
+    <div class="table-wrap section"><table class="data stack" id="signal-table"></table></div>
+    <p class="muted small" id="signal-note"></p>
+  </section>
+
+  <section class="ov-section" aria-labelledby="miners-title" id="miners" data-anchor="Miners' signalling" hidden>
+    <div class="ov-head">
+      <h2 id="miners-title">2. Miners' signalling</h2>
+      <p class="ov-lede" id="miners-lede"></p>
+    </div>
+    <div class="ov-chart" id="window-box" hidden>
+      <div class="chart-head"><h3 id="window-title">This window, block by block</h3><span class="muted small" id="window-key"></span></div>
+      <div class="chart" id="window-chart"></div>
+      <div class="legend" id="window-legend"></div>
+    </div>
+    <div class="ov-chart section">
+      <div class="chart-head"><h3 id="windows-title">Signalling and threshold, window by window</h3><span class="muted small" id="windows-key"></span></div>
+      <div class="chart" id="windows-chart"></div>
+      <div class="legend" id="windows-legend"></div>
+    </div>
+  </section>
+
+  <section class="ov-section" aria-labelledby="thresholds-title" id="thresholds" data-anchor="Thresholds by window" hidden>
+    <div class="ov-head">
+      <h2 id="thresholds-title">Thresholds by window</h2>
+      <p class="ov-lede" id="thresholds-lede"></p>
+    </div>
+    <div class="table-wrap"><table class="data" id="thresholds-table"></table></div>
+  </section>
+
+  <section class="ov-section" aria-labelledby="how-title" id="how" data-anchor="How activation works">
+    <div class="ov-head">
+      <h2 id="how-title">How activation works</h2>
+    </div>
+    <div class="prose" id="how-body"></div>
+  </section>
+</main>
+</body>
+</html>

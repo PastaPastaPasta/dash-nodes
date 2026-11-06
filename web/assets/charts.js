@@ -252,12 +252,12 @@ export function axisScale(top, n = 3) {
 }
 
 /** Gridlines with their values down the left edge, every `step` up to `max`; `row(v)` is a value's pixel row. */
-export function valueAxis(chart, { L, W, step, max, row }) {
+export function valueAxis(chart, { L, W, step, max, row, format = (v) => +v.toFixed(2) }) {
   for (let v = 0; v <= max + 1e-9; v += step) {
     const y = row(v);
     chart.append(svg("line", { x1: L, x2: W, y1: y, y2: y, class: v ? "gridline" : "baseline" }));
     const tx = svg("text", { x: L - 6, y: y + 4, "text-anchor": "end", class: "tick" });
-    tx.textContent = +v.toFixed(2);
+    tx.textContent = format(v);
     chart.append(tx);
   }
 }

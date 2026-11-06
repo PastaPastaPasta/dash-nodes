@@ -1,3 +1,4 @@
+mod activation;
 mod addr;
 mod api;
 mod bench;
@@ -44,6 +45,21 @@ struct Cli {
 enum Cmd {
     /// Run the crawler, the dashd collectors and the web server.
     Serve(Box<ServeArgs>),
+    /// Read Core's version-bits deployments once (see activation.rs) and print the API document. Keeps
+    /// the block headers it reads in DB (created if missing).
+    Activation {
+        #[arg(long, default_value = "mainnet")]
+        network: String,
+        /// dashd JSON-RPC URL.
+        #[arg(long)]
+        rpc: String,
+        #[arg(long, env = "RPC_USER", default_value = "dashnodes")]
+        rpc_user: String,
+        #[arg(long, env = "RPC_PASSWORD", hide_env_values = true)]
+        rpc_password: String,
+        #[arg(long)]
+        db: PathBuf,
+    },
     /// Handshake with one node and print what it announces. Onion, I2P and CJDNS addresses go
     /// through the same proxies and routes as the crawler (TOR_PROXY, I2P_PROXY, ...).
     Probe {
@@ -183,7 +199,9 @@ where
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Logs go to stderr, so a command's own output (`activation` prints JSON) stays clean.
     tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info,dash_nodes=info".into()),
         )
@@ -192,6 +210,19 @@ async fn main() -> Result<()> {
         Cmd::Serve(args) => serve(*args).await,
         Cmd::Probe { addr, network, getaddr, transport } => probe(&addr, &network, getaddr, &transport).await,
         Cmd::Bench(args) => bench::main(*args).await,
+        Cmd::Activation { network, rpc, rpc_user, rpc_password, db } => {
+            let net = Network::parse(&network).context("network must be mainnet or testnet")?;
+            let rpc = rpc::Rpc::new(rpc, rpc_user, rpc_password);
+            let db = db::Db::open(&db)?;
+            let info: serde_json::Value = rpc.call("getnetworkinfo", serde_json::json!([])).await?;
+            let dashd = info["subversion"].as_str().map(str::to_owned);
+            // Like the collector: a reading from a chain still syncing would be wrong, not just old.
+            let mnsync: serde_json::Value = rpc.call("mnsync", serde_json::json!(["status"])).await?;
+            let synced = mnsync["IsBlockchainSynced"].as_bool().unwrap_or(false);
+            let src = activation::Source { net, rpc: &rpc, db: &db, synced, dashd };
+            println!("{}", serde_json::to_string_pretty(&activation::once(&src).await?)?);
+            Ok(())
+        }
         Cmd::PlatformCheck { p2p, https } => {
             println!("{:#?}", platform::check_once(&p2p, &https).await);
             Ok(())
@@ -312,6 +343,7 @@ async fn serve(args: ServeArgs) -> Result<()> {
             reference: RwLock::default(),
             platform_schedule: RwLock::default(),
             platform_board: RwLock::default(),
+            activation: RwLock::default(),
         });
         let floor = floor.unwrap_or(net.dip3_enforcement_height());
         supervise("collector", &ctx, collector::run);
@@ -321,6 +353,7 @@ async fn serve(args: ServeArgs) -> Result<()> {
         supervise("platform", &ctx, platform::run);
         supervise("rewards", &ctx, rewards::run);
         supervise("validator sets", &ctx, rewards::run_quorums);
+        supervise("activation", &ctx, activation::run);
         tracing::info!("{}: dashd at {url}", net.name());
         nets.insert(net, ctx);
     }

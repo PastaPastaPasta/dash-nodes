@@ -4,9 +4,10 @@
 export const NETWORKS = ["mainnet", "testnet"];
 /**
  * Per-network documents served as published. `reference` holds the block hashes speed tests check against;
- * `platform` is evonodes' Platform rewards (epochs, the upgrade vote, the proposer schedule, every evonode).
+ * `platform` is evonodes' Platform rewards (epochs, the upgrade vote, the proposer schedule, every evonode);
+ * `activation` is Core's version-bits deployments (Dash Core 24's activation), republished every minute.
  */
-export const DOCS = ["summary", "geo", "masternodes", "reference", "changes", "platform"];
+export const DOCS = ["summary", "geo", "masternodes", "reference", "changes", "platform", "activation"];
 /** A speed-test vantage point's id (e.g. home, nyc, ams, sgp). */
 export const VANTAGE = "[a-z0-9-]{2,16}";
 export const SCOPES = ["all", "mn", "evo", "nonmn"];

@@ -32,6 +32,8 @@ pub struct NetCtx {
     pub platform_schedule: RwLock<Option<std::sync::Arc<crate::rewards::Schedule>>>,
     /// Platform rewards per evonode, built once per collector round (see rewards.rs).
     pub platform_board: RwLock<Option<std::sync::Arc<crate::rewards::Board>>>,
+    /// The latest reading of Core's version-bits deployments (see activation.rs).
+    pub activation: RwLock<Option<std::sync::Arc<serde_json::Value>>>,
 }
 
 #[derive(Clone, Debug)]

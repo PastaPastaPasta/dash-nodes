@@ -33,7 +33,7 @@ x-hardened: &hardened
 
 x-dashd: &dashd
   # Volumes mount at /home/dash, the image's declared VOLUME; the datadir is /home/dash/.dashcore.
-  image: dashpay/dashd:${DASHD_TAG:-24.0.0-rc.4}
+  image: dashpay/dashd:${DASHD_TAG:-24.0.0}
   restart: unless-stopped
   logging: *default-logging
   # Give dashd time to flush; an unclean stop can mean a long replay on mainnet.

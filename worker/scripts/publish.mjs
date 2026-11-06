@@ -1,7 +1,7 @@
 // Publisher: copies what the crawler's API serves into the Worker's R2, so nodes.dashhq.org never
 // talks to the crawler host. Runs next to the app (deploy/docker-compose.yml, service "publisher").
 //
-//   node scripts/publish.mjs            loop: status every minute, a network's documents after each of its
+//   node scripts/publish.mjs            loop: status and activation every minute, a network's documents after each of its
 //                                       crawls (and hourly), retrying a failed network with backoff
 //   node scripts/publish.mjs --once     one full pass, then exit (also: seeding a local `wrangler dev`)
 //
@@ -79,9 +79,11 @@ async function fetchRetry(request, tries, pause, permanent = () => false) {
   }
 }
 
-async function get(path) {
-  // 404 for an endpoint this build doesn't have, 400 for a parameter it doesn't know; anything else is worth a retry.
-  const r = await fetchRetry(() => fetch(`${SOURCE}/api/v1/${path}`), 3, 1000, (status) => status === 404 || status === 400);
+async function get(path, final = [], timeoutMs = null) {
+  // 404 for an endpoint this build doesn't have, 400 for a parameter it doesn't know (and `final`, statuses the
+  // caller expects); anything else is worth a retry. `timeoutMs` bounds each attempt, body included.
+  const request = () => fetch(`${SOURCE}/api/v1/${path}`, timeoutMs ? { signal: AbortSignal.timeout(timeoutMs) } : {});
+  const r = await fetchRetry(request, 3, 1000, (status) => status === 404 || status === 400 || final.includes(status));
   if (!r.ok) throw Object.assign(new Error(`${path}: ${r.status}`), { status: r.status });
   return r.json();
 }
@@ -255,6 +257,14 @@ async function main() {
       await put("v1/status.json", status);
     } catch (e) {
       log("status failed:", e.message);
+    }
+    // Activation moves with every block: published each minute, like status. Before the app has read it
+    // (503) or in a build without it (404), skip it.
+    // Even if status failed: the app may still serve activation. 503: it hasn't read it yet. 20 s per
+    // attempt, so a stalled answer can't hold up the rest.
+    for (const net of NETS) {
+      await putIfServed(`v1/${net}/activation.json`, () => get(`${net}/activation`, [503], 20_000))
+        .catch((e) => { if (e.status !== 503) log(`${net}: activation failed:`, e.message); });
     }
     if (started >= releasesAt) {
       // A failure tries again in 10 minutes; pages keep the last list meanwhile.

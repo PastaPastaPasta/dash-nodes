@@ -43,6 +43,7 @@ pub fn router(nets: Nets, web: &Path) -> Router {
         .route("/api/v1/{net}/masternodes/{protx}/payments", get(payments))
         .route("/api/v1/{net}/changes", get(changes))
         .route("/api/v1/{net}/platform", get(platform_rewards))
+        .route("/api/v1/{net}/activation", get(activation))
         .route("/api/v1/{net}/reference", get(reference))
         .with_state(nets)
         .layer(SetResponseHeaderLayer::if_not_present(
@@ -57,6 +58,7 @@ pub fn router(nets: Nets, web: &Path) -> Router {
         .route_service("/changes", page("changes.html"))
         .route_service("/map", page("map.html"))
         .route_service("/platform", page("platform.html"))
+        .route_service("/v24", page("v24.html"))
         .route_service("/mn/{protx}", page("mn.html"))
         .route_service("/api", page("api.html"))
         .nest_service("/assets", ServeDir::new(web.join("assets")))
@@ -858,6 +860,17 @@ async fn platform_rewards(State(nets): State<Nets>, UrlPath(net): UrlPath<String
     let network = ctx.net;
     let body = ctx.db.read(move |c| rewards::network_json(c, &view, network)).await?;
     Ok(Json(body))
+}
+
+/// Core's version-bits deployments (Dash Core 24's activation), as the activation collector last read
+/// them; 503 until it has.
+async fn activation(State(nets): State<Nets>, UrlPath(net): UrlPath<String>) -> ApiResult {
+    let ctx = net_ctx(&nets, &net)?;
+    let doc = ctx.activation.read().unwrap().clone();
+    match doc {
+        Some(d) => Ok(Json((*d).clone())),
+        None => Err(ApiError(StatusCode::SERVICE_UNAVAILABLE, "not read from dashd yet".into())),
+    }
 }
 
 /// Where the latest crawl's reachable nodes are, by city coordinates, without their addresses.
