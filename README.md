@@ -29,6 +29,12 @@ mnowatch.org/user-agents and the old dashninja.pl:
   withdrawals with proofs and check our numbers against them, and to estimate what it earned before epoch 34 from
   its balance and withdrawals (no record has those per evonode). Platform Explorer's lifetime totals (third party,
   fetched for a few evonodes per round, each at most daily) are kept as a cross-check.
+- **Dash Core 24 activation** (`/v24`, `src/activation.rs`): the `v24` deployment's masternode signal (the EHF quorum
+  that must sign it, with how many of its members run 24) and miners' signalling, window by window, against the falling
+  lock-in threshold. It reads every block header since shortly before the windows that matter, works the states out
+  with Core's rules (v24.0.0's parameters), checks them against dashd's `getdeploymentinfo`, and estimates the dates to
+  come from the recent block pace. `dash-nodes activation --rpc <url> --db <file>` prints one reading. dashd must be
+  24.0.0 or newer: earlier builds don't define the mainnet deployment.
 - **Map:** every masternode (or every reachable node, counted per city) placed by the city its IP
   geolocates to (DB-IP City Lite), clustered, colored by port-check status, version or type, with the
   list's filters. It replaces the old map.dashhq.org / map.thepasta.org (`PastaPastaPasta/dash-mn-map`).

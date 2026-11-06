@@ -100,3 +100,12 @@ test("the Platform rewards document is served as published", async () => {
   await assert.rejects(route(["testnet", "platform"], new URLSearchParams(""), get), (e) => e.status === 503);
   await assert.rejects(route(["mainnet", "platform", "x"], new URLSearchParams(""), get), (e) => e.status === 404);
 });
+
+test("the activation document is served as published", async () => {
+  const doc = { network: "mainnet", deployments: [{ name: "v24", state: "defined" }] };
+  const get = async (k) => (k === "v1/mainnet/activation.json" ? doc : null);
+  assert.equal(await route(["mainnet", "activation"], new URLSearchParams(""), get), doc);
+  await assert.rejects(route(["testnet", "activation"], new URLSearchParams(""), get), (e) => e.status === 503);
+  assert.ok(KEY.test("v1/mainnet/activation.json") && KEY.test("v1/testnet/activation.json"));
+  assert.ok(!KEY.test("v1/activation.json") && !KEY.test("v1/devnet/activation.json"));
+});

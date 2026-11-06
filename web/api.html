@@ -157,6 +157,26 @@
         (<code>supports</code> is the newest protocol its Drive supports; <code>balance</code> its masternode identity's credits).</p>
       <pre class="code">curl https://radar.dashhq.org/api/v1/mainnet/platform | jq '.upgrade'</pre>
     </div>
+    <div class="api-ep" id="activation" data-anchor="GET /api/v1/{net}/activation">
+      <h3>GET /api/v1/{net}/activation</h3>
+      <p class="sub">Core's version-bits deployments (Dash Core 24's <code>v24</code>, and <code>evo_shares</code>), read from our dashd every
+        30 seconds and republished every minute; <a href="/v24">/v24</a> shows it. <code>tip</code> (<code>height</code>, <code>time</code>,
+        <code>mediantime</code>), <code>updated</code>, <code>dashd</code>, <code>block_seconds</code> (the average over the last
+        <code>pace_blocks</code> blocks, for estimates), <code>error</code> (<code>{message, since}</code> while reads fail; the rest is
+        then the last good reading). Per deployment in <code>deployments</code>: <code>params</code> (as released: <code>bit</code>,
+        <code>start_time</code>, <code>timeout</code>, <code>window</code>, <code>threshold_start</code>, <code>threshold_min</code>,
+        <code>falloff_coeff</code>), <code>signed</code> (whether Dash Core 24 signs its masternode signal), <code>state</code> and
+        <code>since</code> for the next block, worked out from every block header with Core's rules, <code>rpc</code> (our dashd's
+        <code>getdeploymentinfo</code> entry), <code>consistent</code> and <code>mismatches</code> (the two compared),
+        <code>ehf</code> (<code>height</code> of the mined masternode signal, and until then <code>gate</code>: the quorums that would
+        sign it, with how many valid members announced protocol 70242+ to our crawler), <code>window</code> (the window the next block
+        belongs to: <code>start</code>, <code>end</code>, <code>mined</code>, <code>count</code>, <code>attempt</code>,
+        <code>threshold</code>, <code>needed</code>, <code>possible</code> and <code>signalling</code>, a <code>#</code> or
+        <code>-</code> per block), <code>windows</code> (the ones that counted, and the latest), <code>recent</code> (signals in the
+        last 576 blocks), <code>schedule</code> (the threshold per attempt) and <code>outlook</code> (the next milestones). Heights come
+        with a <code>time</code> and <code>estimated</code>: true for blocks not mined yet, at <code>block_seconds</code> each.</p>
+      <pre class="code">curl https://radar.dashhq.org/api/v1/mainnet/activation | jq '.deployments[0].outlook'</pre>
+    </div>
     <div class="api-ep" id="changes" data-anchor="GET /api/v1/{net}/changes">
       <h3>GET /api/v1/{net}/changes</h3>
       <p class="sub">The 300 latest registration changes, newest first, in <code>changes</code>: <code>{ts, height, protx, type, field, old, new}</code>,

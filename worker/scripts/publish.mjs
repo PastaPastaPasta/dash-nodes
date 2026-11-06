@@ -1,7 +1,7 @@
 // Publisher: copies what the crawler's API serves into the Worker's R2, so nodes.dashhq.org never
 // talks to the crawler host. Runs next to the app (deploy/docker-compose.yml, service "publisher").
 //
-//   node scripts/publish.mjs            loop: status every minute, a network's documents after each of its
+//   node scripts/publish.mjs            loop: status and activation every minute, a network's documents after each of its
 //                                       crawls (and hourly), retrying a failed network with backoff
 //   node scripts/publish.mjs --once     one full pass, then exit (also: seeding a local `wrangler dev`)
 //
@@ -255,6 +255,14 @@ async function main() {
       await put("v1/status.json", status);
     } catch (e) {
       log("status failed:", e.message);
+    }
+    // Activation moves with every block: published each minute, like status. Before the app has read it
+    // (503) or in a build without it (404), skip it.
+    if (status) {
+      for (const net of NETS) {
+        await putIfServed(`v1/${net}/activation.json`, () => get(`${net}/activation`))
+          .catch((e) => { if (e.status !== 503) log(`${net}: activation failed:`, e.message); });
+      }
     }
     if (started >= releasesAt) {
       // A failure tries again in 10 minutes; pages keep the last list meanwhile.
