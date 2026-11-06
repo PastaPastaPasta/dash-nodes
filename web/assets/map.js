@@ -3,7 +3,7 @@
 import { Map as GLMap, Marker, Popup, NavigationControl, AttributionControl, LngLatBounds } from "/assets/vendor/maplibre-gl.mjs";
 import { api, chrome, currentNet, el, fmt, pct, compact, href, place, shortHash, badge, nodeStatus, evoPill, mnFilters, mnMatches,
   rememberParams, filterQuery, countBy, segmented, filterSelect, searchBox, REACH, REGISTRATION, registration, poseBadge, TYPE_OPTIONS, versionOptions,
-  countryOptions, hostOptions, DKG_OPTIONS, blocksAgo, listTip } from "./common.js";
+  countryOptions, hostOptions, dkgOptions, dropUnavailableDkg, blocksAgo, listTip } from "./common.js";
 import { bottomSheet } from "./sheet.js";
 
 chrome("map", { footer: false });
@@ -402,7 +402,7 @@ function buildPanel() {
     chips,
     el("div", { class: "mp-filters mn-only" }, pick("type", "Type", TYPE_OPTIONS), pick("version", "Version", versionOptions(rows)),
       pick("country", "Country", countryOptions(rows)), pick("host", "Hosting", hostOptions(rows, state.host)),
-      pick("dkg", "DKG readiness", DKG_OPTIONS)),
+      pick("dkg", "DKG readiness", dkgOptions(rows))),
     groupBox, nodeBox, foot);
 }
 
@@ -535,6 +535,7 @@ async function main() {
   try {
     const [data, g] = await Promise.all([api(`${net}/masternodes`), api(`${net}/geo`).catch(() => null)]);
     rows = data.masternodes;
+    dropUnavailableDkg(state, rows);
     byProtx = new Map(rows.map((m) => [m.protx, m]));
     tip = listTip(data);
     geo = g;

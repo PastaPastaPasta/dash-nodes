@@ -6,6 +6,12 @@
 //! masternode connections, doesn't relay transactions or doesn't serve compact block filters.
 //! Members voted bad are left out of the quorum and get PoSe penalties.
 //!
+//! Each member applies the rules of the Core it runs: Dash Core 24 adds the relay and filter checks and
+//! raises the minimum protocol to 70242, while members on 23.x only ask for 70240 and still judge
+//! reachability and Platform bans. So during the upgrade a node failing the newer checks collects bad
+//! votes from the members that already run 24, and is left out once enough of them vote
+//! (dkgBadVotesThreshold, e.g. 300 of llmq_400_85's 400).
+//!
 //! We estimate each rule from what we see: the version handshake a masternode sends our crawler
 //! (an inbound, non-masternode connection), our port check, and our dashd's Platform ban flag.
 //! Services and relay are the same for every inbound connection unless the operator does
@@ -14,12 +20,11 @@
 use serde::Serialize;
 use serde_json::{Value, json};
 
-/// The rules as of Dash Core `develop` at commit 4326d223dbee (2026-10-30):
-/// `src/active/dkgsession.cpp`, `ActiveDKGSession::VerifyConnectionAndMinProtoVersions`. Bump these
-/// together when Core changes them.
+/// The rules as released in Dash Core v24.0.0 (938fba5028, 2026-11-05): `src/active/dkgsession.cpp`,
+/// `ActiveDKGSession::VerifyConnectionAndMinProtoVersions`. Bump these together when Core changes them.
 pub mod core {
-    /// Commit the constants below were read at.
-    pub const COMMIT: &str = "4326d223dbee";
+    /// The Core tag (or commit) the constants below were read at; pages link the source there.
+    pub const COMMIT: &str = "v24.0.0";
     /// `MIN_MASTERNODE_PROTO_VERSION`, src/version.h:23 (bumped for v24 in f76414762e1a).
     pub const MIN_MASTERNODE_PROTO_VERSION: i64 = 70242;
     /// `NODE_COMPACT_FILTERS = (1 << 6)`, src/protocol.h:322.
@@ -31,11 +36,11 @@ pub mod core {
     pub const RELEASE: &str = "Dash Core 24";
 }
 
-/// Whether the protocol check counts. Off until RELEASE is out: before then no masternode can run
-/// MIN_MASTERNODE_PROTO_VERSION, so it would fail them all. Off, a masternode's result leaves it out
-/// and the summary keeps only its counts (pages from before this flag read them), with
+/// Whether the protocol check counts. It was off until RELEASE shipped (no masternode could run
+/// MIN_MASTERNODE_PROTO_VERSION before then, so it failed them all); on since v24.0.0 was released on
+/// 2026-11-05. Off, a masternode's result leaves it out and the summary keeps only its counts, with
 /// `rules.protocol_check` false.
-pub const PROTOCOL_CHECK: bool = false;
+pub const PROTOCOL_CHECK: bool = true;
 
 /// Port checks missed in a row before we call reachability failed. Core judges repeated failed
 /// connections (above MASTERNODE_MAX_FAILED_OUTBOUND_ATTEMPTS, reset by any success), not one miss;

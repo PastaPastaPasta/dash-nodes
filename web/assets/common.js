@@ -198,10 +198,10 @@ export const registration = (m) => (m.status === "pose_banned" ? "PoSe-banned" :
 export const poseBadge = (m) => (m.status === "pose_banned" ? badge("serious", "PoSe-banned") : null);
 
 // DKG readiness (readiness.rs): would quorum members vote this masternode a bad connection under the
-// next Core release's rules? Each check is "pass", "fail" or "unknown"; the thresholds come from the API.
-// The protocol check is off until that release is out (PROTOCOL_CHECK in readiness.rs); add
-// ["protocol", "Protocol version"] back when it's turned on.
+// rules of the Core release in `rules.release` (Dash Core 24)? Each check is "pass", "fail" or "unknown"; the thresholds come from the API.
+// `rules.protocol_check` false (PROTOCOL_CHECK in readiness.rs) leaves the protocol check out of the data.
 export const DKG_CHECKS = [
+  ["protocol", "Protocol version"],
   ["relay", "Transaction relay"],
   ["filters", "Compact block filters"],
   ["reachable", "Reachable"],
@@ -212,6 +212,20 @@ export const DKG_OVERALL = { pass: ["good", "Ready"], fail: ["critical", "Not re
 export const DKG_OPTIONS = [["ready", "Ready"], ["not-ready", "Not ready"], ["unknown", "Unknown"],
   ...DKG_CHECKS.map(([k, label]) => [k, `Fails: ${label.toLowerCase()}`])];
 const DKG_OVERALL_OF = { ready: "pass", "not-ready": "fail", unknown: "unknown" };
+/**
+ * DKG_OPTIONS without the checks the data leaves out (the protocol check while `rules.protocol_check` is
+ * false), which no row could match.
+ */
+export const dkgOptions = (rows) => {
+  const withChecks = rows.filter((r) => r.dkg_readiness?.checks);
+  return withChecks.length
+    ? DKG_OPTIONS.filter(([k]) => k in DKG_OVERALL_OF || withChecks.some((r) => k in r.dkg_readiness.checks))
+    : DKG_OPTIONS;
+};
+/** Clears a `dkg` filter on a check the data leaves out (a link from when it had it), rather than match nothing. */
+export function dropUnavailableDkg(f, rows) {
+  if (f.dkg && !dkgOptions(rows).some(([k]) => k === f.dkg)) f.dkg = "";
+}
 
 /** Data published before readiness existed has none: such rows aren't filtered out. */
 function dkgMatches(m, v) {
@@ -320,7 +334,7 @@ export function filterControls(rows, f, onChange) {
     select("version", "Version", versionOptions(rows)),
     select("country", "Country", countryOptions(rows)),
     select("host", "Hosting", hostOptions(rows, f.host)),
-    select("dkg", "DKG readiness", DKG_OPTIONS),
+    select("dkg", "DKG readiness", dkgOptions(rows)),
   ];
 }
 
