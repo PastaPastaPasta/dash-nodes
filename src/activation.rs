@@ -66,59 +66,35 @@ pub struct MnhfQuorum {
     pub threshold: i64,
 }
 
-const MAINNET: [Deployment; 2] = [
-    Deployment {
-        name: "v24",
-        bit: 13,
-        start: 1_794_182_400,   // 2026-11-09 00:00:00 UTC
-        timeout: 1_857_340_800, // 2028-11-09 00:00:00 UTC
-        window: 4032,
-        threshold_start: 3226,
-        threshold_min: 2420,
-        falloff: 5,
-        min_activation_height: 0,
-        signed: true,
-    },
-    Deployment {
-        name: "evo_shares",
-        bit: 14,
-        start: 1_794_182_400,
-        timeout: 1_857_340_800,
-        window: 4032,
-        threshold_start: 3226,
-        threshold_min: 2420,
-        falloff: 5,
-        min_activation_height: 0,
-        signed: false,
-    },
-];
-
-const TESTNET: [Deployment; 2] = [
-    Deployment {
-        name: "v24",
-        bit: 13,
-        start: 1_790_208_000, // 2026-09-24 00:00:00 UTC
-        timeout: NO_TIMEOUT,
-        window: 100,
-        threshold_start: 80,
-        threshold_min: 60,
-        falloff: 5,
-        min_activation_height: 0,
-        signed: true,
-    },
-    Deployment {
-        name: "evo_shares",
-        bit: 14,
-        start: 1_790_208_000,
-        timeout: NO_TIMEOUT,
-        window: 100,
-        threshold_start: 80,
-        threshold_min: 60,
-        falloff: 5,
-        min_activation_height: 0,
-        signed: false,
-    },
-];
+const MAINNET_V24: Deployment = Deployment {
+    name: "v24",
+    bit: 13,
+    start: 1_794_182_400,   // 2026-11-09 00:00:00 UTC
+    timeout: 1_857_340_800, // 2028-11-09 00:00:00 UTC
+    window: 4032,
+    threshold_start: 3226,
+    threshold_min: 2420,
+    falloff: 5,
+    min_activation_height: 0,
+    signed: true,
+};
+const TESTNET_V24: Deployment = Deployment {
+    name: "v24",
+    bit: 13,
+    start: 1_790_208_000, // 2026-09-24 00:00:00 UTC
+    timeout: NO_TIMEOUT,
+    window: 100,
+    threshold_start: 80,
+    threshold_min: 60,
+    falloff: 5,
+    min_activation_height: 0,
+    signed: true,
+};
+// evo_shares has v24's window and thresholds on both networks.
+const MAINNET: [Deployment; 2] =
+    [MAINNET_V24, Deployment { name: "evo_shares", bit: 14, signed: false, ..MAINNET_V24 }];
+const TESTNET: [Deployment; 2] =
+    [TESTNET_V24, Deployment { name: "evo_shares", bit: 14, signed: false, ..TESTNET_V24 }];
 
 pub fn deployments(net: Network) -> &'static [Deployment] {
     match net {
@@ -222,14 +198,13 @@ pub struct Judged {
 /// the next block belongs to.
 pub fn walk(d: &Deployment, windows: &[Window], seed: (State, i64), signal: Option<i64>) -> Vec<Judged> {
     let (mut state, mut since) = seed;
+    // A STARTED window's attempt counts the windows since the first, and sets its threshold.
+    let attempt_of = |state: State, start: i64, since: i64| {
+        (state == State::Started).then(|| (start - since) / d.window).map(|a| (a, threshold(d, a))).unzip()
+    };
     let mut out = Vec::with_capacity(windows.len() + 1);
     for w in windows {
-        let (attempt, threshold) = if state == State::Started {
-            let a = (w.start - since) / d.window;
-            (Some(a), Some(threshold(d, a)))
-        } else {
-            (None, None)
-        };
+        let (attempt, threshold) = attempt_of(state, w.start, since);
         out.push(Judged { window: w.clone(), state, since, attempt, threshold });
         if w.mined < d.window {
             return out;
@@ -251,12 +226,7 @@ pub fn walk(d: &Deployment, windows: &[Window], seed: (State, i64), signal: Opti
     }
     if let Some(last) = windows.last() {
         let start = last.start + d.window;
-        let (attempt, threshold) = if state == State::Started {
-            let a = (start - since) / d.window;
-            (Some(a), Some(threshold(d, a)))
-        } else {
-            (None, None)
-        };
+        let (attempt, threshold) = attempt_of(state, start, since);
         out.push(Judged {
             window: Window { start, mined: 0, count: 0, mtp_end: None },
             state,
@@ -306,8 +276,11 @@ const TICK: Duration = Duration::from_secs(30);
 const REORG_DEPTH: i64 = 48;
 /// Headers fetched per RPC batch.
 const CHUNK: i64 = 250;
-/// Never track more than this many blocks back from the tip.
+/// Track at most this many blocks back from the tip: past it, tracking starts again nearer the tip (with
+/// dashd's state there as the seed), so the work per reading stays bounded.
 const MAX_HISTORY: i64 = 60_000;
+/// Failed readings in a row before the served one says so (one is usually the chain moving mid-read).
+const FAILURES_SHOWN: u32 = 2;
 /// Blocks the average interval is measured over.
 const PACE_BLOCKS: i64 = 2016;
 /// Recent blocks the "signalling lately" figure covers.
@@ -342,6 +315,7 @@ struct Memo {
     /// The signing-quorum view per deployment, and when it was read.
     gate: HashMap<String, (i64, Value)>,
     last_error: Option<(i64, String)>,
+    failures: u32,
 }
 
 pub async fn run(ctx: Arc<NetCtx>) {
@@ -355,15 +329,17 @@ pub async fn run(ctx: Arc<NetCtx>) {
         match tick(&src, &mut memo).await {
             Ok(doc) => {
                 memo.last_error = None;
+                memo.failures = 0;
                 *ctx.activation.write().unwrap() = Some(Arc::new(doc));
             }
             Err(e) => {
                 tracing::warn!(net = ctx.net.name(), "activation: {e:#}");
                 let since = memo.last_error.as_ref().map_or_else(db::now, |(t, _)| *t);
                 memo.last_error = Some((since, format!("{e:#}")));
+                memo.failures += 1;
                 // Keep serving the last good reading, saying it's stale and why.
                 let mut slot = ctx.activation.write().unwrap();
-                if let Some(doc) = slot.as_ref() {
+                if let Some(doc) = slot.as_ref().filter(|_| memo.failures >= FAILURES_SHOWN) {
                     let mut doc = (**doc).clone();
                     doc["error"] = json!({"message": format!("{e:#}"), "since": since});
                     *slot = Some(Arc::new(doc));
@@ -383,24 +359,42 @@ async fn tick(src: &Source<'_>, memo: &mut Memo) -> Result<Value> {
     let rpc_deps = info["deployments"].clone();
     let deps = deployments(src.net);
 
-    // Where tracking starts: two windows back, or the window before a mined EHF signal.
-    let from = match src.db.read(|c| get_meta(c, "activation_from")).await?.and_then(|s| s.parse::<i64>().ok()) {
-        Some(f) => f,
-        None => {
+    // Where tracking starts: two windows back, or the window before a mined EHF signal; again nearer
+    // the tip once it's more than MAX_HISTORY behind (or ahead of a tip that went back).
+    let stored = src.db.read(|c| get_meta(c, "activation_from")).await?.and_then(|s| s.parse::<i64>().ok());
+    let from = match stored {
+        Some(f) if f <= tip && tip - f <= MAX_HISTORY => f,
+        _ => {
             let w = deps.iter().map(|d| d.window).max().unwrap_or(1);
-            let mut from = (tip / w - 2) * w;
+            let mut raw = (tip / w - 2) * w;
             for d in deps {
-                if let Some(h) = rpc_deps[d.name]["bip9"]["ehf_height"].as_i64() {
-                    from = from.min((h / d.window - 1) * d.window);
+                if let Some(h) = ehf_height(&rpc_deps, d) {
+                    raw = raw.min((h / d.window - 1) * d.window);
                 }
             }
-            let from = from.max(tip - MAX_HISTORY).max(0);
-            let from = from - from.rem_euclid(w);
-            src.db.write(move |c| set_meta(c, "activation_from", &from.to_string())).await?;
+            let raw = raw.max(tip - MAX_HISTORY / 2).max(0);
+            let from = raw - raw.rem_euclid(w);
+            src.db
+                .write(move |c| {
+                    c.execute("DELETE FROM activation_headers WHERE height < ?1", [from])?;
+                    set_meta(c, "activation_from", &from.to_string())
+                })
+                .await?;
             from
         }
     };
     sync_headers(src, from, tip).await?;
+    // Our headers and dashd's reading must describe the same chain: a block found in between (or a
+    // reorg) makes this reading stale, so try again next tick.
+    let ours: Option<String> = src
+        .db
+        .read(move |c| {
+            Ok(c.query_row("SELECT hash FROM activation_headers WHERE height = ?1", [tip], |r| r.get(0)).ok())
+        })
+        .await?;
+    if ours.as_deref() != info["hash"].as_str() {
+        bail!("the chain moved while reading it");
+    }
 
     if memo.seed.as_ref().is_none_or(|(f, _)| *f != from) {
         let hash: String = src.rpc.call("getblockhash", json!([from])).await?;
@@ -418,7 +412,7 @@ async fn tick(src: &Source<'_>, memo: &mut Memo) -> Result<Value> {
     // The signing quorum, for deployments whose signal this release signs and nobody has mined yet.
     let now = db::now();
     for d in deps {
-        let mined = rpc_deps[d.name]["bip9"]["ehf_height"].as_i64().is_some();
+        let mined = ehf_height(&rpc_deps, d).is_some();
         if !d.signed || mined {
             memo.gate.remove(d.name);
             continue;
@@ -546,6 +540,11 @@ async fn sync_headers(src: &Source<'_>, from: i64, tip: i64) -> Result<()> {
     Ok(())
 }
 
+/// The mined EHF signal's height, as dashd reports it.
+fn ehf_height(rpc: &Value, d: &Deployment) -> Option<i64> {
+    rpc[d.name]["bip9"]["ehf_height"].as_i64()
+}
+
 fn load_headers(c: &Connection, from: i64) -> Result<Vec<Header>> {
     Ok(query_all(
         c,
@@ -567,9 +566,8 @@ async fn signing_quorum(src: &Source<'_>, d: &Deployment) -> Result<Value> {
         .as_array()
         .map(|a| a.iter().filter_map(|h| h.as_str().map(str::to_owned)).collect())
         .unwrap_or_default();
-    if !hashes.contains(&selected) {
-        hashes.insert(0, selected.clone());
-    }
+    hashes.retain(|h| *h != selected);
+    hashes.insert(0, selected.clone());
     let calls: Vec<(&str, Value)> = hashes.iter().map(|h| ("quorum", json!(["info", q.llmq_type, h]))).collect();
     let infos = src.rpc.batch(&calls).await?;
     let protx: Vec<Vec<(String, bool)>> = infos
@@ -643,7 +641,7 @@ async fn signing_quorum(src: &Source<'_>, d: &Deployment) -> Result<Value> {
 fn at(height: i64, headers: &[Header], tip: &Header, pace: f64) -> Value {
     if height <= tip.height {
         let first = headers.first().map_or(i64::MAX, |h| h.height);
-        let time = (height >= first).then(|| headers[(height - first) as usize].time);
+        let time = usize::try_from(height - first).ok().and_then(|i| headers.get(i)).map(|h| h.time);
         return json!({"height": height, "time": time, "estimated": false});
     }
     let t = tip.time as f64 + (height - tip.height) as f64 * pace;
@@ -676,10 +674,8 @@ fn build(
         bail!("headers end at {}, the tip is {tip_height}", tip.height);
     }
     let pace = pace(headers);
-    let mut out = Vec::new();
-    for d in deployments(net) {
-        out.push(deployment_json(d, headers, &tip, pace, rpc, seeds, gate));
-    }
+    let out: Vec<Value> =
+        deployments(net).iter().map(|d| deployment_json(d, headers, &tip, pace, rpc, seeds, gate)).collect();
     Ok(json!({
         "network": net.name(),
         "updated": now,
@@ -723,6 +719,12 @@ fn deployment_json(
         if let Some(c) = &current {
             check("status_next", json!(c.state.name()), &r["status_next"]);
         }
+        if let Some(t) = tip_window.as_ref().filter(|t| t.state == State::LockedIn) {
+            check("activation_height", json!(t.since + d.window), &r["activation_height"]);
+        }
+        if let Some(c) = current.as_ref().filter(|c| c.state == State::Active) {
+            check("height", json!(c.since), &rpc[d.name]["height"]);
+        }
         if let Some(t) = &tip_window {
             check("status", json!(t.state.name()), &r["status"]);
             check("since", json!(if t.state == State::Defined { 0 } else { t.since }), &r["since"]);
@@ -736,8 +738,12 @@ fn deployment_json(
                 check("statistics.count", json!(t.window.count), &s["count"]);
             }
             // Core's attempt is 0 unless the next block's window is STARTED.
-            if let Some(c) = &current {
-                check("statistics.threshold", json!(c.threshold.unwrap_or(threshold(d, 0))), &s["threshold"]);
+            if let (Some(c), Some(t)) = (&current, &tip_window) {
+                let next_threshold = c.threshold.unwrap_or(threshold(d, 0));
+                check("statistics.threshold", json!(next_threshold), &s["threshold"]);
+                // As Core pairs them: the tip window's blocks against the next block's threshold.
+                let possible = d.window - next_threshold >= t.window.mined - t.window.count;
+                check("statistics.possible", json!(possible), &s["possible"]);
             }
         }
     }
@@ -847,23 +853,32 @@ fn outlook(
     let end = c.window.start + w - 1;
     let a = |h: i64| at(h, headers, tip, pace);
     match c.state {
+        State::Defined if d.timeout != NO_TIMEOUT && tip.mediantime >= d.timeout => {
+            // Masternodes stop signing at the timeout, and no signal can be mined after it.
+            json!({"phase": "timed_out", "timeout": d.timeout})
+        }
         State::Defined => {
-            // When the median time past reaches the start time: about when block H-5's time does.
-            let reach = if tip.mediantime >= d.start {
-                tip.height
+            // The first block whose median time past is at the start time: mined already, or estimated
+            // as about when block H-5's own time reaches it.
+            let reached = tip.mediantime >= d.start;
+            let reach = if reached {
+                headers.iter().find(|h| h.mediantime >= d.start).map_or(tip.height, |h| h.height)
             } else {
                 tip.height + ((d.start - tip.time) as f64 / pace).ceil().max(0.0) as i64 + 5
             };
-            // The signal can't be mined before then (its block's median time must be past the start).
+            // The signal can't be mined before then (its block's median time must be past the start), and
+            // the first window that counts is the first to start after it.
             let signal = ehf.unwrap_or(reach + 1).max(reach);
-            let first = signal / w * w + w;
-            let started = (first..).step_by(w as usize).find(|b| *b > signal.max(reach)).unwrap_or(first);
+            let started = signal / w * w + w;
             json!({
                 "phase": if ehf.is_some() { "waiting_for_window" } else { "waiting_for_signal" },
-                "start_time_reached": tip.mediantime >= d.start,
-                "start_time_block": a(reach),
+                "start_time_reached": reached,
+                // Unknown if it was before our oldest header.
+                "start_time_block": (!reached || headers.first().is_some_and(|h| h.mediantime < d.start)).then(|| a(reach)),
                 "earliest_start": a(started),
-                "margin_blocks": started - 1 - signal.max(reach),
+                // Blocks between the signal (mined or earliest) and the window's start: little room means
+                // a late signal moves everything a window later.
+                "margin_blocks": started - 1 - signal,
                 "earliest_lock_in": a(started + w),
                 "earliest_activation": a(started + 2 * w),
                 "first_threshold": threshold(d, 0),
@@ -921,7 +936,7 @@ mod tests {
 
     #[test]
     fn request_id_matches_core() {
-        // test/functional/feature_mnehf.py at v24.0.0 pins bit 28's.
+        // test/functional/feature_mnehf.py at v24.0.0 uses bit 28's against selectquorum.
         assert_eq!(request_id(28), "a0eee872d7d3170dd20d5c5e8380c92b3aa887da5f63d8033289fafa35a90691");
         assert_eq!(request_id(13), "c474f10ec3ff41beef91da44bce948772a816814c0f6d64d1bb23c9cc182fe1b");
     }
@@ -1019,7 +1034,7 @@ mod tests {
     fn document_reads_like_dashd() {
         // Signal at 1040, start time long past: STARTED from 1100; 80 of 100 signal in 1200's window.
         let hs = headers(1000, 330, |h| if (1200..1280).contains(&h) { 0x2000_2000 } else { 0x2000_0000 });
-        let rpc = json!({"v24": {"bip9": {"status": "locked_in", "status_next": "locked_in", "since": 1300, "ehf_height": 1040}}});
+        let rpc = json!({"v24": {"bip9": {"status": "locked_in", "status_next": "locked_in", "since": 1300, "ehf_height": 1040, "activation_height": 1400}}});
         let seeds = HashMap::from([("v24".to_owned(), (State::Defined, 0))]);
         let doc = build(Network::Testnet, &hs, 1329, &rpc, &seeds, &HashMap::new(), None, 0).unwrap();
         let v = &doc["deployments"][0];
@@ -1031,6 +1046,50 @@ mod tests {
         let rpc = json!({"v24": {"bip9": {"status": "started", "status_next": "started", "since": 1100, "ehf_height": 1040}}});
         let doc = build(Network::Testnet, &hs, 1329, &rpc, &seeds, &HashMap::new(), None, 0).unwrap();
         assert_eq!(doc["deployments"][0]["consistent"], false);
+    }
+
+    #[test]
+    fn started_window_statistics_pair_like_core() {
+        // Tip on the last block of a STARTED window that fell short: dashd's statistics count that window
+        // but give the next window's threshold (and "possible" from that pair).
+
+        let hs = headers(1000, 300, |h| if (1200..1250).contains(&h) { 0x2000_2000 } else { 0x2000_0000 });
+        let rpc = json!({"v24": {"bip9": {
+            "status": "started", "status_next": "started", "since": 1100, "ehf_height": 1040,
+            "statistics": {"period": 100, "elapsed": 100, "count": 50, "threshold": 80, "possible": false}}}});
+        let seeds = HashMap::from([("v24".to_owned(), (State::Defined, 0))]);
+        let doc = build(Network::Testnet, &hs, 1299, &rpc, &seeds, &HashMap::new(), None, 0).unwrap();
+        let v = &doc["deployments"][0];
+        assert_eq!(v["consistent"], true, "{}", v["mismatches"]);
+        // Testnet's integer falloff keeps 80 until attempt 3: 80 - a²·100/100/5.
+        assert_eq!((v["window"]["attempt"].as_i64(), v["window"]["threshold"].as_i64()), (Some(2), Some(80)));
+        assert_eq!(v["window"]["mined"], 0);
+    }
+
+    #[test]
+    fn past_the_start_uses_the_real_block_and_past_the_timeout_gives_up() {
+        let d = MAINNET[0];
+        // Median time crosses the start at block 2,568,000 (times 150 s apart, MTP = time - 900).
+        let hs: Vec<Header> = (2_564_352..=2_568_200)
+            .map(|h| {
+                let t = d.start + 900 + (h - 2_568_000) * 150;
+                Header { height: h, time: t, mediantime: t - 900, version: 0x2000_0000 }
+            })
+            .collect();
+        let seeds = HashMap::from([("v24".to_owned(), (State::Defined, 0))]);
+        let doc = build(Network::Mainnet, &hs, 2_568_200, &json!({}), &seeds, &HashMap::new(), None, 0).unwrap();
+        let o = &doc["deployments"][0]["outlook"];
+        assert_eq!(o["start_time_reached"], true);
+        assert_eq!(
+            (o["start_time_block"]["height"].as_i64(), o["start_time_block"]["estimated"].as_bool()),
+            (Some(2_568_000), Some(false))
+        );
+        // The signal can be mined from 2,568,001, so the window from 2,568,384 is the first that counts.
+        assert_eq!(o["earliest_start"]["height"], 2_568_384);
+        let late: Vec<Header> =
+            hs.iter().map(|h| Header { mediantime: d.timeout, time: d.timeout + 900, ..*h }).collect();
+        let doc = build(Network::Mainnet, &late, 2_568_200, &json!({}), &seeds, &HashMap::new(), None, 0).unwrap();
+        assert_eq!(doc["deployments"][0]["outlook"]["phase"], "timed_out");
     }
 
     #[test]

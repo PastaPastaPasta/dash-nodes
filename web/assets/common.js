@@ -66,6 +66,8 @@ export function el(tag, attrs = {}, ...children) {
 const nf = new Intl.NumberFormat("en-US");
 export const fmt = (n) => (n == null ? "–" : nf.format(Math.round(n)));
 export const pct = (x, digits = 1) => (x == null ? "–" : `${(x * 100).toFixed(digits)}%`);
+/** n of `of` as a percentage cut (not rounded) to 0.1: 3,225 of 4,032 reads 79.9%, never the threshold's 80.0%. */
+export const share = (n, of) => `${(Math.floor((n / of) * 1000) / 10).toFixed(1)}%`;
 export const dash = (duffs) => (duffs == null ? "–" : `${(duffs / 1e8).toLocaleString("en-US", { maximumFractionDigits: 4 })} DASH`);
 
 /** Platform credits (1 DASH = 100,000,000,000 credits) as DASH: "6.4321 DASH". */

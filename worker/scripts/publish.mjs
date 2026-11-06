@@ -79,9 +79,10 @@ async function fetchRetry(request, tries, pause, permanent = () => false) {
   }
 }
 
-async function get(path) {
-  // 404 for an endpoint this build doesn't have, 400 for a parameter it doesn't know; anything else is worth a retry.
-  const r = await fetchRetry(() => fetch(`${SOURCE}/api/v1/${path}`), 3, 1000, (status) => status === 404 || status === 400);
+async function get(path, final = []) {
+  // 404 for an endpoint this build doesn't have, 400 for a parameter it doesn't know (and `final`, statuses the
+  // caller expects); anything else is worth a retry.
+  const r = await fetchRetry(() => fetch(`${SOURCE}/api/v1/${path}`), 3, 1000, (status) => status === 404 || status === 400 || final.includes(status));
   if (!r.ok) throw Object.assign(new Error(`${path}: ${r.status}`), { status: r.status });
   return r.json();
 }
@@ -260,7 +261,8 @@ async function main() {
     // (503) or in a build without it (404), skip it.
     if (status) {
       for (const net of NETS) {
-        await putIfServed(`v1/${net}/activation.json`, () => get(`${net}/activation`))
+        // 503: the app hasn't read it yet.
+        await putIfServed(`v1/${net}/activation.json`, () => get(`${net}/activation`, [503]))
           .catch((e) => { if (e.status !== 503) log(`${net}: activation failed:`, e.message); });
       }
     }

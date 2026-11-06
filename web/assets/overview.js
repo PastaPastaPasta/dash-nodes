@@ -1,4 +1,4 @@
-import { api, chrome, currentNet, el, fmt, pct, href, countryName, flag, ago, dateTime, segmented, DKG_CHECKS } from "./common.js";
+import { api, chrome, currentNet, el, fmt, pct, href, countryName, flag, ago, dateTime, share, segmented, DKG_CHECKS } from "./common.js";
 import { Palette, timeChart, svg } from "./charts.js";
 import { worldMap } from "./worldmap.js";
 
@@ -620,7 +620,6 @@ async function renderV24() {
   if (!d || !o || (o.phase === "active" && o.activation?.time && Date.now() / 1000 - o.activation.time > 30 * 86400)) return;
   const p = d.params;
   const w = d.window;
-  const pctOf = (n) => `${(Math.floor((n / p.window) * 1000) / 10).toFixed(1)}%`;
   const at = (m) => `block ${fmt(m.height)}`;
   const date = (m) => (m.time ? `${m.estimated ? "about " : ""}${dateTime(m.time)}` : "");
   const stat = (label, value, note) => el("div", {}, el("dt", { text: label }), el("dd", { class: "num" }, value, note ? el("small", { text: note }) : null));
@@ -629,13 +628,13 @@ async function renderV24() {
     $("v24-lede").textContent = d.ehf.height
       ? `The masternodes' signal is in block ${fmt(d.ehf.height)}; miners' signalling counts from block ${fmt(o.earliest_start.height)}.`
       : `It can start after ${dateTime(p.start_time)}, once a masternode quorum signs it; then miners vote in ${fmt(p.window)}-block windows.`;
-    stats.push(stat("Lock-in threshold", pctOf(o.first_threshold), `${fmt(o.first_threshold)} of ${fmt(p.window)} blocks in the first window`),
+    stats.push(stat("Lock-in threshold", share(o.first_threshold, p.window), `${fmt(o.first_threshold)} of ${fmt(p.window)} blocks in the first window`),
       stat("First window that counts", at(o.earliest_start), `${date(o.earliest_start)}${d.ehf.height ? "" : ", at the earliest"}`),
       stat("Earliest activation", at(o.earliest_activation), date(o.earliest_activation)));
   } else if (o.phase === "signalling") {
     $("v24-lede").textContent = `Miners are signalling, attempt ${w.attempt + 1}: ${fmt(w.count)} of the ${fmt(w.threshold)} blocks this window needs so far.`;
-    stats.push(stat("Lock-in threshold", pctOf(w.threshold), `${fmt(w.threshold)} of ${fmt(p.window)} blocks this window`),
-      stat("Signalled so far", fmt(w.count), `of ${fmt(w.mined)} blocks; ${o.possible ? `${fmt(o.needed)} more needed` : "can't make it this window"}`),
+    stats.push(stat("Lock-in threshold", share(w.threshold, p.window), `${fmt(w.threshold)} of ${fmt(p.window)} blocks this window`),
+      stat("Signalled so far", fmt(w.count), `of ${fmt(w.mined)} blocks; ${!o.needed ? "threshold reached" : o.possible ? `${fmt(o.needed)} more needed` : "can't make it this window"}`),
       stat("Window ends", at(o.window_end), date(o.window_end)));
   } else if (o.phase === "locked_in") {
     $("v24-lede").textContent = `Locked in. It activates at block ${fmt(o.activation.height)}.`;
@@ -643,9 +642,14 @@ async function renderV24() {
   } else if (o.phase === "active") {
     $("v24-lede").textContent = `Active since block ${fmt(o.activation.height)}.`;
     stats.push(stat("Active since", at(o.activation), date(o.activation)));
+  } else if (o.phase === "timed_out") {
+    $("v24-lede").textContent = "Its timeout passed before the masternodes' signal was mined.";
   } else {
     $("v24-lede").textContent = "It failed to lock in before its timeout.";
   }
+  // Say so when the reading is old or the latest one failed, like /v24 does.
+  const age = Date.now() / 1000 - doc.updated;
+  if (doc.error || age > 10 * 60) $("v24-lede").append(` (As of block ${fmt(doc.tip.height)}, ${ago(doc.updated)}.)`);
   $("v24-stats").replaceChildren(...stats);
   $("v24-link").href = href("/v24");
   $("v24").hidden = false;

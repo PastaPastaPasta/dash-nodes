@@ -58,6 +58,7 @@ pub fn router(nets: Nets, web: &Path) -> Router {
         .route_service("/changes", page("changes.html"))
         .route_service("/map", page("map.html"))
         .route_service("/platform", page("platform.html"))
+        .route_service("/v24", page("v24.html"))
         .route_service("/mn/{protx}", page("mn.html"))
         .route_service("/api", page("api.html"))
         .nest_service("/assets", ServeDir::new(web.join("assets")))
