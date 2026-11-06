@@ -311,7 +311,7 @@ type Seeds = HashMap<String, (State, i64)>;
 #[derive(Default)]
 struct Memo {
     /// `getdeploymentinfo` at the first tracked block, per deployment: (state, since).
-    seed: Option<(i64, Seeds)>,
+    seed: Option<(String, Seeds)>,
     /// The signing-quorum view per deployment, and when it was read.
     gate: HashMap<String, (i64, Value)>,
     last_error: Option<(i64, String)>,
@@ -398,8 +398,9 @@ async fn tick(src: &Source<'_>, memo: &mut Memo) -> Result<Value> {
         bail!("the chain moved while reading it");
     }
 
-    if memo.seed.as_ref().is_none_or(|(f, _)| *f != from) {
-        let hash: String = src.rpc.call("getblockhash", json!([from])).await?;
+    // Keyed by the block's hash, not its height: a reorg at `from` gets a fresh seed.
+    let hash: String = src.rpc.call("getblockhash", json!([from])).await?;
+    if memo.seed.as_ref().is_none_or(|(h, _)| *h != hash) {
         let at: Value = src.rpc.call("getdeploymentinfo", json!([hash])).await?;
         let mut seeds = HashMap::new();
         for d in deps {
@@ -407,7 +408,7 @@ async fn tick(src: &Source<'_>, memo: &mut Memo) -> Result<Value> {
             let state = b["status"].as_str().and_then(State::parse).unwrap_or(State::Defined);
             seeds.insert(d.name.to_owned(), (state, b["since"].as_i64().unwrap_or(0)));
         }
-        memo.seed = Some((from, seeds));
+        memo.seed = Some((hash, seeds));
     }
     let seeds = memo.seed.as_ref().unwrap().1.clone();
 
@@ -602,23 +603,26 @@ async fn signing_quorum(src: &Source<'_>, d: &Deployment) -> Result<Value> {
         })
         .collect();
     let now = db::now();
+    // Per masternode, the protocol from its latest handshake in the past week on any of its registered
+    // Core addresses.
     let versions: HashMap<String, Option<i64>> = src
         .db
         .read(move |c| {
             let rows: Vec<(String, Option<i64>, Option<i64>)> = query_all(
                 c,
-                "SELECT m.protx, n.protocol, n.last_success FROM masternodes m LEFT JOIN nodes n ON n.addr = m.service
-                 WHERE m.removed IS NULL",
+                "SELECT a.protx, n.protocol, n.last_success FROM mn_addrs a LEFT JOIN nodes n ON n.addr = a.addr",
                 [],
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
             )?;
-            Ok(rows
-                .into_iter()
-                .map(|(p, proto, seen)| {
-                    let recent = seen.is_some_and(|t| now - t < crate::crawler::ACTIVE_WINDOW);
-                    (p, if recent { proto } else { None })
-                })
-                .collect())
+            let mut latest: HashMap<String, (i64, Option<i64>)> = HashMap::new();
+            for (p, proto, seen) in rows {
+                let seen = seen.filter(|t| now - t < crate::crawler::ACTIVE_WINDOW).unwrap_or(i64::MIN);
+                let e = latest.entry(p).or_insert((i64::MIN, None));
+                if seen > e.0 {
+                    *e = (seen, proto);
+                }
+            }
+            Ok(latest.into_iter().map(|(p, (seen, proto))| (p, proto.filter(|_| seen > i64::MIN))).collect())
         })
         .await?;
     let min = crate::readiness::core::MIN_MASTERNODE_PROTO_VERSION;

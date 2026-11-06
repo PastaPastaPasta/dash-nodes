@@ -199,7 +199,9 @@ where
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Logs go to stderr, so a command's own output (`activation` prints JSON) stays clean.
     tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info,dash_nodes=info".into()),
         )
@@ -214,7 +216,10 @@ async fn main() -> Result<()> {
             let db = db::Db::open(&db)?;
             let info: serde_json::Value = rpc.call("getnetworkinfo", serde_json::json!([])).await?;
             let dashd = info["subversion"].as_str().map(str::to_owned);
-            let src = activation::Source { net, rpc: &rpc, db: &db, synced: true, dashd };
+            // Like the collector: a reading from a chain still syncing would be wrong, not just old.
+            let mnsync: serde_json::Value = rpc.call("mnsync", serde_json::json!(["status"])).await?;
+            let synced = mnsync["IsBlockchainSynced"].as_bool().unwrap_or(false);
+            let src = activation::Source { net, rpc: &rpc, db: &db, synced, dashd };
             println!("{}", serde_json::to_string_pretty(&activation::once(&src).await?)?);
             Ok(())
         }

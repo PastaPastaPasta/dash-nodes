@@ -79,10 +79,11 @@ async function fetchRetry(request, tries, pause, permanent = () => false) {
   }
 }
 
-async function get(path, final = []) {
+async function get(path, final = [], timeoutMs = null) {
   // 404 for an endpoint this build doesn't have, 400 for a parameter it doesn't know (and `final`, statuses the
-  // caller expects); anything else is worth a retry.
-  const r = await fetchRetry(() => fetch(`${SOURCE}/api/v1/${path}`), 3, 1000, (status) => status === 404 || status === 400 || final.includes(status));
+  // caller expects); anything else is worth a retry. `timeoutMs` bounds each attempt, body included.
+  const request = () => fetch(`${SOURCE}/api/v1/${path}`, timeoutMs ? { signal: AbortSignal.timeout(timeoutMs) } : {});
+  const r = await fetchRetry(request, 3, 1000, (status) => status === 404 || status === 400 || final.includes(status));
   if (!r.ok) throw Object.assign(new Error(`${path}: ${r.status}`), { status: r.status });
   return r.json();
 }
@@ -259,12 +260,11 @@ async function main() {
     }
     // Activation moves with every block: published each minute, like status. Before the app has read it
     // (503) or in a build without it (404), skip it.
-    if (status) {
-      for (const net of NETS) {
-        // 503: the app hasn't read it yet.
-        await putIfServed(`v1/${net}/activation.json`, () => get(`${net}/activation`, [503]))
-          .catch((e) => { if (e.status !== 503) log(`${net}: activation failed:`, e.message); });
-      }
+    // Even if status failed: the app may still serve activation. 503: it hasn't read it yet. 20 s per
+    // attempt, so a stalled answer can't hold up the rest.
+    for (const net of NETS) {
+      await putIfServed(`v1/${net}/activation.json`, () => get(`${net}/activation`, [503], 20_000))
+        .catch((e) => { if (e.status !== 503) log(`${net}: activation failed:`, e.message); });
     }
     if (started >= releasesAt) {
       // A failure tries again in 10 minutes; pages keep the last list meanwhile.

@@ -22,9 +22,9 @@ const sizedBoxes = new Map();
 function drawSized(box, draw) {
   let c = sizedBoxes.get(box);
   if (!c) {
-    c = { draw, w: 0 };
+    c = { draw, w: 0, observer: new ResizeObserver(() => redraw(box, true)) };
     sizedBoxes.set(box, c);
-    new ResizeObserver(() => redraw(box, true)).observe(box);
+    c.observer.observe(box);
   }
   c.draw = draw;
   redraw(box, false);
@@ -48,7 +48,8 @@ function render(doc) {
   if (!d) throw new Error("no v24 deployment in the data");
   // Redraw only when there's something new, and keep keyboard focus on the same thing.
   const stale = Date.now() / 1000 - doc.updated > STALE_AFTER;
-  const key = JSON.stringify([doc.tip.height, doc.error?.message, stale, d.ehf.gate?.checked]);
+  // Everything shown but the reading's own time (a same-height reorg changes counts, not the tip).
+  const key = JSON.stringify([{ ...doc, updated: null }, stale]);
   if (key === shown) return;
   const focused = document.activeElement?.dataset?.key;
   const o = d.outlook || {};
@@ -332,7 +333,7 @@ function renderWindows(d, o, pace) {
     el("span", {}, el("i", { class: "line", style: { background: "var(--ink)" } }), "threshold"),
     el("span", {}, el("i", { class: "ghost" }), "windows to come (estimated dates)"));
   const box = $("windows-chart");
-  if (!slots.length) { sizedBoxes.delete(box); box.replaceChildren(el("p", { class: "muted", text: "No window to show yet." })); return; }
+  if (!slots.length) { sizedBoxes.get(box)?.observer.disconnect(); sizedBoxes.delete(box); box.replaceChildren(el("p", { class: "muted", text: "No window to show yet." })); return; }
   drawSized(box, (W) => {
     const H = 220, L = 46, B = 34, T = 10;
     const row = (v) => T + (H - T - B) * (1 - v);
@@ -440,9 +441,12 @@ function renderHow(doc, d) {
       el("a", { href: `/api/v1/${net}/activation`, text: `/api/v1/${net}/activation` }), "."));
 }
 
+let last = null;
+const load = () => api(`${net}/activation`).then((doc) => { last = doc; render(doc); });
+
 async function main() {
   try {
-    render(await api(`${net}/activation`));
+    await load();
   } catch (e) {
     $("lede").textContent = "Where Dash Core 24's activation stands.";
     $("banner").replaceChildren(el("div", { class: "banner" }, el("strong", { text: "The activation data didn't load. " }),
@@ -451,4 +455,5 @@ async function main() {
 }
 
 main();
-setInterval(() => api(`${net}/activation`).then(render, () => {}), 60_000);
+// If fetching fails, the last reading is drawn again, so it turns stale on the page as time passes.
+setInterval(() => load().catch(() => last && render(last)), 60_000);

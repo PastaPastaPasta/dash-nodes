@@ -651,6 +651,7 @@ async function renderV24() {
   // Say so when the reading is old or the latest one failed, like /v24 does.
   const age = Date.now() / 1000 - doc.updated;
   if (doc.error || age > 10 * 60) $("v24-lede").append(` (As of block ${fmt(doc.tip.height)}, ${ago(doc.updated)}.)`);
+  if (d.consistent === false) $("v24-lede").append(" Our reading disagrees with our dashd's; see the details.");
   $("v24-stats").replaceChildren(...stats);
   $("v24-link").href = href("/v24");
   $("v24").hidden = false;
