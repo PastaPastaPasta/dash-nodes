@@ -582,7 +582,8 @@ function renderDkg() {
   // from before the flag counted it.
   const proto = rules.protocol_check !== false && d.checks.protocol;
   $("dkg-lede").textContent = `Masternodes running ${rules.release} vote nodes that fail these checks bad when they set up a quorum (DKG), ` +
-    "which costs PoSe score. Reachability and Platform bans count already. " +
+    "which costs PoSe score. Reachability and Platform bans count with every member; the version, relay and filter checks only with " +
+    `members that run ${rules.release}, so they weigh more as more of each quorum upgrades. ` +
     (proto ? `${ready(proto.pass)} of ${fmt(d.masternodes)} enabled masternodes already run protocol ${rules.min_protocol} or newer, ` +
       `and ${ready(d.overall.pass)} pass every check. ` +
       (d.version_only ? `${fmt(d.version_only)} fail only the version check and need just the upgrade. ` : "") +

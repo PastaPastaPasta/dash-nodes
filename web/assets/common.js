@@ -198,10 +198,10 @@ export const registration = (m) => (m.status === "pose_banned" ? "PoSe-banned" :
 export const poseBadge = (m) => (m.status === "pose_banned" ? badge("serious", "PoSe-banned") : null);
 
 // DKG readiness (readiness.rs): would quorum members vote this masternode a bad connection under the
-// next Core release's rules? Each check is "pass", "fail" or "unknown"; the thresholds come from the API.
-// The protocol check is off until that release is out (PROTOCOL_CHECK in readiness.rs); add
-// ["protocol", "Protocol version"] back when it's turned on.
+// rules of the Core release in `rules.release` (Dash Core 24)? Each check is "pass", "fail" or "unknown"; the thresholds come from the API.
+// `rules.protocol_check` false (PROTOCOL_CHECK in readiness.rs) leaves the protocol check out of the data.
 export const DKG_CHECKS = [
+  ["protocol", "Protocol version"],
   ["relay", "Transaction relay"],
   ["filters", "Compact block filters"],
   ["reachable", "Reachable"],
