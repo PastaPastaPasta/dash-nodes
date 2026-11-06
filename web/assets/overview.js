@@ -566,7 +566,7 @@ function renderPlatform() {
 
 /**
  * DKG readiness (summary.dkg_readiness): how many enabled masternodes pass each of the next Core
- * release's DKG connection checks, with links to the ones that fail.
+ * DKG connection checks of the release in `rules.release`, with links to the ones that fail.
  */
 function renderDkg() {
   const d = summary.dkg_readiness;
@@ -582,8 +582,9 @@ function renderDkg() {
   // from before the flag counted it.
   const proto = rules.protocol_check !== false && d.checks.protocol;
   $("dkg-lede").textContent = `Masternodes running ${rules.release} vote nodes that fail these checks bad when they set up a quorum (DKG), ` +
-    "which costs PoSe score. Reachability and Platform bans count with every member; the version, relay and filter checks only with " +
-    `members that run ${rules.release}, so they weigh more as more of each quorum upgrades. ` +
+    "which costs PoSe score. Every member counts reachability and Platform bans; members on 23.x ask for protocol 70240, " +
+    `while members running ${rules.release} ask for ${rules.min_protocol}, relay and compact block filters. A node is left out only once ` +
+    "about three quarters of a quorum vote it bad, so the newer checks bite as quorums upgrade. " +
     (proto ? `${ready(proto.pass)} of ${fmt(d.masternodes)} enabled masternodes already run protocol ${rules.min_protocol} or newer, ` +
       `and ${ready(d.overall.pass)} pass every check. ` +
       (d.version_only ? `${fmt(d.version_only)} fail only the version check and need just the upgrade. ` : "") +
@@ -603,7 +604,9 @@ function renderDkg() {
       el("dd", { class: "num" }, pct(d.overall.pass / d.masternodes),
         el("small", {}, d.overall.pass ? el("a", { href: list("ready"), text: `${fmt(d.overall.pass)} ready` }) : "0 ready",
           ` of ${fmt(d.masternodes)}`, d.overall.unknown ? `, ${fmt(d.overall.unknown)} unknown` : ""))),
-    ...DKG_CHECKS.filter(([k]) => d.checks[k] && known(d.checks[k])).map(([k, label]) => stat(label, d.checks[k], k)));
+    // Summaries from before the protocol check counted (rules.protocol_check false) carry its counts, but the
+    // per-masternode data they link to doesn't have it.
+    ...DKG_CHECKS.filter(([k]) => d.checks[k] && known(d.checks[k]) && (k !== "protocol" || proto)).map(([k, label]) => stat(label, d.checks[k], k)));
 }
 
 function renderSections() {

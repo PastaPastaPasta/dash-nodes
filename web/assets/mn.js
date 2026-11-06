@@ -261,12 +261,13 @@ function dkgSection(m) {
       el("tbody", {}, ...rows))),
     el("p", { class: "muted small" },
       "When a DKG starts, each quorum member votes against members it can't reach or that fail these checks on their masternode connections. ",
-      `Members on any version count reachability and Platform bans; only members running ${rules.release} ask for protocol ${rules.min_protocol}, `,
-      "relay and compact block filters, so those checks weigh more as more of each quorum upgrades. ",
+      `Every member counts reachability and Platform bans; members on 23.x ask for protocol 70240, while members running ${rules.release} ask for `,
+      `${rules.min_protocol}, relay and compact block filters. A node is left out only once about three quarters of a quorum vote it bad, `,
+      "so the newer checks bite as quorums upgrade. ",
       rules.protocol_check === false ? `The version check starts once ${rules.release} is released. ` : null,
       "We see the handshake this node sends our crawler, an ordinary inbound connection, so relay and services can differ only if the operator set something unusual. ",
       "Rules from Dash Core ", el("a", { href: `https://github.com/dashpay/dash/blob/${rules.core_commit}/src/active/dkgsession.cpp`,
-        text: /^[0-9a-f]{7,40}$/.test(rules.core_commit) ? `develop at ${rules.core_commit}` : rules.core_commit }), "."));
+        text: /^[0-9a-f]{7,40}$/.test(rules.core_commit) ? `commit ${rules.core_commit}` : rules.core_commit }), "."));
 }
 
 /**

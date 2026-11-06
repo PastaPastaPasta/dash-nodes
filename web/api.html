@@ -61,14 +61,14 @@
         <code>cert_expiring_3d</code>, <code>max_height</code> and the <code>drive</code>, <code>tenderdash</code> and <code>dapi</code>
         versions as <code>[[version, count], …]</code>).</p>
       <p class="sub"><code>dkg_readiness</code> counts enabled masternodes by whether quorum members would vote them a bad connection in DKGs
-        under the rules of Dash Core 24 (<code>rules.release</code>): <code>overall</code> and per check in <code>checks</code> (<code>protocol</code>,
+        under the rules of the Core release in <code>rules.release</code>: <code>overall</code> and per check in <code>checks</code> (<code>protocol</code>,
         <code>relay</code>, <code>filters</code>, <code>reachable</code>, <code>platform_ban</code> for evonodes), each
         <code>{pass, fail, unknown}</code>; <code>version_only</code> (failing the version and passing every other check);
         <code>beyond_version</code> (failing a check other than the version); and <code>rules</code> (the <code>release</code>,
         <code>min_protocol</code>, <code>compact_filters_bit</code>, <code>reach_failures</code> (port checks missed in a row before
-        reachability fails), <code>core_commit</code> (the Dash Core tag or commit they come from, now <code>v24.0.0</code>) and
-        <code>protocol_check</code>). It's an estimate from the handshake each masternode sends our crawler. When
-        <code>rules.protocol_check</code> is false (as before Dash Core 24 was released) the <code>protocol</code> check doesn't count:
+        reachability fails), <code>core_max_failed_outbound</code>, <code>core_commit</code> (the Dash Core tag or commit they come
+        from) and <code>protocol_check</code>). It's an estimate from the handshake each masternode sends our crawler. When
+        <code>rules.protocol_check</code> is false (as it was until Dash Core 24 was released) the <code>protocol</code> check doesn't count:
         it's left out of each masternode's result and of <code>overall</code>, and <code>version_only</code> is 0.</p>
       <pre class="code">curl https://radar.dashhq.org/api/v1/mainnet/summary | jq '.dists.mn.version'</pre>
     </div>
