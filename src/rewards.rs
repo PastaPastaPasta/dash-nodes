@@ -397,12 +397,12 @@ fn core_rewards(from: u64, to: u64, halving: u64) -> Option<u64> {
 /// Core's subsidy halving interval (the same on mainnet and testnet).
 const CORE_HALVING: u64 = 210_240;
 
-/// The share of active evonodes, in percent, whose votes an upgrade needs under the running protocol:
-/// Drive's `protocol_version_upgrade_percentage_needed` (rs-platform-version, drive_abci method versions:
-/// 75 for protocol 1, 67 since). Drive applies the running version's value and doesn't report it, so a
-/// version newer than any known keeps the latest value.
-fn upgrade_percentage(running: u64) -> u64 {
-    if running <= 1 { 75 } else { 67 }
+/// The share of active evonodes, in percent, whose votes an upgrade needs under a protocol: Drive's
+/// `protocol_version_upgrade_percentage_needed` (rs-platform-version: protocols 1 and 2 use drive_abci
+/// method versions v1, 75; 67 from protocol 3). Drive doesn't report it, so a protocol newer than any
+/// known keeps the latest value.
+fn upgrade_percentage(protocol: u64) -> u64 {
+    if protocol <= 2 { 75 } else { 67 }
 }
 
 /// Votes an upgrade needs at the epoch change: `1 + floor(active × share / 100)` (check_for_desired_protocol_upgrade).
@@ -422,12 +422,14 @@ fn upgrade_json(current: u64, versions: &[(u64, u64)], next_epoch: &[i64], enabl
     }
     let reported: u64 = next.values().sum();
     let next_epoch = next.into_iter().max_by_key(|(v, n)| (*n, *v)).map(|x| x.0);
-    let percentage = upgrade_percentage(current);
-    let phase = match (candidate, next_epoch) {
-        (_, Some(n)) if n as u64 > current => "locked_in",
+    let locked = next_epoch.filter(|&n| n as u64 > current);
+    let phase = match (candidate, locked) {
+        (_, Some(_)) => "locked_in",
         (Some(_), _) => "voting",
         _ => "active",
     };
+    // Drive judges the votes at the epoch change under the protocol it runs then: the locked-in one, if any.
+    let percentage = upgrade_percentage(locked.map_or(current, |n| n as u64));
     json!({
         "current": current, "candidate": candidate.map(|c| c.0), "votes": candidate.map_or(0, |c| c.1),
         "required": votes_required(enabled, percentage), "required_pct": percentage, "enabled_evonodes": enabled,
@@ -2496,7 +2498,7 @@ mod tests {
         assert_eq!(votes_required(100, 67), 68);
         assert_eq!(votes_required(0, 67), 1);
         assert_eq!(votes_required(100, 75), 76);
-        assert_eq!((upgrade_percentage(1), upgrade_percentage(14), upgrade_percentage(99)), (75, 67, 67));
+        assert_eq!([1, 2, 3, 14, 99].map(upgrade_percentage), [75, 75, 67, 67, 67]);
     }
 
     #[test]
@@ -2546,9 +2548,12 @@ mod tests {
     }
 
     #[test]
-    fn the_threshold_follows_the_running_protocol_and_the_electorate() {
+    fn upgrade_threshold_follows_the_protocol_and_the_electorate() {
         assert_eq!(upgrade_json(1, &[(2, 10)], &[], 100)["required"], 76);
-        assert_eq!(upgrade_json(1, &[(2, 10)], &[], 100)["required_pct"], 75);
+        assert_eq!(upgrade_json(2, &[(3, 10)], &[], 100)["required_pct"], 75);
+        assert_eq!(upgrade_json(3, &[(4, 10)], &[], 100)["required_pct"], 67);
+        // Locked in from 2 to 3: this epoch's votes are judged under 3.
+        assert_eq!(upgrade_json(2, &[(3, 10)], &[3], 100)["required_pct"], 67);
         assert_eq!(upgrade_json(30, &[], &[], 1000)["required"], 671);
         assert_eq!(upgrade_json(14, &[], &[], 0)["required"], 1);
     }

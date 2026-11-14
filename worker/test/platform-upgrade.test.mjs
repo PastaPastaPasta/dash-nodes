@@ -65,7 +65,7 @@ test("a locked-in upgrade shows when it starts, without a vote meter", () => {
   assert.deepEqual(v.badge, { tone: "good", text: "locked in" });
   assert.equal(v.meter, null);
   assert.equal(v.lede, "Drive has scheduled protocol 15 for the next epoch. Platform runs 14 until epoch 20,372 ends in 20 min; protocol 15 starts with epoch 20,373.");
-  assert.deepEqual(v.stats.map((s) => s.label), ["Run software for 15"]);
+  assert.deepEqual(v.stats.map((s) => [s.label, s.value]), [["Run software for 15", "1"], ["Voted for 15", "3"]]);
 });
 
 test("nothing is tied to one version: running 15 with a vote for 16 reads the same way", () => {
@@ -84,4 +84,25 @@ test("an epoch past its estimate ends any moment", () => {
   const v = upgradeView(page({ phase: "voting", current: 14, candidate: 15, votes: 1, required: 29, required_pct: 67, enabled_evonodes: 43,
     versions: [[15, 1]] }, [], { ends: NOW - 60 }), NOW, f);
   assert.match(v.lede, /when epoch 20,372 ends \(ends any moment\)/);
+});
+
+test("the threshold's share is whatever the crawler sends", () => {
+  const v = upgradeView(page({ phase: "voting", current: 2, candidate: 3, votes: 10, required: 76, required_pct: 75, enabled_evonodes: 100,
+    versions: [[3, 10]] }), NOW, f);
+  assert.equal(v.stats.find((s) => s.label === "Votes needed").note, "1 + 75% of 100 enabled, rounded down");
+});
+
+test("before any vote this epoch, and with only older votes, it says so", () => {
+  const none = upgradeView(page({ phase: "active", current: 14, candidate: null, votes: 0, required: 29, enabled_evonodes: 43, versions: [] }), NOW, f);
+  assert.equal(none.lede, "No upgrade is being voted on: no evonode has voted yet this epoch, and Platform runs protocol 14.");
+  const older = upgradeView(page({ phase: "active", current: 14, candidate: null, votes: 0, required: 29, enabled_evonodes: 43,
+    versions: [[13, 2], [14, 20]] }), NOW, f);
+  assert.match(older.lede, /no evonode has voted for a protocol above 14, the one Platform runs now/);
+});
+
+test("a next-epoch protocol that isn't newer is no lock-in", () => {
+  const v = upgradeView(page({ phase: "locked_in", current: 14, candidate: null, votes: 0, required: 29, enabled_evonodes: 43,
+    versions: [[14, 20]], next_epoch: 14 }), NOW, f);
+  assert.equal(v.state, "active");
+  assert.equal(v.title, "Protocol 14 is live");
 });

@@ -17,20 +17,24 @@ export function upgradeView(doc, nowSecs, { fmt, pct, inAbout }) {
   const supports = v == null ? [] : enabled.filter((e) => e.supports >= v);
   // Upgraded software whose last vote is still another version: it votes once it proposes again.
   const pending = supports.filter((e) => e.vote !== v);
+  // Locked in, this epoch's votes for the next protocol no longer decide anything, but still show.
   const others = u.versions
-    .filter(([ver]) => ver !== v)
+    .filter(([ver]) => locked || ver !== v)
     .map(([ver, votes]) => ({ label: `Voted for ${ver}`, value: fmt(votes), note: ver === u.current ? "the protocol running now" : null }));
   const note = (u.next_epoch_reported_by ? `${fmt(u.next_epoch_reported_by)} evonodes report which protocol Drive runs next epoch: ${u.next_epoch}. ` : "") +
     "Vote counts are what Drive reports (getProtocolVersionUpgradeState), as two evonodes agreed on it. The table below shows each evonode's vote.";
   const runs = v == null ? null : { label: `Run software for ${v}`, value: fmt(supports.length), note: "as their Drive told our checker" };
 
   if (v == null) {
+    const voted = u.versions.some(([, votes]) => votes > 0);
     const older = u.versions.some(([ver, votes]) => ver !== u.current && votes > 0);
     return {
       state: "active", version: u.current, title: `Protocol ${u.current} is live`, badge: null,
-      lede: older
-        ? `No upgrade is being voted on: no evonode has voted for a protocol above ${u.current}, the one Platform runs now.`
-        : `No upgrade is being voted on: every vote is for the protocol Platform runs now, ${u.current}.`,
+      lede: !voted
+        ? `No upgrade is being voted on: no evonode has voted yet this epoch, and Platform runs protocol ${u.current}.`
+        : older
+          ? `No upgrade is being voted on: no evonode has voted for a protocol above ${u.current}, the one Platform runs now.`
+          : `No upgrade is being voted on: every vote is for the protocol Platform runs now, ${u.current}.`,
       meter: null, stats: others, note, pending: 0,
     };
   }
