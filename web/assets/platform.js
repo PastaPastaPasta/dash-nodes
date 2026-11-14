@@ -1,6 +1,7 @@
 // /platform: Platform rewards across the network (the crawler's rewards.rs, /api/v1/{net}/platform).
 import { api, chrome, currentNet, el, fmt, pct, href, ago, dateTime, amount, inAbout, shortHash, badge, segmented, searchBox, toDash, labelled, lastSpan } from "./common.js";
 import { svg, sized, axisScale, valueAxis, epochAxis } from "./charts.js";
+import { upgradeView } from "./platform-upgrade.js";
 
 chrome("platform");
 const net = currentNet();
@@ -46,49 +47,24 @@ function renderNow(summary) {
 // ---- the protocol upgrade vote ----
 
 function renderUpgrade() {
-  const u = doc.upgrade;
-  const n = doc.now;
-  // Locked in: the protocol Drive scheduled for the next epoch, whatever the current votes favour.
-  const v = u.phase === "locked_in" && u.next_epoch != null ? u.next_epoch : u.candidate;
-  const ends = n.ends > Date.now() / 1000 ? `ends ${inAbout(n.ends)}` : "ends any moment";
-  const rows = doc.evonodes.filter((e) => e.status === "enabled");
-  if (u.phase === "active" || v == null) {
-    $("upgrade-title").textContent = `Protocol ${u.current} is live`;
-    const older = u.versions.some(([ver, votes]) => ver !== u.current && votes > 0);
-    $("upgrade-lede").textContent = older
-      ? `No upgrade is being voted on: no evonode has voted for a protocol above ${u.current}, the one Platform runs now.`
-      : `No upgrade is being voted on: every vote is for the protocol Platform runs now, ${u.current}.`;
-    $("upgrade-meter").replaceChildren();
-  } else {
-    const locked = u.phase === "locked_in";
-    $("upgrade-title").replaceChildren(`Protocol ${v}: `, locked ? badge("good", "locked in") : badge("warning", "voting"));
-    $("upgrade-lede").textContent = locked
-      ? `Drive has scheduled protocol ${v} for the next epoch. It starts when epoch ${fmt(n.epoch)} ${ends.replace("ends ", "ends, ")}.`
-      : `An evonode votes for a protocol version with each block it proposes, from the software it runs; votes count per epoch. If ${fmt(u.required)} of the ` +
-        `${fmt(u.enabled_evonodes)} enabled evonodes have voted for ${v} when epoch ${fmt(n.epoch)} ends (${ends}), ` +
-        `protocol ${v} starts with epoch ${fmt(n.epoch + 1)}. ` +
-        (u.votes >= u.required ? "It has enough votes now." : `It needs ${fmt(u.required - u.votes)} more.`);
-    const share = (x) => `${Math.min(100, (x / Math.max(1, u.enabled_evonodes)) * 100)}%`;
+  const view = upgradeView(doc, Date.now() / 1000, { fmt, pct, inAbout });
+  $("upgrade").dataset.state = view.state;
+  $("upgrade-title").replaceChildren(view.title, ...(view.badge ? [badge(view.badge.tone, view.badge.text)] : []));
+  $("upgrade-lede").textContent = view.lede;
+  const m = view.meter;
+  if (!m) $("upgrade-meter").replaceChildren();
+  else {
+    const share = (x) => `${Math.min(100, (x / Math.max(1, m.enabled)) * 100)}%`;
     $("upgrade-meter").replaceChildren(
-      el("div", { class: "meter", role: "img", "aria-label": `${u.votes} of ${u.enabled_evonodes} enabled evonodes voted for ${v}; ${u.required} needed` },
-        el("span", { class: u.votes >= u.required ? "met" : null, style: { width: share(u.votes) } }),
-        el("i", { style: { left: share(u.required) }, title: `${fmt(u.required)} needed` })),
-      el("div", { class: "meter-axis" }, el("span", { text: `${fmt(u.votes)} voted for ${v}` }),
-        el("span", { style: { left: share(u.required) }, text: `${fmt(u.required)} needed` }),
-        el("span", { text: `${fmt(u.enabled_evonodes)} enabled` })));
+      el("div", { class: "meter", role: "img", "aria-label": `${m.votes} of ${m.enabled} enabled evonodes voted for ${view.version}; ${m.required} needed` },
+        el("span", { class: m.met ? "met" : null, style: { width: share(m.votes) } }),
+        el("i", { style: { left: share(m.required) }, title: `${fmt(m.required)} needed` })),
+      el("div", { class: "meter-axis" }, el("span", { text: `${fmt(m.votes)} voted for ${view.version}` }),
+        el("span", { style: { left: share(m.required) }, text: `${fmt(m.required)} needed` }),
+        el("span", { text: `${fmt(m.enabled)} enabled` })));
   }
-  const supports = rows.filter((e) => v != null && e.supports >= v);
-  // Upgraded software, but its last vote is still the old version: it votes once it proposes again.
-  const pending = supports.filter((e) => e.vote !== v);
-  $("upgrade-stats").replaceChildren(...[
-    v != null ? stat(`Voted for ${v}`, fmt(u.votes), `${pct(u.votes / Math.max(1, u.enabled_evonodes))} of enabled evonodes`, u.votes >= u.required ? "good" : null) : null,
-    v != null ? stat("Votes needed", fmt(u.required), `1 + 67% of ${fmt(u.enabled_evonodes)} enabled, rounded down`) : null,
-    v != null ? stat(`Run software for ${v}`, fmt(supports.length), "as their Drive told our checker") : null,
-    v != null && u.phase === "voting" ? stat("Upgraded, vote not counted yet", fmt(pending.length), "it counts once they propose a block") : null,
-    ...u.versions.map(([ver, votes]) => (ver === v ? null : stat(`Voted for ${ver}`, fmt(votes), ver === u.current ? "the protocol running now" : null))),
-  ].filter(Boolean));
-  $("upgrade-note").textContent = (u.next_epoch_reported_by ? `${fmt(u.next_epoch_reported_by)} evonodes report which protocol Drive runs next epoch: ${u.next_epoch}. ` : "") +
-    "Vote counts are what Drive reports (getProtocolVersionUpgradeState), as two evonodes agreed on it. The table below shows each evonode's vote.";
+  $("upgrade-stats").replaceChildren(...view.stats.map((x) => stat(x.label, x.value, x.note, x.tone)));
+  $("upgrade-note").textContent = view.note;
   $("upgrade").hidden = false;
 }
 
@@ -254,7 +230,7 @@ async function main() {
     $("banner").replaceChildren(el("div", { class: "banner", text: "Platform rewards haven't been collected yet. They appear within 15 minutes of the crawler starting." }));
     return;
   }
-  if (net === "testnet") $("lede").append(" On testnet an epoch lasts about an hour, and its DASH has no value.");
+  if (net === "testnet") $("lede").append(" On testnet its DASH has no value.");
   const summary = await api(`${net}/summary`).catch(() => null);
   renderNow(summary);
   renderUpgrade();

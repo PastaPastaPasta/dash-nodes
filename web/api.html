@@ -144,7 +144,7 @@
         <code>epoch_secs</code> of recent epochs), Platform <code>height</code>, <code>blocks</code> and <code>proposers</code> so far,
         <code>pool_so_far</code> (Core block rewards so far, fees not counted) and <code>protocol_version</code>. <code>upgrade</code>:
         the <code>current</code> protocol, the <code>candidate</code> with the most votes above it, its <code>votes</code> (evonodes whose
-        blocks this epoch voted for it), <code>required</code> (1 + 67% of <code>enabled_evonodes</code>, rounded down),
+        blocks this epoch voted for it), <code>required</code> (1 + <code>required_pct</code>% of <code>enabled_evonodes</code>, rounded down; <code>required_pct</code> is Drive's share for the running protocol, 67 since protocol 2),
         <code>versions</code> as <code>[[version, votes], …]</code>, <code>phase</code> (<code>active</code>, <code>voting</code> or
         <code>locked_in</code>, when evonodes report a higher <code>next_epoch</code> protocol) and <code>next_epoch_reported_by</code>.
         <code>returns</code>: the <code>median_monthly</code> evonode Platform reward at the pace of the last six epochs and the

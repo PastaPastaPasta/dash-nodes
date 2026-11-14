@@ -397,9 +397,42 @@ fn core_rewards(from: u64, to: u64, halving: u64) -> Option<u64> {
 /// Core's subsidy halving interval (the same on mainnet and testnet).
 const CORE_HALVING: u64 = 210_240;
 
-/// Votes an upgrade needs at the epoch change: `1 + floor(active × 67 / 100)` (check_for_desired_protocol_upgrade).
-fn votes_required(active_evonodes: u64) -> u64 {
-    1 + active_evonodes * 67 / 100
+/// The share of active evonodes, in percent, whose votes an upgrade needs under the running protocol:
+/// Drive's `protocol_version_upgrade_percentage_needed` (rs-platform-version, drive_abci method versions:
+/// 75 for protocol 1, 67 since). Drive applies the running version's value and doesn't report it, so a
+/// version newer than any known keeps the latest value.
+fn upgrade_percentage(running: u64) -> u64 {
+    if running <= 1 { 75 } else { 67 }
+}
+
+/// Votes an upgrade needs at the epoch change: `1 + floor(active × share / 100)` (check_for_desired_protocol_upgrade).
+fn votes_required(active_evonodes: u64, percentage: u64) -> u64 {
+    1 + active_evonodes * percentage / 100
+}
+
+/// The upgrade vote from what Drive reports: the running protocol, the vote count per version
+/// (getProtocolVersionUpgradeState), the version each evonode's Drive says it runs next epoch
+/// (getStatus), and the enabled evonodes (the electorate). The candidate is the version above the
+/// running one with the most votes; it's locked in once evonodes report a newer version for the next epoch.
+fn upgrade_json(current: u64, versions: &[(u64, u64)], next_epoch: &[i64], enabled: u64) -> Value {
+    let candidate = versions.iter().filter(|(v, _)| *v > current).max_by_key(|(v, n)| (*n, *v)).copied();
+    let mut next: HashMap<i64, u64> = HashMap::new();
+    for &v in next_epoch {
+        *next.entry(v).or_default() += 1;
+    }
+    let reported: u64 = next.values().sum();
+    let next_epoch = next.into_iter().max_by_key(|(v, n)| (*n, *v)).map(|x| x.0);
+    let percentage = upgrade_percentage(current);
+    let phase = match (candidate, next_epoch) {
+        (_, Some(n)) if n as u64 > current => "locked_in",
+        (Some(_), _) => "voting",
+        _ => "active",
+    };
+    json!({
+        "current": current, "candidate": candidate.map(|c| c.0), "votes": candidate.map_or(0, |c| c.1),
+        "required": votes_required(enabled, percentage), "required_pct": percentage, "enabled_evonodes": enabled,
+        "versions": versions, "phase": phase, "next_epoch": next_epoch, "next_epoch_reported_by": reported,
+    })
 }
 
 /// The turn order from a validator-set sample, mirroring Drive's validator_set_update_v2 and Tenderdash's
@@ -2106,23 +2139,10 @@ pub fn network_json(c: &Connection, view: &View, net: Network) -> Result<Value> 
             })
         })
         .collect();
-    // Upgrade: the version with the most votes above the current one is the candidate.
     let current_pv = now["protocol_version"].as_u64().unwrap_or(0);
     let versions: Vec<(u64, u64)> = serde_json::from_value(now["versions"].clone()).unwrap_or_default();
-    let candidate = versions.iter().filter(|(v, _)| *v > current_pv).max_by_key(|(v, n)| (*n, *v)).copied();
-    // Drive's own lock-in signal (getStatus next_epoch), as most freshly checked evonodes report it.
-    let mut next: HashMap<i64, u64> = HashMap::new();
-    for v in evonodes.iter().filter_map(|e| e.next_epoch) {
-        *next.entry(v).or_default() += 1;
-    }
-    let reported: u64 = next.values().sum();
-    let next_epoch = next.into_iter().max_by_key(|(v, n)| (*n, *v)).map(|x| x.0);
-    let required = votes_required(enabled);
-    let phase = match (candidate, next_epoch) {
-        (_, Some(n)) if n as u64 > current_pv => "locked_in",
-        (Some(_), _) => "voting",
-        _ => "active",
-    };
+    let next_epoch: Vec<i64> = evonodes.iter().filter_map(|e| e.next_epoch).collect();
+    let upgrade = upgrade_json(current_pv, &versions, &next_epoch, enabled);
     let durations: Vec<i64> = b.epochs.iter().filter_map(|e| e["duration"].as_i64()).take(6).collect();
     let epoch_secs = if durations.is_empty() {
         epoch_secs(net) as i64
@@ -2143,11 +2163,7 @@ pub fn network_json(c: &Connection, view: &View, net: Network) -> Result<Value> 
             "protocol_version": current_pv, "blocks": blocks_so_far, "proposers": b.epoch_blocks.len(),
             "pool_so_far": pool, "updated": now["updated"],
         },
-        "upgrade": {
-            "current": current_pv, "candidate": candidate.map(|c| c.0), "votes": candidate.map_or(0, |c| c.1),
-            "required": required, "enabled_evonodes": enabled, "versions": versions, "phase": phase,
-            "next_epoch": next_epoch, "next_epoch_reported_by": reported,
-        },
+        "upgrade": upgrade,
         "returns": network_returns(&b),
         "epochs": b.epochs,
         "schedule": schedule.map(|s| json!({"ts": s.ts, "height": s.height, "epoch": s.epoch, "block_secs": s.block_secs, "next": next_list})),
@@ -2476,9 +2492,65 @@ mod tests {
 
     #[test]
     fn upgrade_threshold() {
-        assert_eq!(votes_required(360), 242);
-        assert_eq!(votes_required(100), 68);
-        assert_eq!(votes_required(0), 1);
+        assert_eq!(votes_required(360, 67), 242);
+        assert_eq!(votes_required(100, 67), 68);
+        assert_eq!(votes_required(0, 67), 1);
+        assert_eq!(votes_required(100, 75), 76);
+        assert_eq!((upgrade_percentage(1), upgrade_percentage(14), upgrade_percentage(99)), (75, 67, 67));
+    }
+
+    #[test]
+    fn no_upgrade_when_every_vote_is_for_the_running_protocol() {
+        let u = upgrade_json(14, &[(14, 354)], &[14; 341], 355);
+        assert_eq!(u["phase"], "active");
+        assert_eq!((u["current"].as_u64(), u["candidate"].as_u64()), (Some(14), None));
+        assert_eq!((u["required"].as_u64(), u["required_pct"].as_u64()), (Some(238), Some(67)));
+        assert_eq!((u["next_epoch"].as_i64(), u["next_epoch_reported_by"].as_u64()), (Some(14), Some(341)));
+        // Votes for an older version are no candidate either.
+        assert_eq!(upgrade_json(14, &[(13, 3), (14, 25)], &[], 43)["phase"], "active");
+    }
+
+    #[test]
+    fn a_vote_for_a_newer_protocol_is_an_upgrade_in_progress() {
+        // Running 14, 20 of 43 enabled evonodes voted for 15: 29 needed, not there yet.
+        let u = upgrade_json(14, &[(14, 8), (15, 20)], &[14, 14, 14], 43);
+        assert_eq!(u["phase"], "voting");
+        assert_eq!(
+            (u["candidate"].as_u64(), u["votes"].as_u64(), u["required"].as_u64()),
+            (Some(15), Some(20), Some(29))
+        );
+        assert_eq!(u["versions"], json!([[14, 8], [15, 20]]));
+        // Past the threshold it's still a vote until Drive schedules it at the epoch change.
+        let u = upgrade_json(14, &[(14, 2), (15, 300)], &[14], 355);
+        assert_eq!(
+            (u["phase"].as_str(), u["votes"].as_u64(), u["required"].as_u64()),
+            (Some("voting"), Some(300), Some(238))
+        );
+        // Nothing here is tied to 14: running 15 with votes for 16 and 17, the most votes win.
+        let u = upgrade_json(15, &[(15, 1), (16, 9), (17, 4)], &[], 10);
+        assert_eq!(
+            (u["candidate"].as_u64(), u["votes"].as_u64(), u["required"].as_u64()),
+            (Some(16), Some(9), Some(7))
+        );
+    }
+
+    #[test]
+    fn an_upgrade_is_locked_in_once_drive_runs_it_next_epoch() {
+        // The votes reset at the epoch change, so lock-in comes from what the evonodes' Drive reports.
+        let u = upgrade_json(14, &[(14, 1)], &[15, 15, 15, 14], 43);
+        assert_eq!(u["phase"], "locked_in");
+        assert_eq!(
+            (u["next_epoch"].as_i64(), u["next_epoch_reported_by"].as_u64(), u["candidate"].as_u64()),
+            (Some(15), Some(4), None)
+        );
+    }
+
+    #[test]
+    fn the_threshold_follows_the_running_protocol_and_the_electorate() {
+        assert_eq!(upgrade_json(1, &[(2, 10)], &[], 100)["required"], 76);
+        assert_eq!(upgrade_json(1, &[(2, 10)], &[], 100)["required_pct"], 75);
+        assert_eq!(upgrade_json(30, &[], &[], 1000)["required"], 671);
+        assert_eq!(upgrade_json(14, &[], &[], 0)["required"], 1);
     }
 
     fn set(hash: u8, members: &[(u8, bool)]) -> ValidatorSet {
@@ -3010,7 +3082,7 @@ mod tests {
         assert_eq!(balances.iter().find(|b| b.0 == be6d).map(|b| b.1), Some(Some(2_392_835_974_656)));
         let (versions, meta) = parse_upgrade_state(&recorded(include_bytes!("testdata/upgrade-state.bin"))).unwrap();
         assert_eq!(meta.protocol_version, 13);
-        assert!(versions.iter().any(|&(v, n)| v == 14 && n >= votes_required(360)));
+        assert!(versions.iter().any(|&(v, n)| v == 14 && n >= votes_required(360, upgrade_percentage(13))));
         let (votes, _) = parse_pairs(&recorded(include_bytes!("testdata/votes-page.bin"))).unwrap();
         assert_eq!(votes.len(), 5);
         assert!(votes.iter().all(|v| matches!(v.1, Some(13 | 14))));
