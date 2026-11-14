@@ -36,7 +36,7 @@ test("running 14 with votes for 15 shows the vote in progress, with the live thr
   assert.equal(v.title, "Protocol 15: ");
   assert.deepEqual(v.badge, { tone: "warning", text: "voting" });
   assert.match(v.lede, /^Platform runs protocol 14; evonodes are voting for 15\./);
-  assert.match(v.lede, /If 29 of the 43 enabled evonodes have voted for 15 when epoch 20,372 ends \(ends in 20 min\), protocol 15 starts with epoch 20,373\. It needs 9 more\.$/);
+  assert.match(v.lede, /If 29 of the 43 enabled evonodes have voted for 15 when epoch 20,372 ends \(ends in 20 min\), Drive schedules protocol 15 at that epoch change, and it starts one epoch later, with epoch 20,374\. It needs 9 more\.$/);
   assert.deepEqual(v.meter, { votes: 20, required: 29, enabled: 43, met: false });
   const byLabel = Object.fromEntries(v.stats.map((s) => [s.label, s]));
   assert.equal(byLabel["Voted for 15"].value, "20");
@@ -52,7 +52,7 @@ test("running 14 with votes for 15 shows the vote in progress, with the live thr
 test("a vote past the threshold says it has enough, and the meter is met", () => {
   const v = upgradeView(page({ phase: "voting", current: 14, candidate: 15, votes: 300, required: 238, required_pct: 67, enabled_evonodes: 355,
     versions: [[14, 54], [15, 300]] }, [], { epoch: 88 }), NOW, f);
-  assert.match(v.lede, /It has enough votes now\.$/);
+  assert.match(v.lede, /when epoch 88 ends \(ends in 20 min\), Drive schedules protocol 15 at that epoch change, and it starts one epoch later, with epoch 90\. It has enough votes now\.$/);
   assert.equal(v.meter.met, true);
   assert.equal(v.stats[0].tone, "good");
 });

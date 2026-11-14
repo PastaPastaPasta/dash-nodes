@@ -54,7 +54,8 @@ export function upgradeView(doc, nowSecs, { fmt, pct, inAbout }) {
     state: "voting", version: v, title: `Protocol ${v}: `, badge: { tone: "warning", text: "voting" },
     lede: `Platform runs protocol ${u.current}; evonodes are voting for ${v}. An evonode votes for a protocol version with each block it ` +
       `proposes, from the software it runs; votes count per epoch. If ${fmt(u.required)} of the ${fmt(u.enabled_evonodes)} enabled ` +
-      `evonodes have voted for ${v} when epoch ${fmt(n.epoch)} ends (${ends}), protocol ${v} starts with epoch ${fmt(n.epoch + 1)}. ` +
+      `evonodes have voted for ${v} when epoch ${fmt(n.epoch)} ends (${ends}), Drive schedules protocol ${v} at that epoch change, ` +
+      `and it starts one epoch later, with epoch ${fmt(n.epoch + 2)}. ` +
       (met ? "It has enough votes now." : `It needs ${fmt(u.required - u.votes)} more.`),
     meter: { votes: u.votes, required: u.required, enabled: u.enabled_evonodes, met },
     stats: [
