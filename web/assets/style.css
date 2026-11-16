@@ -761,6 +761,7 @@ svg.epoch-bars rect:hover, svg.epoch-bars rect:focus { fill: var(--brand); outli
 .rank-value b { font-weight: 600; }
 .rank-vs { display: block; color: var(--muted); font-size: 12.5px; margin-top: 1px; }
 .rank-vs:empty { display: none; }
+.rank-note { grid-column: 2 / -1; color: var(--muted); font-size: 13.5px; }
 .rank-axis { grid-column: 2; display: flex; justify-content: space-between; color: var(--muted); font-size: 11px; margin-top: -6px; }
 .rank-bars > p { grid-column: 1 / -1; margin: 2px 0 0; }
 @media (max-width: 540px) {
@@ -768,6 +769,7 @@ svg.epoch-bars rect:hover, svg.epoch-bars rect:focus { fill: var(--brand); outli
   .rank-row { display: grid; grid-template-columns: 1fr max-content; gap: 4px 10px; }
   .rank-row .rank-track { grid-column: 1 / -1; grid-row: 2; }
   .rank-row .rank-value { text-align: right; }
+  .rank-note { grid-column: 1 / -1; }
   .rank-axis { grid-column: 1; margin-top: -8px; }
 }
 .card.rewards .live { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--grid); }

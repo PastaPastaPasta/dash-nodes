@@ -1,6 +1,7 @@
 import { api, chrome, currentNet, NETWORKS, el, fmt, pct, href, countryName, flag, place, badge, ago, dateTime, dash, nodeStatus, poseBadge, uptimeKind, tile, card,
   changeText, changeKind, DKG_CHECKS, DKG_OVERALL, blockSpan, blocks, blocksIn, behind, heightWhen, credits, amount, inAbout, toDash, labelled, kv, lastSpan } from "./common.js";
 import { svg, sized, axisScale, valueAxis, epochAxis } from "./charts.js";
+import { uptimeTile, rank30Note, earnedRows, monthlyRow, missedTurns } from "./history.js";
 
 chrome("masternodes");
 const net = currentNet();
@@ -89,13 +90,12 @@ async function main() {
   // The payments index's top, or this node's last payment if the index has fallen behind the list.
   const tip = Math.max(ps.indexed?.to || 0, m.last_paid_height || 0) || null;
   const paidAgo = m.last_paid_height && tip ? behind(tip, m.last_paid_height) : null;
-  const up30 = m.uptime_daily.slice(-30);
-  const ok30 = up30.reduce((a, d) => a + d.ok, 0), at30 = up30.reduce((a, d) => a + d.attempts, 0);
+  const up = uptimeTile(m.uptime_daily, { fmt, pct });
   root.append(el("div", { class: "tiles" },
     tile("Status", el("span", {}, badge(sk, sl), banned ? " " : null, m.removed ? null : poseBadge(m)),
       m.last_seen ? `last answered ${ago(m.last_seen)}` : "never answered our crawler"),
     tile("Version", m.version || "–", m.protocol ? `protocol ${m.protocol}` : "no handshake yet"),
-    tile("Uptime, 30 days", at30 ? pct(ok30 / at30) : "–", at30 ? `${fmt(ok30)} of ${fmt(at30)} port checks` : "no checks yet"),
+    tile(up.label, up.value, up.foot),
     tile("Last paid", !m.last_paid_height ? "never" : paidAgo ? paidAgo[0] : "in the latest block",
       m.last_paid_height ? [paidAgo && `${paidAgo[1]} ago`, `block ${fmt(m.last_paid_height)}`].filter(Boolean).join(" · ") : ""),
     earnedTile(m),
@@ -393,8 +393,13 @@ function rankBars(m, p) {
           ? [el("b", { text: `Ahead of ${ahead}` }), tied > 0 ? ` and tied with ${tied}` : "", " of every 100",
             el("span", { class: "rank-vs", text: vsTypical(mine, mid) })] : none));
     };
+    const short30 = rank30Note(p, { fmt });
     wrap.replaceChildren(
-      row("Last 30 days", "d30", "over the last 30 days", "Earned nothing"),
+      short30
+        ? el("div", { class: "rank-row" },
+          el("span", { class: "rank-label", text: "Last 30 days" }),
+          el("span", { class: "rank-note", text: short30 }))
+        : row("Last 30 days", "d30", "over the last 30 days", "Earned nothing"),
       row("Last epoch", "last_epoch", "last epoch", me.last_blocks === 0 ? "Proposed no blocks" : "Earned nothing"),
       el("div", { class: "rank-axis" }, el("span", { text: "earned least" }), el("span", { text: "earned most" })),
       el("p", { class: "sub", text: "One epoch is mostly luck; 30 days is a fairer picture." }));
@@ -403,14 +408,11 @@ function rankBars(m, p) {
 }
 
 function earnedTable(m, p) {
-  const t = p.totals, x = p.explorer;
+  const x = p.explorer;
   // Platform Explorer counts from the same epoch records, so it should match ours to the credit.
   const beyond = x?.before_ours > 1e8 ? x.before_ours : null;
   return el("div", {}, el("h3", { text: "Earned on Platform" }), kv([
-    ["Last 30 days", amount(t.d30)],
-    ["Last 90 days", amount(t.d90)],
-    ["Last 365 days", amount(t.d365)],
-    [`Since epoch ${fmt(p.first_epoch)}`, el("span", {}, amount(t.lifetime), el("span", { class: "muted", text: ` · ${fmt(t.epochs_paid)} epochs paid` }))],
+    ...earnedRows(p, { fmt, amount }).map((r) => [r.label, r.note ? el("span", {}, r.value, el("span", { class: "muted", text: r.note })) : r.value]),
     x?.total_reward != null && ["Platform Explorer says", el("span", {}, amount(x.total_reward),
       el("span", { class: "muted", text: beyond ? `, ${amount(beyond)} more than ours` : x.epoch != null ? `, the same as ours up to epoch ${fmt(x.epoch - 1)}` : ", the same as ours" }))],
   ]), el("p", { class: "muted small" }, `Drive keeps per-evonode records only from epoch ${fmt(p.first_epoch)} on, so rewards before it can't be checked; `,
@@ -424,17 +426,17 @@ function estimateTable(m, p) {
   const coreMonthly = r?.window_days ? (r.paid_90d / r.window_days) * 30 : null;
   const yearly = r?.annual_yield != null && p.annual_yield != null ? r.annual_yield + p.annual_yield : null;
   const c = p.current;
-  const watched = c?.turns;
-  const missed30 = p.turns_30d;
+  const mo = monthlyRow(p, { fmt, amount, lastSpan });
+  const missed = missedTurns(p, { fmt });
   return el("div", {}, el("h3", { text: "Estimates" }), kv([
-    ["Platform, a month", el("span", {}, amount(p.monthly), el("span", { class: "muted", text: lastSpan(p.monthly_basis_days) ? ` at its pace of ${lastSpan(p.monthly_basis_days)}` : " once six epochs have finished" }))],
+    ["Platform, a month", mo.value != null ? el("span", {}, mo.value, el("span", { class: "muted", text: mo.note })) : el("span", { class: "muted", text: mo.note })],
     ["Core, a month", coreMonthly != null ? el("span", {}, `${(coreMonthly / 1e8).toFixed(2)} DASH`, el("span", { class: "muted", text: ` from its payments over ${r.window_days} days` })) : null],
-    coreMonthly != null ? ["Both, a month", el("span", {}, `≈ ${(toDash(p.monthly) + coreMonthly / 1e8).toFixed(2)} DASH`)] : null,
+    coreMonthly != null && p.monthly != null ? ["Both, a month", el("span", {}, `≈ ${(toDash(p.monthly) + coreMonthly / 1e8).toFixed(2)} DASH`)] : null,
     ["Both, a year", yearly != null ? el("span", {}, `${pct(yearly)} on 4,000 DASH`,
       el("span", { class: "muted", text: ` (${pct(p.annual_yield)} Platform, ${pct(r.annual_yield)} Core)` })) : "too new to tell"],
     c?.turns?.expected_blocks != null && c.blocks_total > 0 ? ["This epoch, blocks", `${fmt(c.blocks)} made, ≈ ${c.turns.expected_blocks} expected for its validator sets`] : null,
     lastWatched(p),
-    watched?.turns || missed30?.turns ? ["Missed turns we saw", `${fmt(missed30.missed)} of ${fmt(missed30.turns)} turns, last 30 days`] : null,
+    missed ? ["Missed turns we saw", missed] : null,
     ["Upgrade vote", p.vote ? el("span", {}, `protocol ${p.vote.version}`, el("span", { class: "muted", text: " (from its blocks this epoch)" }))
       : el("span", { class: "muted", text: "none yet this epoch: it votes with the blocks it proposes" })],
   ]), el("p", { class: "muted small", text: "Expected blocks follow from how many validator sets it was in while we watched; missed turns are ones we saw skipped " +
