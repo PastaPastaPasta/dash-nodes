@@ -46,7 +46,9 @@
         (<code>ipv4</code>, <code>ipv6</code>, <code>onion</code>, <code>i2p</code>, <code>cjdns</code>, always in that order),
         <code>{network, known, tried, reachable, masternodes, crawled, reason}</code>. <code>known</code> counts addresses heard of in the
         past week; a network we have no route to is <code>crawled: false</code> with a <code>reason</code>, and its addresses never count
-        as unreachable.</p>
+        as unreachable. <code>masternodes</code> counts the registered masternodes reachable on the network, at an address their ProTx
+        lists or at one that proved to be them by MNAUTH (signed with the operator key), so a masternode on Tor, I2P or IPv6 counts
+        there though its ProTx only lists IPv4. Each counts once per network however many addresses answer for it.</p>
       <p class="sub">Scopes: <code>all</code> (every node that answered), <code>nonmn</code> (those that aren't masternodes),
         <code>mn</code> and <code>evo</code> (every enabled masternode or evonode, reachable or not, keyed by the user agent it last
         announced in the past 7 days, else <code>Unknown</code>).</p>
@@ -196,7 +198,9 @@
     <p class="sub">Every 15 minutes the crawler opens a P2P connection to every registered masternode's Core address, to every
       node that answered in the past week, and to new addresses learned from our dashd and from other nodes' <code>getaddr</code>
       replies (in <code>addrv2</code>, so including Tor, I2P and CJDNS addresses). Onion peers are reached through Tor, I2P peers
-      through I2P and CJDNS peers through a cjdns node; IPv6 only when our host has an IPv6 route. It completes the <code>version</code> handshake and disconnects. It announces itself as
+      through I2P and CJDNS peers through a cjdns node; IPv6 only when our host has an IPv6 route. It completes the <code>version</code> handshake and disconnects,
+      after reading a masternode's MNAUTH answer to the challenge in our <code>version</code>, which says on any network which masternode
+      it is. It announces itself as
       <code>/dash-nodes:…(radar.dashhq.org)/</code>, doesn't relay transactions and keeps nothing but what the node announces.
       Masternode registration data and payments come from our own dashd; Platform data from evonodes' DAPI (unproved gRPC-web, each
       answer confirmed by a second evonode), and an evonode's page checks its own numbers against Platform's proofs in your browser. Reachability is measured from one vantage point, so a

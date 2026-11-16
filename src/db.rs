@@ -42,7 +42,8 @@ CREATE TABLE IF NOT EXISTS nodes (
     continent     TEXT,
     city          TEXT,
     lat           REAL,
-    lon           REAL
+    lon           REAL,
+    mn_protx      TEXT                       -- masternode it proved to be (MNAUTH) when last reached
 );
 CREATE INDEX IF NOT EXISTS nodes_next_try ON nodes(next_try);
 CREATE INDEX IF NOT EXISTS nodes_last_crawl ON nodes(last_crawl);
@@ -287,7 +288,7 @@ pub struct Db {
 }
 
 /// Columns added after the first release, for databases created before them: (table, column, type).
-const ADDED_COLUMNS: [(&str, &str, &str); 10] = [
+const ADDED_COLUMNS: [(&str, &str, &str); 11] = [
     ("nodes", "continent", "TEXT"),
     ("nodes", "city", "TEXT"),
     ("nodes", "lat", "REAL"),
@@ -298,6 +299,7 @@ const ADDED_COLUMNS: [(&str, &str, &str); 10] = [
     ("nodes", "relay", "INTEGER"),
     ("masternodes", "platform_banned", "INTEGER"),
     ("platform_status", "drive_protocol_next", "INTEGER"),
+    ("nodes", "mn_protx", "TEXT"),
 ];
 
 /// Every core P2P address of every registered masternode (the primary `service` for rows the
@@ -337,6 +339,15 @@ fn migrate(c: &mut Connection) -> Result<()> {
         tx.commit()?;
     }
     Ok(())
+}
+
+/// An in-memory database with the current schema.
+#[cfg(test)]
+pub fn open_memory() -> Connection {
+    let mut c = Connection::open_in_memory().unwrap();
+    c.execute_batch(SCHEMA).unwrap();
+    migrate(&mut c).unwrap();
+    c
 }
 
 /// `PRAGMA user_version` once payments no longer count the platform share (see `drop_platform_share`).
@@ -531,8 +542,8 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("old.sqlite");
         let _ = std::fs::remove_file(&path);
-        let geo_columns = "as_org        TEXT,\n    continent     TEXT,\n    city          TEXT,\n    lat           REAL,\n    lon           REAL\n";
-        let old = SCHEMA.replace(geo_columns, "as_org        TEXT\n");
+        let geo_columns = "as_org        TEXT,\n    continent     TEXT,\n    city          TEXT,\n    lat           REAL,\n    lon           REAL,\n";
+        let old = SCHEMA.replace(geo_columns, "as_org        TEXT,\n");
         assert_ne!(old, SCHEMA);
         Connection::open(&path).unwrap().execute_batch(&old).unwrap();
         Db::open(&path).unwrap();
@@ -559,8 +570,12 @@ mod tests {
             .replace(
                 "    platform_banned         INTEGER,         -- dashd's metaInfo.is_platform_banned (evonodes)\n",
                 "",
+            )
+            .replace(
+                "    lon           REAL,\n    mn_protx      TEXT                       -- masternode it proved to be (MNAUTH) when last reached\n",
+                "    lon           REAL\n",
             );
-        assert!(!old.contains("relay ") && !old.contains("platform_banned"));
+        assert!(!old.contains("relay ") && !old.contains("platform_banned") && !old.contains("mn_protx"));
         {
             let c = Connection::open(&path).unwrap();
             c.execute_batch(&old).unwrap();
@@ -573,8 +588,10 @@ mod tests {
         let db = Db::open(&path).unwrap();
         let c = lock(&db.writer);
         // Handshakes from before the column have no relay flag: unknown, not off.
-        let relay: Option<i64> = c.query_row("SELECT relay FROM nodes", [], |r| r.get(0)).unwrap();
+        let (relay, mn_protx): (Option<i64>, Option<String>) =
+            c.query_row("SELECT relay, mn_protx FROM nodes", [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
         assert_eq!(relay, None);
+        assert_eq!(mn_protx, None);
         c.execute(
             "INSERT INTO masternodes (protx, type, first_seen, updated, platform_banned) VALUES ('p', 'Evo', 0, 0, 1)",
             [],

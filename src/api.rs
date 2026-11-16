@@ -885,7 +885,8 @@ async fn geo(State(nets): State<Nets>, UrlPath(net): UrlPath<String>) -> ApiResu
             };
             let points: Vec<Value> = query_all(
                 c,
-                "SELECT lat, lon, max(city), max(country), count(*), sum(addr IN (SELECT addr FROM mn_addrs))
+                "SELECT lat, lon, max(city), max(country), count(*),
+                    sum(mn_protx IS NOT NULL OR addr IN (SELECT addr FROM mn_addrs))
                  FROM nodes WHERE last_crawl = ?1 AND last_ok = 1 AND lat IS NOT NULL AND lon IS NOT NULL
                  GROUP BY lat, lon ORDER BY count(*) DESC, lat, lon",
                 [id],

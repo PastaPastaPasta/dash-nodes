@@ -16,6 +16,7 @@ use serde_json::{Value, json};
 use crate::addr::{AddrNet, PeerAddr, net_of};
 use crate::collector::pose_status;
 use crate::db::{self, day_of, get_meta, query_all, set_meta};
+use crate::mnauth::MnAuth;
 use crate::network::Network;
 use crate::p2p::{self, Probe};
 use crate::state::NetCtx;
@@ -370,6 +371,7 @@ struct ProbeRow {
     net: AddrNet,
     asked_addrs: bool,
     ok: Option<p2p::Version>,
+    mnauth: Option<MnAuth>,
     error: Option<String>,
     geo: Option<crate::geo::GeoInfo>,
 }
@@ -378,11 +380,19 @@ impl ProbeRow {
     fn from(o: Outcome, geo: &crate::geo::Geo) -> ProbeRow {
         // Onion, I2P and CJDNS addresses say nothing about where a node is.
         let info = o.addr.public_ip().filter(|_| geo.loaded()).map(|ip| geo.lookup(ip));
-        let (ok, error) = match o.result {
-            Ok(p) => (Some(p.version), None),
-            Err(e) => (None, Some(format!("{e:#}"))),
+        let (ok, mnauth, error) = match o.result {
+            Ok(p) => (Some(p.version), p.mnauth, None),
+            Err(e) => (None, None, Some(format!("{e:#}"))),
         };
-        ProbeRow { addr: o.addr.to_string(), net: o.addr.net(), asked_addrs: o.asked_addrs, ok, error, geo: info }
+        ProbeRow {
+            addr: o.addr.to_string(),
+            net: o.addr.net(),
+            asked_addrs: o.asked_addrs,
+            ok,
+            mnauth,
+            error,
+            geo: info,
+        }
     }
 }
 
@@ -397,6 +407,7 @@ fn record(
     rows: Vec<ProbeRow>,
     routes: &Routes,
 ) -> Result<()> {
+    let mn_protx = proven_masternodes(c, &rows)?;
     let tx = c.transaction()?;
     {
         let mut ensure = tx.prepare_cached(
@@ -407,7 +418,7 @@ fn record(
             "UPDATE nodes SET last_tried = ?2, last_success = ?2, fail_streak = 0, next_try = ?2,
                 last_crawl = ?3, last_ok = 1, last_error = NULL, user_agent = ?4, protocol = ?5, services = ?6,
                 start_height = ?7, latency_ms = ?8, last_getaddr = CASE WHEN ?9 THEN ?2 ELSE last_getaddr END,
-                relay = ?10
+                relay = ?10, mn_protx = ?11
              WHERE addr = ?1",
         )?;
         // Failures: nodes seen recently are retried every crawl (they count toward uptime);
@@ -428,7 +439,7 @@ fn record(
             "UPDATE nodes SET country = ?2, continent = ?3, city = ?4, lat = ?5, lon = ?6, asn = ?7, as_org = ?8
              WHERE addr = ?1",
         )?;
-        for r in &rows {
+        for (r, mn_protx) in rows.iter().zip(mn_protx) {
             ensure.execute(params![r.addr, r.net.name(), now])?;
             match &r.ok {
                 Some(v) => ok_st.execute(params![
@@ -442,6 +453,7 @@ fn record(
                     v.latency_ms,
                     r.asked_addrs,
                     v.relay,
+                    mn_protx,
                 ])?,
                 None => fail_st.execute(params![r.addr, now, id, r.error, ACTIVE_WINDOW, NEW_ADDR_TRIES])?,
             };
@@ -495,6 +507,36 @@ fn record(
     Ok(())
 }
 
+/// The masternode each row that answered proved to be by MNAUTH: signed with a registered
+/// masternode's operator key, on whatever network we reached it. An address the masternode's ProTx
+/// lists needs no signature check, which spares nearly every one. Done before the crawl's write
+/// transaction: a BLS check takes about a millisecond.
+fn proven_masternodes(c: &Connection, rows: &[ProbeRow]) -> Result<Vec<Option<String>>> {
+    let keys: HashMap<String, String> = query_all(
+        c,
+        "SELECT protx, pubkey_operator FROM masternodes WHERE removed IS NULL AND pubkey_operator IS NOT NULL",
+        [],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+    let listed: HashSet<(String, String)> =
+        query_all(c, "SELECT protx, addr FROM mn_addrs", [], |r| Ok((r.get(0)?, r.get(1)?)))?;
+    let mut forged = 0;
+    let proven = rows
+        .iter()
+        .map(|r| {
+            let (Some(v), Some(a)) = (&r.ok, &r.mnauth) else { return None };
+            let ok = listed.contains(&(a.pro_tx_hash.clone(), r.addr.clone()))
+                || keys.get(&a.pro_tx_hash).is_some_and(|k| a.verify(v.protocol, k));
+            forged += usize::from(!ok);
+            ok.then(|| a.pro_tx_hash.clone())
+        })
+        .collect();
+    if forged > 0 {
+        tracing::debug!("{forged} MNAUTH replies not signed by a registered masternode");
+    }
+    Ok(proven)
+}
+
 /// Node counts keyed by (scope, dim, key).
 #[derive(Default)]
 struct Counts(HashMap<(&'static str, &'static str, String), i64>);
@@ -527,7 +569,8 @@ fn asn_key(asn: Option<i64>, org: Option<String>) -> String {
 }
 
 /// Distribution counts for this crawl. Scopes:
-/// - `all`: every node that answered this crawl; `nonmn`: those that aren't a registered masternode.
+/// - `all`: every node that answered this crawl; `nonmn`: those that aren't a registered masternode
+///   (by the addresses its ProTx lists, or by MNAUTH on any other address).
 /// - `mn` / `evo`: every enabled (not PoSe-banned) masternode / evonode, reachable or not, with the
 ///   user agent it last announced within the active window.
 ///
@@ -539,7 +582,8 @@ fn aggregate(c: &Connection, id: i64, now: i64) -> Result<Aggregate> {
 
     let mut reachable = 0;
     let mut st = c.prepare(
-        "SELECT addr, user_agent, protocol, country, asn, as_org, network FROM nodes WHERE last_crawl = ?1 AND last_ok = 1",
+        "SELECT addr, user_agent, protocol, country, asn, as_org, network, mn_protx IS NOT NULL
+         FROM nodes WHERE last_crawl = ?1 AND last_ok = 1",
     )?;
     let mut rows = st.query([id])?;
     while let Some(r) = rows.next()? {
@@ -550,7 +594,8 @@ fn aggregate(c: &Connection, id: i64, now: i64) -> Result<Aggregate> {
         let country = r.get::<_, Option<String>>(3)?.unwrap_or_else(|| "Unknown".into());
         let asn = asn_key(r.get(4)?, r.get(5)?);
         let network = r.get::<_, Option<String>>(6)?.unwrap_or_else(|| "Unknown".into());
-        let scopes: &[&'static str] = if mn_addrs.contains(&addr) { &["all"] } else { &["all", "nonmn"] };
+        let is_mn = r.get::<_, bool>(7)? || mn_addrs.contains(&addr);
+        let scopes: &[&'static str] = if is_mn { &["all"] } else { &["all", "nonmn"] };
         for &s in scopes {
             counts.add(s, "ua", ua.clone());
             counts.add(s, "version", ua::version_label(&ua));
@@ -633,19 +678,22 @@ fn aggregate(c: &Connection, id: i64, now: i64) -> Result<Aggregate> {
 /// - `known`: addresses gossiped, listed by dashd or the masternode list, or reachable within the
 ///   active window before `now`, or tried in this crawl;
 /// - `tried` / `reachable`: probed / answered in crawl `id`;
-/// - `masternodes`: reachable addresses that are a registered masternode's core P2P address;
+/// - `masternodes`: distinct registered masternodes reachable on the network, at an address their
+///   ProTx lists or one that proved to be them by MNAUTH. Masternodes, not addresses: MNAUTH can be
+///   relayed, so one masternode may answer at any number of addresses;
 /// - `crawled` / `reason`: whether the crawl had a route to the network, and why not. Without
 ///   `routes` (crawls recorded before this was stored), a network counts as crawled if anything
 ///   on it was tried.
 pub fn network_stats(c: &Connection, id: i64, now: i64, routes: Option<&Routes>) -> Result<Vec<Value>> {
     let mut by_net: HashMap<String, [i64; 4]> = HashMap::new();
     let mut st = c.prepare(
-        "SELECT network,
-                sum(max(coalesce(last_gossip, 0), coalesce(last_success, 0)) > ?2 OR last_crawl = ?1),
-                sum(last_crawl = ?1),
-                sum(last_crawl = ?1 AND last_ok = 1),
-                sum(last_crawl = ?1 AND last_ok = 1 AND addr IN (SELECT addr FROM mn_addrs))
-         FROM nodes WHERE network IS NOT NULL GROUP BY network",
+        "SELECT n.network,
+                sum(max(coalesce(n.last_gossip, 0), coalesce(n.last_success, 0)) > ?2 OR n.last_crawl = ?1),
+                sum(n.last_crawl = ?1),
+                sum(n.last_crawl = ?1 AND n.last_ok = 1),
+                count(DISTINCT CASE WHEN n.last_crawl = ?1 AND n.last_ok = 1 THEN coalesce(n.mn_protx, m.protx) END)
+         FROM nodes n LEFT JOIN (SELECT addr, min(protx) AS protx FROM mn_addrs GROUP BY addr) m ON m.addr = n.addr
+         WHERE n.network IS NOT NULL GROUP BY n.network",
     )?;
     let mut rows = st.query(params![id, now - ACTIVE_WINDOW])?;
     while let Some(r) = rows.next()? {
@@ -715,4 +763,102 @@ pub fn maintenance(c: &mut Connection) -> Result<()> {
     // Unfinished crawls are left over from a restart mid-crawl.
     c.execute("DELETE FROM crawls WHERE finished IS NULL AND started < ?1", [now - DAY])?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mnauth::vectors::{VECTORS, auth};
+    use crate::transport::{Toggle, TransportConfig};
+
+    fn reached(addr: &str, protocol: i32, mnauth: Option<MnAuth>) -> ProbeRow {
+        let addr: PeerAddr = addr.parse().unwrap();
+        let version = p2p::Version {
+            protocol,
+            services: 1,
+            user_agent: "/Dash Core:24.0.0/".into(),
+            start_height: 1,
+            relay: true,
+            latency_ms: 1,
+        };
+        ProbeRow {
+            addr: addr.to_string(),
+            net: addr.net(),
+            asked_addrs: false,
+            ok: Some(version),
+            mnauth,
+            error: None,
+            geo: None,
+        }
+    }
+
+    /// An onion address that signs our challenge with a masternode's operator key counts as that
+    /// masternode; one that names a masternode whose key didn't sign it doesn't.
+    #[test]
+    fn mnauth_makes_an_onion_address_a_masternode() {
+        let mut c = db::open_memory();
+        let (mn, other) = (&VECTORS[0], &VECTORS[1]);
+        for (v, service) in [(mn, "1.2.3.4:9999"), (other, "1.2.3.5:9999")] {
+            c.execute(
+                "INSERT INTO masternodes (protx, type, service, pubkey_operator, first_seen, updated)
+                 VALUES (?1, 'Regular', ?2, ?3, 0, 0)",
+                params![v.protx, service, v.pubkey],
+            )
+            .unwrap();
+        }
+        c.execute("INSERT INTO crawls (id, started) VALUES (1, 0)", []).unwrap();
+        let proven = "pg6mmjiyjmcrsslvykfwnntlaru7p5svn6y2ymmju6nubxndf4pscryd.onion:9999";
+        let forged = "5v5lgddolcidtt2qmhmvyka2ewht4mkmmj73tfwuimlckgmqb5lthtid.onion:9999";
+        // A real signature by `mn`, presented as `other`'s.
+        let claim = MnAuth { pro_tx_hash: other.protx.into(), ..auth(mn) };
+        // MNAUTH can be relayed: another address answering for the same masternode doesn't make two.
+        let relay = "a4hwvpuckrcdssqamovhwmh4arqqi3nrskhs6eu2ojdsefspm7q7wzad.onion:9999";
+        let rows = vec![
+            reached(proven, mn.protocol, Some(auth(mn))),
+            reached(relay, mn.protocol, Some(auth(mn))),
+            reached(forged, mn.protocol, Some(claim)),
+            reached("5.6.7.8:9999", 70242, None),
+            // At the address its ProTx lists, the claim isn't checked: the ProTx already ties them.
+            reached("1.2.3.4:9999", mn.protocol, Some(MnAuth { sig: [0; 96], ..auth(mn) })),
+        ];
+        let routes = TransportConfig {
+            ipv6: Toggle::Off,
+            ipv6_proxy: None,
+            tor_proxy: Some("127.0.0.1:9050".into()),
+            i2p_proxy: None,
+            cjdns: Toggle::Off,
+        }
+        .routes();
+        record(&mut c, 1, 100, 1, 3, 0, rows, &routes).unwrap();
+
+        let protx_of = |c: &Connection, a: &str| -> Option<String> {
+            c.query_row("SELECT mn_protx FROM nodes WHERE addr = ?1", [a], |r| r.get(0)).unwrap()
+        };
+        assert_eq!(protx_of(&c, proven).as_deref(), Some(mn.protx));
+        assert_eq!(protx_of(&c, forged), None);
+        assert_eq!(protx_of(&c, "5.6.7.8:9999"), None);
+        assert_eq!(protx_of(&c, "1.2.3.4:9999").as_deref(), Some(mn.protx));
+
+        let nets = network_stats(&c, 1, 100, Some(&routes)).unwrap();
+        let onion = nets.iter().find(|n| n["network"] == "onion").unwrap();
+        assert_eq!((onion["reachable"].as_i64(), onion["masternodes"].as_i64()), (Some(3), Some(1)));
+        let ipv4 = nets.iter().find(|n| n["network"] == "ipv4").unwrap();
+        assert_eq!((ipv4["reachable"].as_i64(), ipv4["masternodes"].as_i64()), (Some(2), Some(1)));
+        let count = |scope: &str, key: &str| -> Option<i64> {
+            c.query_row(
+                "SELECT count FROM crawl_agg WHERE crawl_id = 1 AND scope = ?1 AND dim = 'network' AND key = ?2",
+                [scope, key],
+                |r| r.get(0),
+            )
+            .optional()
+            .unwrap()
+        };
+        assert_eq!(count("all", "onion"), Some(3));
+        assert_eq!(count("nonmn", "onion"), Some(1));
+
+        // Answering later without MNAUTH clears it.
+        c.execute("INSERT INTO crawls (id, started) VALUES (2, 200)", []).unwrap();
+        record(&mut c, 2, 200, 1, 1, 0, vec![reached(proven, mn.protocol, None)], &routes).unwrap();
+        assert_eq!(protx_of(&c, proven), None);
+    }
 }
