@@ -340,7 +340,7 @@ function rewardsSection(m) {
       ? `≈ ${amount(c.accrued)} if it ended now (an estimate)` : "nothing yet"),
     tile("Next block", next?.eta ? inAbout(next.eta) : "–", next ? `its turn is ${next.slots === 1 ? "next" : `${fmt(next.slots)} blocks away`}; an estimate`
       : p.in_validator_sets === false ? "not in a validator set that takes turns now" : "unknown: the validator sets haven't been read lately")));
-  box.append(el("div", { class: "rewards-where" }, el("h3", { text: "Where it sits" }), rankStrip(p)));
+  box.append(el("div", { class: "rewards-where" }, el("h3", { text: "How it ranks among evonodes" }), rankBars(m, p)));
   box.append(el("div", { class: "cols-2" }, earnedTable(m, p), estimateTable(m, p)));
   box.append(epochHistory(p));
   const liveBox = el("div", { class: "live-body" });
@@ -351,39 +351,32 @@ function rewardsSection(m) {
 }
 
 /**
- * Last epoch's rewards across evonodes: how many earned each amount (rewards go by whole blocks, so
- * they bunch up), this one marked, the middle 80% shaded.
+ * How this evonode ranks among the enabled evonodes (those that earned nothing count) by what it
+ * earned: over the last 30 days, which says the most, and last epoch, which is mostly luck.
  */
-function rankStrip(p) {
-  const wrap = el("div", { class: "rank-strip" }, el("p", { class: "muted small", text: "Loading the other evonodes…" }));
-  const pctl = p.d30_percentile;
+function rankBars(m, p) {
+  const wrap = el("div", { class: "rank-bars" }, el("p", { class: "muted small", text: "Loading the other evonodes…" }));
   api(`${net}/platform`).then((doc) => {
-    const mine = p.totals.last_epoch;
-    const vals = doc.evonodes.filter((e) => e.last_blocks > 0).map((e) => e.last_epoch).sort((a, b) => a - b);
-    if (!vals.length) { wrap.replaceChildren(); return; }
-    const max = vals.at(-1) || 1;
-    const counts = new Map();
-    for (const v of vals) counts.set(v, (counts.get(v) || 0) + 1);
-    const most = Math.max(...counts.values());
-    const q = (f) => vals[Math.round((vals.length - 1) * f)];
-    const W = 1000, H = 44;
-    const x = (v) => (v / max) * (W - 6) + 3;
-    const strip = svg("svg", { viewBox: `0 0 ${W} ${H}`, preserveAspectRatio: "none", class: "ticks", role: "img",
-      "aria-label": `${vals.length} evonodes' rewards last epoch, from ${amount(vals[0])} to ${amount(max)}; this one ${amount(mine)}` });
-    strip.append(svg("rect", { x: x(q(0.1)), y: 0, width: x(q(0.9)) - x(q(0.1)), height: H, class: "mid" }));
-    for (const [v, n] of counts) {
-      const h = 4 + ((H - 8) * n) / most;
-      strip.append(svg("rect", { x: x(v) - 2, y: H - h, width: 4, height: h, class: v === mine ? "me" : "tick" }));
-    }
-    strip.append(svg("rect", { x: x(q(0.5)) - 0.75, y: 0, width: 1.5, height: H, class: "median" }));
-    const below = vals.filter((v) => v < mine).length;
-    wrap.replaceChildren(strip,
-      el("div", { class: "strip-axis" }, el("span", { text: amount(vals[0]) }), el("span", { text: `median ${amount(q(0.5))}` }), el("span", { text: amount(max) })),
-      el("p", { class: "sub" }, mine > 0
-        ? `The bars count evonodes by what they earned last epoch; this one is the blue bar. It earned more than ${pct(below / vals.length, 0)} of the ${fmt(vals.length)} that proposed blocks. `
-        : "It proposed no blocks last epoch. ",
-      pctl != null ? `Over the last 30 days, more than ${pct(pctl, 0)} of all ${fmt(p.d30_of)} enabled evonodes. ` : "",
-      "Rewards go by blocks proposed, so luck in the turn order evens out over a few epochs."));
+    const enabled = doc.evonodes.filter((e) => e.status === "enabled");
+    if (!enabled.length) { wrap.replaceChildren(); return; }
+    const me = doc.evonodes.find((e) => e.protx === m.protx) ?? { d30: p.totals.d30, last_epoch: p.totals.last_epoch };
+    const row = (label, key, when, none) => {
+      const mine = me[key];
+      const below = enabled.filter((e) => e[key] < mine).length;
+      // Rounded down: never more than it actually beat.
+      const of100 = Math.floor((100 * below) / enabled.length);
+      const exact = mine > 0 ? `Earned more than ${fmt(below)} of the ${fmt(enabled.length)} enabled evonodes ${when}` : none;
+      return el("div", { class: "rank-row", title: exact },
+        el("span", { class: "rank-label", text: label }),
+        el("div", { class: "rank-track", role: "img", "aria-label": exact },
+          el("div", { class: "rank-fill", style: { width: `${mine > 0 ? of100 : 0}%` } })),
+        el("span", { class: "rank-value" }, mine > 0 ? [el("b", { text: `Ahead of ${of100}` }), " of every 100"] : none));
+    };
+    wrap.replaceChildren(
+      row("Last 30 days", "d30", "over the last 30 days", "Earned nothing"),
+      row("Last epoch", "last_epoch", "last epoch", "Proposed no blocks"),
+      el("div", { class: "rank-axis" }, el("span", { text: "earned least" }), el("span", { text: "earned most" })),
+      el("p", { class: "sub", text: "One epoch is mostly luck in the turn order; 30 days evens it out." }));
   }, () => wrap.replaceChildren());
   return wrap;
 }
