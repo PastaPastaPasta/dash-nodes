@@ -6,12 +6,13 @@
 #   docker compose up -d --build     everything
 #   COMPOSE_PROFILES=cjdns, CJDNS=true   also run a cjdns node (needs /dev/net/tun, see README)
 #
-# Nothing here takes inbound traffic from the internet: the publisher only connects out to R2 (or the
-# Worker).
-# dashd RPC, Tor's SOCKS port and i2pd's SOCKS/SAM ports are reachable on the compose networks only;
-# the app's HTTP port is for the LAN. Tor and i2pd sit on their own `overlay` network, not on `core`,
-# so they can't reach dashd's RPC. Needs Docker Engine 28+ and Compose 2.33+ (the IPv6-only `cjdns`
-# network).
+# Nothing here takes inbound traffic from the internet directly: the publisher only connects out to R2
+# (or the Worker), and the dashds take P2P connections only through Tor (an onion service each) and
+# I2P (a destination each), never on the host's addresses.
+# dashd RPC, Tor's SOCKS and control ports and i2pd's SOCKS/SAM ports are reachable on the compose
+# networks only; the app's HTTP port is for the LAN. Tor and i2pd sit on their own `overlay` network,
+# not on `core`, so they can't reach dashd's RPC. Needs Docker Engine 28+ and Compose 2.33+ (the
+# IPv6-only `cjdns` network).
 
 name: dash-nodes
 
@@ -39,6 +40,10 @@ x-dashd: &dashd
   # Give dashd time to flush; an unclean stop can mean a long replay on mainnet.
   stop_grace_period: 3m
   entrypoint: ["/bin/sh", "/opt/dash-nodes/dashd-entrypoint.sh"]
+  # Tor first: it makes the control port password the dashds read from tor-control.
+  depends_on:
+    - tor
+    - i2pd
   secrets:
     - rpc_password
   # overlay: Tor and i2pd. cjdns: IPv6 to the cjdns node (used when CJDNS=true with the cjdns
@@ -64,16 +69,21 @@ services:
       DASHD_EXTRA_ARGS: ${MAINNET_DASHD_ARGS:-}
       DASHD_ONION: 172.30.88.10:9050
       DASHD_I2PSAM: 172.30.88.11:7656
+      # Inbound over Tor and I2P only (see dashd/entrypoint.sh).
+      DASHD_OVERLAY_BIND: 172.30.88.12:9996
+      DASHD_TORCONTROL: 172.30.88.10:9051
       DASHD_CJDNSREACHABLE: ${CJDNS:-false}
     # The RPC name resolves on `core` only: on the IPv6 `cjdns` network the plain service name points at
     # an address RPC doesn't listen on.
     networks:
       core:
         aliases: [rpc-mainnet]
-      overlay: {}
+      overlay:
+        ipv4_address: 172.30.88.12
       cjdns: {}
     volumes:
       - dashd-mainnet:/home/dash
+      - tor-control:/var/lib/tor-control:ro
       - ./dashd/dash.conf:/etc/dash-nodes/dash.conf:ro
       - ./dashd/entrypoint.sh:/opt/dash-nodes/dashd-entrypoint.sh:ro
 
@@ -85,16 +95,21 @@ services:
       DASHD_EXTRA_ARGS: ${TESTNET_DASHD_ARGS:-}
       DASHD_ONION: 172.30.88.10:9050
       DASHD_I2PSAM: 172.30.88.11:7656
+      # Inbound over Tor and I2P only (see dashd/entrypoint.sh).
+      DASHD_OVERLAY_BIND: 172.30.88.13:19996
+      DASHD_TORCONTROL: 172.30.88.10:9051
       DASHD_CJDNSREACHABLE: ${CJDNS:-false}
     # The RPC name resolves on `core` only: on the IPv6 `cjdns` network the plain service name points at
     # an address RPC doesn't listen on.
     networks:
       core:
         aliases: [rpc-testnet]
-      overlay: {}
+      overlay:
+        ipv4_address: 172.30.88.13
       cjdns: {}
     volumes:
       - dashd-testnet:/home/dash
+      - tor-control:/var/lib/tor-control:ro
       - ./dashd/dash.conf:/etc/dash-nodes/dash.conf:ro
       - ./dashd/entrypoint.sh:/opt/dash-nodes/dashd-entrypoint.sh:ro
 
@@ -147,7 +162,8 @@ services:
       overlay: {}
       cjdns: {}
 
-  # Tor client: SOCKS for .onion peers (the app's TOR_PROXY, dashd's -onion). No relay, no exit.
+  # Tor client: SOCKS for .onion peers (the app's TOR_PROXY, dashd's -onion) and the control port
+  # the dashds make their onion services through (-torcontrol). No relay, no exit.
   tor:
     build: ./tor
     image: dash-nodes-tor:${APP_TAG:-local}
@@ -156,6 +172,8 @@ services:
     <<: *hardened
     volumes:
       - tor-data:/var/lib/tor
+      # The control port password, for the dashds.
+      - tor-control:/var/lib/tor-control
     networks:
       overlay:
         ipv4_address: 172.30.88.10
@@ -305,7 +323,7 @@ networks:
       config:
         - subnet: 172.30.86.0/24
   edge: {}
-  # Tor and i2pd. Static addresses sit above the dynamic range.
+  # Tor, i2pd and the dashds' inbound side. Static addresses (.10 to .13) sit below the dynamic range.
   overlay:
     ipam:
       config:
@@ -327,6 +345,7 @@ volumes:
   publisher-state:
   bench-state:
   tor-data:
+  tor-control:
   i2pd-data:
   cjdns-data:
 

@@ -345,6 +345,17 @@ pub fn from_bip155(net_id: u8, bytes: &[u8], port: u16) -> Result<Option<PeerAdd
     Ok(Some(PeerAddr { host, port }))
 }
 
+/// The BIP155 network ID and raw bytes of an address, as `addrv2` carries them.
+pub fn to_bip155(a: &PeerAddr) -> (u8, Vec<u8>) {
+    match a.host {
+        Host::V4(ip) => (bip155::IPV4, ip.octets().to_vec()),
+        Host::V6(ip) => (bip155::IPV6, ip.octets().to_vec()),
+        Host::Onion(k) => (bip155::TORV3, k.to_vec()),
+        Host::I2p(h) => (bip155::I2P, h.to_vec()),
+        Host::Cjdns(ip) => (bip155::CJDNS, ip.octets().to_vec()),
+    }
+}
+
 /// Classifies a stored `nodes.addr` (or ProTx service) string; None if it doesn't parse.
 pub fn net_of(addr: &str) -> Option<AddrNet> {
     addr.parse::<PeerAddr>().ok().map(|a| a.net())
@@ -378,6 +389,11 @@ mod tests {
         assert_eq!(v4.to_string(), "1.2.3.4:9999");
         let v6 = from_bip155(bip155::IPV6, &hex("2a0102030405060708090a0b0c0d0e0f"), 9999).unwrap().unwrap();
         assert_eq!(v6.to_string(), "[2a01:203:405:607:809:a0b:c0d:e0f]:9999");
+        for a in [onion, i2p, cjdns, v4, v6] {
+            let (id, bytes) = to_bip155(&a);
+            assert_eq!(from_bip155(id, &bytes, a.port).unwrap(), Some(a));
+        }
+        assert_eq!(to_bip155(&onion), (bip155::TORV3, hex(TORV3_HEX)));
     }
 
     #[test]

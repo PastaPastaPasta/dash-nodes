@@ -4,7 +4,8 @@
 //! We connect as an ordinary, non-masternode, non-relaying peer, so the remote treats us like any
 //! inbound light client: it answers our `version`, and answers one `getaddr` per connection. We
 //! announce `sendaddrv2` (BIP155), so the reply can include onion, I2P and CJDNS addresses, and send
-//! an MNAUTH challenge, so a masternode says which one it is on any network (see mnauth.rs).
+//! an MNAUTH challenge, so a masternode says which one it is on any network (see mnauth.rs). It can
+//! also tell the peer one address of ours, the way a node announces its own (see crawler::beacon).
 
 use std::net::{IpAddr, Ipv6Addr};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -66,23 +67,39 @@ pub struct Probe {
     pub addrs: Vec<PeerAddr>,
     /// The masternode's answer to our challenge; checked against its operator key by the caller.
     pub mnauth: Option<MnAuth>,
+    /// Whether the peer took our address (see `probe`'s `announce`).
+    pub announced: bool,
 }
 
-/// Connects over `route`, exchanges versions, reads a masternode's MNAUTH and, if `getaddr` is set,
-/// collects the peer's address sample (at most 1000 addresses). The whole exchange, writes
-/// included, is bounded by the timeouts, which are per network (see transport::default_limits).
+/// An address of ours to tell peers about, with the services the node behind it offers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Announce {
+    pub addr: PeerAddr,
+    pub services: u64,
+}
+
+/// Connects over `route`, exchanges versions, reads a masternode's MNAUTH, tells the peer about
+/// `announce` if given and, if `getaddr` is set, collects the peer's address sample (at most 1000
+/// addresses). The whole exchange, writes included, is bounded by the timeouts, which are per
+/// network (see transport::default_limits).
 pub async fn probe(
     net: Network,
     addr: &PeerAddr,
     route: &Route,
     start_height: i32,
     getaddr: bool,
+    announce: Option<&Announce>,
     t: &Timeouts,
 ) -> Result<Probe> {
-    // The handshake timeout covers the peer's version, and again its verack and MNAUTH.
-    let budget =
-        t.connect + 2 * t.handshake + if getaddr { t.getaddr } else { Duration::ZERO } + Duration::from_secs(2);
-    timeout(budget, probe_inner(net, addr, route, start_height, getaddr, t)).await.map_err(|_| anyhow!("timeout"))?
+    // The handshake timeout covers the peer's version, again its verack and MNAUTH, and the pong
+    // that confirms an announcement.
+    let budget = t.connect
+        + if announce.is_some() { 3 } else { 2 } * t.handshake
+        + if getaddr { t.getaddr } else { Duration::ZERO }
+        + Duration::from_secs(2);
+    timeout(budget, probe_inner(net, addr, route, start_height, getaddr, announce, t))
+        .await
+        .map_err(|_| anyhow!("timeout"))?
 }
 
 async fn probe_inner(
@@ -91,6 +108,7 @@ async fn probe_inner(
     route: &Route,
     start_height: i32,
     getaddr: bool,
+    announce: Option<&Announce>,
     t: &Timeouts,
 ) -> Result<Probe> {
     let started = Instant::now();
@@ -120,6 +138,7 @@ async fn probe_inner(
     // of sendheaders, so any other message after the verack means the peer isn't one.
     let deadline = Instant::now() + t.handshake;
     let mut mnauth = None;
+    let mut peer_addrv2 = false;
     let after_verack: Result<()> = async {
         let mut verack = false;
         loop {
@@ -134,6 +153,7 @@ async fn probe_inner(
                         return Ok(());
                     }
                 }
+                "sendaddrv2" if !verack => peer_addrv2 = true,
                 _ if verack => return Ok(()),
                 _ => {}
             }
@@ -145,9 +165,27 @@ async fn probe_inner(
         tracing::trace!(%addr, "after verack: {e:#}");
     }
 
+    // Dash Core takes addresses only once the handshake is done, and only about one from a peer it
+    // just met (its address token bucket starts at 1 and refills at 0.1 a second): one per probe.
+    // Only peers that asked for addrv2 (BIP155) can read an onion or I2P address.
+    let mut announced = false;
+    let mut stream_ok = after_verack.is_ok();
+    if let Some(a) = announce
+        && stream_ok
+        && version.protocol >= ADDRV2_PROTO_VERSION
+        && peer_addrv2
+    {
+        let result = confirm_announce(&mut stream, magic, a, Instant::now() + t.handshake).await;
+        if let Err(e) = &result {
+            tracing::trace!(%addr, "announce: {e:#}");
+        }
+        announced = result.is_ok();
+        stream_ok = announced;
+    }
+
     let mut addrs = Vec::new();
     // A timeout mid-message leaves the stream unusable, and getaddr needs the handshake done.
-    if getaddr && after_verack.is_ok() {
+    if getaddr && stream_ok {
         let deadline = Instant::now() + t.getaddr;
         let result: Result<()> = async {
             stream.write_all(&encode(magic, "getaddr", &[])).await?;
@@ -175,7 +213,26 @@ async fn probe_inner(
             tracing::trace!(%addr, "getaddr: {e:#}");
         }
     }
-    Ok(Probe { version, addrs, mnauth })
+    Ok(Probe { version, addrs, mnauth, announced })
+}
+
+/// Sends `a` in an `addrv2`, then a ping, and waits for the pong. Dash Core handles a peer's messages
+/// in order, so the pong means the address was processed; one we hang up on right after sending can
+/// be dropped unread.
+async fn confirm_announce(stream: &mut TcpStream, magic: [u8; 4], a: &Announce, deadline: Instant) -> Result<()> {
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as u32;
+    let nonce: u64 = rand::random();
+    stream
+        .write_all(
+            &[encode(magic, "addrv2", &addrv2_payload(a, now)), encode(magic, "ping", &nonce.to_le_bytes())].concat(),
+        )
+        .await?;
+    loop {
+        let (cmd, payload) = read_before(stream, magic, deadline).await?;
+        if cmd == "pong" && payload == nonce.to_le_bytes() {
+            return Ok(());
+        }
+    }
 }
 
 async fn read_before(stream: &mut TcpStream, magic: [u8; 4], deadline: Instant) -> Result<(String, Vec<u8>)> {
@@ -256,6 +313,19 @@ pub fn version_payload(addr_you: &PeerAddr, start_height: i32, mnauth_challenge:
         p.extend_from_slice(c);
         p.push(0); // fMasternode = false
     }
+    p
+}
+
+/// An `addrv2` (BIP155) holding one address, last seen at `time`.
+pub fn addrv2_payload(a: &Announce, time: u32) -> Vec<u8> {
+    let (net_id, bytes) = addr::to_bip155(&a.addr);
+    let mut p = vec![1];
+    p.extend_from_slice(&time.to_le_bytes());
+    write_compact_size(&mut p, a.services);
+    p.push(net_id);
+    write_compact_size(&mut p, bytes.len() as u64);
+    p.extend_from_slice(&bytes);
+    p.extend_from_slice(&a.addr.port.to_be_bytes());
     p
 }
 
@@ -467,24 +537,43 @@ mod tests {
         assert_eq!(version_payload(&onion, 1, None)[20 + 8..20 + 26], [0u8; 18]);
     }
 
-    /// A Dash Core peer on a local port: answers our version, our verack (with MNAUTH first when
-    /// `mn` is set, signing nothing: the probe leaves checking to the caller) and a getaddr.
-    async fn fake_peer(mn: Option<[u8; 32]>) -> (PeerAddr, tokio::task::JoinHandle<Option<[u8; 32]>>) {
+    /// What a fake peer got from us: the MNAUTH challenge in our version, and our `addrv2`s.
+    struct Got {
+        challenge: Option<[u8; 32]>,
+        addrv2: Vec<Vec<u8>>,
+    }
+
+    /// A Dash Core peer on a local port, speaking `protocol`: answers our version, our verack (with
+    /// MNAUTH first when `mn` is set, signing nothing: the probe leaves checking to the caller) and a
+    /// getaddr.
+    async fn fake_peer(mn: Option<[u8; 32]>, protocol: i32) -> (PeerAddr, tokio::task::JoinHandle<Got>) {
+        fake_peer_pong(mn, protocol, true).await
+    }
+
+    async fn fake_peer_pong(
+        mn: Option<[u8; 32]>,
+        protocol: i32,
+        pong: bool,
+    ) -> (PeerAddr, tokio::task::JoinHandle<Got>) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = PeerAddr::from_socket(listener.local_addr().unwrap());
         let task = tokio::spawn(async move {
             let (mut s, _) = listener.accept().await.unwrap();
             let magic = Network::Testnet.magic();
             let me: PeerAddr = "1.2.3.4:19999".parse().unwrap();
-            let mut challenge = None;
+            let mut got = Got { challenge: None, addrv2: Vec::new() };
             while let Ok((cmd, payload)) = read_message(&mut s, magic, MAX_PAYLOAD).await {
                 let mut out = Vec::new();
                 match cmd.as_str() {
                     "version" => {
                         // Our challenge is the 32 bytes before the trailing fMasternode.
-                        challenge = Some(payload[payload.len() - 33..payload.len() - 1].try_into().unwrap());
-                        out.push(encode(magic, "version", &version_payload(&me, 7, Some(&[9; 32]))));
-                        out.push(encode(magic, "sendaddrv2", &[]));
+                        got.challenge = Some(payload[payload.len() - 33..payload.len() - 1].try_into().unwrap());
+                        let mut v = version_payload(&me, 7, Some(&[9; 32]));
+                        v[..4].copy_from_slice(&protocol.to_le_bytes());
+                        out.push(encode(magic, "version", &v));
+                        if protocol >= ADDRV2_PROTO_VERSION {
+                            out.push(encode(magic, "sendaddrv2", &[]));
+                        }
                         out.push(encode(magic, "verack", &[]));
                     }
                     "verack" => {
@@ -505,13 +594,15 @@ mod tests {
                         }
                         out.push(encode(magic, "addrv2", &a));
                     }
+                    "addrv2" => got.addrv2.push(payload),
+                    "ping" if pong => out.push(encode(magic, "pong", &payload)),
                     _ => {}
                 }
                 for m in out {
                     s.write_all(&m).await.unwrap();
                 }
             }
-            challenge
+            got
         });
         (addr, task)
     }
@@ -524,25 +615,73 @@ mod tests {
     async fn probe_reads_mnauth() {
         let mut protx = [0u8; 32];
         protx[0] = 0x01; // little-endian on the wire: the printed hash ends in 01
-        let (addr, peer) = fake_peer(Some(protx)).await;
-        let p = probe(Network::Testnet, &addr, &Route::Direct, 1, true, &quick()).await.unwrap();
+        let (addr, peer) = fake_peer(Some(protx), PROTOCOL_VERSION).await;
+        let p = probe(Network::Testnet, &addr, &Route::Direct, 1, true, None, &quick()).await.unwrap();
         assert_eq!(p.version.start_height, 7);
         let auth = p.mnauth.unwrap();
         assert_eq!(auth.pro_tx_hash, format!("{}01", "0".repeat(62)));
         assert_eq!(auth.sig, [0xab; 96]);
         // MNAUTH doesn't eat the getaddr reply.
         assert_eq!(p.addrs.len(), 2);
-        let sent = peer.await.unwrap().unwrap();
+        let got = peer.await.unwrap();
+        let sent = got.challenge.unwrap();
         assert_eq!(auth.challenge, sent);
         assert_ne!(sent, [0; 32]);
+        assert!(!p.announced && got.addrv2.is_empty());
     }
 
     #[tokio::test]
     async fn probe_of_a_plain_node_has_no_mnauth() {
-        let (addr, _peer) = fake_peer(None).await;
-        let p = probe(Network::Testnet, &addr, &Route::Direct, 1, false, &quick()).await.unwrap();
+        let (addr, _peer) = fake_peer(None, PROTOCOL_VERSION).await;
+        let p = probe(Network::Testnet, &addr, &Route::Direct, 1, false, None, &quick()).await.unwrap();
         assert!(p.mnauth.is_none());
         assert!(p.addrs.is_empty());
+    }
+
+    fn beacon() -> Announce {
+        let addr = "ukeu3k5oycgaauneqgtnvselmt4yemvoilkln7jpvamvfx7dnkdq.b32.i2p:0".parse().unwrap();
+        Announce { addr, services: 0xc04 }
+    }
+
+    #[tokio::test]
+    async fn probe_announces_our_address() {
+        let (addr, peer) = fake_peer(None, PROTOCOL_VERSION).await;
+        let p = probe(Network::Testnet, &addr, &Route::Direct, 1, true, Some(&beacon()), &quick()).await.unwrap();
+        assert!(p.announced);
+        // The getaddr reply still arrives.
+        assert_eq!(p.addrs.len(), 2);
+        drop(p);
+        let got = peer.await.unwrap();
+        assert_eq!(got.addrv2.len(), 1);
+        let msg = &got.addrv2[0];
+        assert_eq!(parse_addrv2(msg).unwrap(), vec![beacon().addr]);
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+        let time = u32::from_le_bytes(msg[1..5].try_into().unwrap()) as u64;
+        assert!(now.abs_diff(time) < 60);
+        // Services as a CompactSize: 0xfd, then 0x0c04 little-endian.
+        assert_eq!(msg[5..8], [0xfd, 0x04, 0x0c]);
+    }
+
+    #[tokio::test]
+    async fn an_announcement_counts_once_the_peer_answers_our_ping() {
+        let (addr, peer) = fake_peer_pong(None, PROTOCOL_VERSION, false).await;
+        let p = probe(Network::Testnet, &addr, &Route::Direct, 1, false, Some(&beacon()), &quick()).await.unwrap();
+        // Sent, but with no pong we can't tell the peer read it.
+        assert!(!p.announced);
+        drop(p);
+        assert_eq!(peer.await.unwrap().addrv2.len(), 1);
+        let (addr, _peer) = fake_peer(None, PROTOCOL_VERSION).await;
+        let p = probe(Network::Testnet, &addr, &Route::Direct, 1, false, Some(&beacon()), &quick()).await.unwrap();
+        assert!(p.announced);
+    }
+
+    #[tokio::test]
+    async fn no_announcement_to_a_peer_without_addrv2() {
+        let (addr, peer) = fake_peer(None, ADDRV2_PROTO_VERSION - 1).await;
+        let p = probe(Network::Testnet, &addr, &Route::Direct, 1, false, Some(&beacon()), &quick()).await.unwrap();
+        assert!(!p.announced);
+        drop(p);
+        assert!(peer.await.unwrap().addrv2.is_empty());
     }
 
     #[test]
