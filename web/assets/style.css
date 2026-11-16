@@ -753,9 +753,10 @@ svg.epoch-bars rect:hover, svg.epoch-bars rect:focus { fill: var(--brand); outli
 .rank-bars { display: grid; grid-template-columns: max-content minmax(120px, 1fr) max-content; gap: 10px 14px; align-items: center; max-width: 760px; }
 .rank-row { display: contents; }
 .rank-label { color: var(--ink-2); font-size: 13px; }
-.rank-track { height: 10px; border-radius: 5px; background: var(--surface-2); overflow: hidden; }
-.rank-fill { height: 100%; background: var(--brand); border-radius: 5px; }
-.rank-row + .rank-row .rank-fill { background: color-mix(in srgb, var(--brand) 45%, var(--surface-2)); }
+.rank-track { display: flex; height: 10px; border-radius: 5px; background: var(--surface-2); overflow: hidden; }
+.rank-fill { height: 100%; background: var(--brand); }
+.rank-row + .rank-row .rank-fill { background: color-mix(in srgb, var(--brand) 65%, var(--surface-2)); }
+.rank-tie { height: 100%; background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--brand) 55%, var(--surface-2)) 0 3px, transparent 3px 6px); }
 .rank-value { font-size: 14px; }
 .rank-value b { font-weight: 600; }
 .rank-axis { grid-column: 2; display: flex; justify-content: space-between; color: var(--muted); font-size: 11px; margin-top: -6px; }

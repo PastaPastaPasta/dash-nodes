@@ -356,28 +356,36 @@ function rewardsSection(m) {
  */
 function rankBars(m, p) {
   const wrap = el("div", { class: "rank-bars" }, el("p", { class: "muted small", text: "Loading the other evonodes…" }));
+  const gone = () => wrap.closest(".rewards-where")?.remove();
   api(`${net}/platform`).then((doc) => {
     const enabled = doc.evonodes.filter((e) => e.status === "enabled");
-    if (!enabled.length) { wrap.replaceChildren(); return; }
+    if (!enabled.length) { gone(); return; }
     const me = doc.evonodes.find((e) => e.protx === m.protx) ?? { d30: p.totals.d30, last_epoch: p.totals.last_epoch };
+    const n = enabled.length;
+    // Rounded down: never more than it actually beat. Rewards come in whole blocks, so many tie.
+    const per100 = (k) => Math.floor((100 * k) / n);
     const row = (label, key, when, none) => {
       const mine = me[key];
       const below = enabled.filter((e) => e[key] < mine).length;
-      // Rounded down: never more than it actually beat.
-      const of100 = Math.floor((100 * below) / enabled.length);
-      const exact = mine > 0 ? `Earned more than ${fmt(below)} of the ${fmt(enabled.length)} enabled evonodes ${when}` : none;
+      const same = enabled.filter((e) => e[key] === mine && e.protx !== m.protx).length;
+      const ahead = per100(below), tied = per100(same);
+      const exact = mine > 0
+        ? `Earned more than ${fmt(below)}${same ? ` and the same as ${fmt(same)}` : ""} of the ${fmt(n)} enabled evonodes ${when}` : none;
       return el("div", { class: "rank-row", title: exact },
         el("span", { class: "rank-label", text: label }),
-        el("div", { class: "rank-track", role: "img", "aria-label": exact },
-          el("div", { class: "rank-fill", style: { width: `${mine > 0 ? of100 : 0}%` } })),
-        el("span", { class: "rank-value" }, mine > 0 ? [el("b", { text: `Ahead of ${of100}` }), " of every 100"] : none));
+        el("div", { class: "rank-track", role: "meter", "aria-valuemin": 0, "aria-valuemax": 100,
+          "aria-valuenow": mine > 0 ? ahead : 0, "aria-valuetext": exact, "aria-label": label },
+          mine > 0 && el("div", { class: "rank-fill", style: { width: `${ahead}%` } }),
+          mine > 0 && tied > 0 && el("div", { class: "rank-tie", style: { width: `${tied}%` } })),
+        el("span", { class: "rank-value" }, mine > 0
+          ? [el("b", { text: `Ahead of ${ahead}` }), tied > 0 ? ` and tied with ${tied}` : "", " of every 100"] : none));
     };
     wrap.replaceChildren(
       row("Last 30 days", "d30", "over the last 30 days", "Earned nothing"),
-      row("Last epoch", "last_epoch", "last epoch", "Proposed no blocks"),
+      row("Last epoch", "last_epoch", "last epoch", me.last_blocks === 0 ? "Proposed no blocks" : "Earned nothing"),
       el("div", { class: "rank-axis" }, el("span", { text: "earned least" }), el("span", { text: "earned most" })),
-      el("p", { class: "sub", text: "One epoch is mostly luck in the turn order; 30 days evens it out." }));
-  }, () => wrap.replaceChildren());
+      el("p", { class: "sub", text: "One epoch is mostly luck; 30 days is a fairer picture." }));
+  }, gone);
   return wrap;
 }
 
