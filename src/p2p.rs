@@ -125,9 +125,11 @@ async fn probe_inner(
         loop {
             let (cmd, payload) = read_before(&mut stream, magic, deadline).await?;
             match cmd.as_str() {
+                "verack" if mnauth.is_some() => return Ok(()),
                 "verack" => verack = true,
                 "mnauth" => {
-                    mnauth = Some(mnauth::parse(&payload, challenge)?);
+                    // Not Dash Core's form: no MNAUTH, but the handshake goes on.
+                    mnauth = mnauth::parse(&payload, challenge).ok();
                     if verack {
                         return Ok(());
                     }

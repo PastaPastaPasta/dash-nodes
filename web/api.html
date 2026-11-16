@@ -46,9 +46,9 @@
         (<code>ipv4</code>, <code>ipv6</code>, <code>onion</code>, <code>i2p</code>, <code>cjdns</code>, always in that order),
         <code>{network, known, tried, reachable, masternodes, crawled, reason}</code>. <code>known</code> counts addresses heard of in the
         past week; a network we have no route to is <code>crawled: false</code> with a <code>reason</code>, and its addresses never count
-        as unreachable. <code>masternodes</code> counts reachable addresses that a registered masternode's ProTx lists or that proved
-        to be a registered masternode by MNAUTH (signed with its operator key), so a masternode's onion, I2P or IPv6 address counts
-        though its ProTx only lists IPv4.</p>
+        as unreachable. <code>masternodes</code> counts the registered masternodes reachable on the network, at an address their ProTx
+        lists or at one that proved to be them by MNAUTH (signed with the operator key), so a masternode on Tor, I2P or IPv6 counts
+        there though its ProTx only lists IPv4. Each counts once per network however many addresses answer for it.</p>
       <p class="sub">Scopes: <code>all</code> (every node that answered), <code>nonmn</code> (those that aren't masternodes),
         <code>mn</code> and <code>evo</code> (every enabled masternode or evonode, reachable or not, keyed by the user agent it last
         announced in the past 7 days, else <code>Unknown</code>).</p>

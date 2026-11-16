@@ -141,6 +141,20 @@ mod tests {
         assert!(!a.verify(v.protocol, &v.pubkey[2..]));
     }
 
+    /// A legacy key with the sign bit set (0x80) also reads as a valid basic key for the negated
+    /// point, so only the fallback finds the operator's key. Rewrites basic keys with the sign set.
+    #[test]
+    fn legacy_key_with_sign_bit_verifies() {
+        let mut seen = 0;
+        for v in VECTORS.iter().filter(|v| from_hex(v.pubkey).unwrap()[0] & 0xe0 == 0xa0) {
+            let mut key = from_hex(v.pubkey).unwrap();
+            key[0] = (key[0] & 0x1f) | 0x80;
+            assert!(auth(v).verify(v.protocol, &to_hex(&key)), "{}", v.protx);
+            seen += 1;
+        }
+        assert!(seen > 0);
+    }
+
     #[test]
     fn parse_checks_length() {
         assert!(parse(&[0; 127], [0; 32]).is_err());
