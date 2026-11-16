@@ -11,6 +11,17 @@ const f = {
     return `${(c / 1e11).toLocaleString("en-US", { maximumFractionDigits: d >= 100 ? 0 : d >= 1 ? 2 : 4 })} DASH`;
   },
   lastSpan: (d) => (d > 0 ? `the last ${Math.round(d)} days` : null),
+  // common.js's duration(); common.js itself needs a browser to load.
+  duration: (s) => {
+    if (s < 5400) return `${Math.max(1, Math.round(s / 60))} min`;
+    if (s < 129600) return `${Math.round(s / 3600)} h`;
+    const d = s / 86400;
+    if (d < 60) return `${Math.round(d)} days`;
+    if (d < 365) return `${Math.round(d / 30.44)} months`;
+    const y = Number((d / 365.25).toFixed(1));
+    return `${y} year${y === 1 ? "" : "s"}`;
+  },
+  now: Date.UTC(2026, 10, 17, 12),
 };
 
 const OCT_25 = 1_792_936_000; // 2026-10-25
@@ -40,6 +51,8 @@ test("uptime tile names the actual days and first day under 30 rows, and keeps 3
     foot: "10 of 10 port checks, since 16 Nov",
   });
   assert.deepEqual(uptimeTile([], f), { label: "Uptime", value: "–", foot: "no checks yet" });
+  // A node that left the list stops collecting rows: its window ends on the last one.
+  assert.deepEqual(uptimeTile(short.slice(0, 6), { ...f, now: Date.UTC(2026, 11, 20) }).foot, "500 of 504 port checks, 29 Oct – 5 Nov");
 
   const full = Array.from({ length: 45 }, (_, i) => ({
     day: `2026-10-${String((i % 28) + 1).padStart(2, "0")}`,
@@ -72,7 +85,9 @@ test("earned rows drop windows longer than history_days and relabel the lifetime
   assert.deepEqual(earnedRows({ first_epoch: 34, since: OCT_25, history_days: 22, totals }, f), [
     { label: "Since 25 Oct (22 days)", value: "14.14 DASH", note: " · 2 epochs paid" },
   ]);
-  assert.deepEqual(earnedRows({ first_epoch: 34, since: OCT_25, history_days: 1, totals }, f)[0].label, "Since 25 Oct (1 day)");
+  // Under two days (testnet epochs are an hour), the span is said in hours, not "(0 days)".
+  const hours = { ...f, now: (OCT_25 + 3 * 3600) * 1000 };
+  assert.deepEqual(earnedRows({ first_epoch: 34, since: OCT_25, history_days: 0, totals }, hours)[0].label, "Since 25 Oct (3 h)");
 
   // 45 days: keeps Last 30 days and "Since epoch 34", drops 90 and 365.
   const mid = earnedRows({ first_epoch: 34, since: OCT_25, history_days: 45, totals }, f);
@@ -89,14 +104,18 @@ test("earned rows drop windows longer than history_days and relabel the lifetime
   assert.deepEqual(legacy, old);
 });
 
-test("monthly Platform estimate uses the node's own pace, waits for a finished epoch, and leaves old nodes as today", () => {
+test("monthly Platform estimate uses the node's own pace, waits for a full epoch, and leaves old nodes as today", () => {
   assert.deepEqual(
     monthlyRow({ monthly: 3_008_400_234_636, monthly_basis_days: 9.126, monthly_since: OCT_30, history_days: 22 }, f),
     { value: "30.08 DASH", note: " at its pace since 30 Oct (9 days)" },
   );
   assert.deepEqual(
     monthlyRow({ monthly: null, monthly_basis_days: null, monthly_since: null, history_days: 3 }, f),
-    { value: null, note: "once it has a finished epoch" },
+    { value: null, note: "once it has a full epoch" },
+  );
+  assert.deepEqual(
+    monthlyRow({ monthly: 30_000_000_000, monthly_basis_days: 0.125, monthly_since: OCT_30, history_days: 0 }, f),
+    { value: "0.3 DASH", note: " at its pace since 30 Oct (3 h)" },
   );
   assert.deepEqual(
     monthlyRow({ monthly: 2_000_000_000_000, monthly_basis_days: 54.75, monthly_since: null, history_days: 400 }, f),

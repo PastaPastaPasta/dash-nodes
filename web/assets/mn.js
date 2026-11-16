@@ -1,5 +1,5 @@
 import { api, chrome, currentNet, NETWORKS, el, fmt, pct, href, countryName, flag, place, badge, ago, dateTime, dash, nodeStatus, poseBadge, uptimeKind, tile, card,
-  changeText, changeKind, DKG_CHECKS, DKG_OVERALL, blockSpan, blocks, blocksIn, behind, heightWhen, credits, amount, inAbout, toDash, labelled, kv, lastSpan } from "./common.js";
+  changeText, changeKind, DKG_CHECKS, DKG_OVERALL, blockSpan, blocks, blocksIn, behind, heightWhen, credits, amount, inAbout, toDash, labelled, kv, lastSpan, duration } from "./common.js";
 import { svg, sized, axisScale, valueAxis, epochAxis } from "./charts.js";
 import { uptimeTile, rank30Note, earnedRows, monthlyRow, missedTurns } from "./history.js";
 
@@ -412,7 +412,7 @@ function earnedTable(m, p) {
   // Platform Explorer counts from the same epoch records, so it should match ours to the credit.
   const beyond = x?.before_ours > 1e8 ? x.before_ours : null;
   return el("div", {}, el("h3", { text: "Earned on Platform" }), kv([
-    ...earnedRows(p, { fmt, amount }).map((r) => [r.label, r.note ? el("span", {}, r.value, el("span", { class: "muted", text: r.note })) : r.value]),
+    ...earnedRows(p, { fmt, amount, duration }).map((r) => [r.label, r.note ? el("span", {}, r.value, el("span", { class: "muted", text: r.note })) : r.value]),
     x?.total_reward != null && ["Platform Explorer says", el("span", {}, amount(x.total_reward),
       el("span", { class: "muted", text: beyond ? `, ${amount(beyond)} more than ours` : x.epoch != null ? `, the same as ours up to epoch ${fmt(x.epoch - 1)}` : ", the same as ours" }))],
   ]), el("p", { class: "muted small" }, `Drive keeps per-evonode records only from epoch ${fmt(p.first_epoch)} on, so rewards before it can't be checked; `,
@@ -426,7 +426,7 @@ function estimateTable(m, p) {
   const coreMonthly = r?.window_days ? (r.paid_90d / r.window_days) * 30 : null;
   const yearly = r?.annual_yield != null && p.annual_yield != null ? r.annual_yield + p.annual_yield : null;
   const c = p.current;
-  const mo = monthlyRow(p, { fmt, amount, lastSpan });
+  const mo = monthlyRow(p, { amount, lastSpan, duration });
   const missed = missedTurns(p, { fmt });
   return el("div", {}, el("h3", { text: "Estimates" }), kv([
     ["Platform, a month", mo.value != null ? el("span", {}, mo.value, el("span", { class: "muted", text: mo.note })) : el("span", { class: "muted", text: mo.note })],

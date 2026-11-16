@@ -16,7 +16,7 @@ export const isShort = (p) => p?.history_days != null && p.history_days < 30;
  * The uptime tile's { label, value, foot } from `uptime_daily` (oldest first, up to 90 daily rows).
  * With fewer than 30 daily rows, names the row count and the first day instead of "30 days".
  */
-export function uptimeTile(uptimeDaily, { fmt, pct }) {
+export function uptimeTile(uptimeDaily, { fmt, pct, now = Date.now() }) {
   const rows = (uptimeDaily || []).slice(-30);
   const n = rows.length;
   const ok = rows.reduce((a, d) => a + d.ok, 0);
@@ -24,7 +24,11 @@ export function uptimeTile(uptimeDaily, { fmt, pct }) {
   const label = n === 0 ? "Uptime" : `Uptime, ${fmt(n)} day${n === 1 ? "" : "s"}`;
   const value = attempts ? pct(ok / attempts) : "–";
   const counts = attempts ? `${fmt(ok)} of ${fmt(attempts)} port checks` : "no checks yet";
-  const foot = attempts && n < 30 ? `${counts}, since ${shortDate(rows[0].day)}` : counts;
+  // Rows stop when a node leaves the list: then name the last day too, so the window doesn't read as current.
+  const last = n ? rows[n - 1].day : null;
+  const ended = last && Date.parse(`${last}T00:00:00Z`) < now - 2 * 86400 * 1000;
+  const window = !n ? "" : ended ? `${shortDate(rows[0].day)} – ${shortDate(last)}` : `since ${shortDate(rows[0].day)}`;
+  const foot = attempts && n < 30 ? `${counts}, ${window}` : counts;
   return { label, value, foot };
 }
 
@@ -41,14 +45,14 @@ export function rank30Note(p, { fmt }) {
  * "Last D days" row (30, 90, 365) whose D exceeds `history_days`, and labels a < 30-day node's
  * lifetime row "Since <date> (N days)".
  */
-export function earnedRows(p, { fmt, amount }) {
+export function earnedRows(p, { fmt, amount, duration, now = Date.now() }) {
   const t = p.totals;
   const days = p.history_days;
   const windows = [[30, t.d30], [90, t.d90], [365, t.d365]]
     .filter(([d]) => days == null || d <= days)
     .map(([d, v]) => ({ label: `Last ${d} days`, value: amount(v), note: null }));
   const lifetimeLabel = isShort(p) && p.since != null
-    ? `Since ${shortDate(p.since)} (${fmt(days)} day${days === 1 ? "" : "s"})`
+    ? `Since ${shortDate(p.since)} (${days >= 2 ? `${fmt(days)} days` : duration(now / 1000 - p.since)})`
     : `Since epoch ${fmt(p.first_epoch)}`;
   return [
     ...windows,
@@ -57,19 +61,18 @@ export function earnedRows(p, { fmt, amount }) {
 }
 
 /**
- * The "Platform, a month" estimate row as { value, note }: `value` is null before the node has a
- * finished epoch of its own, and `note` is the muted text.
+ * The "Platform, a month" estimate row as { value, note }: `value` is null before a whole epoch has
+ * run since the node registered, and `note` is the muted text.
  */
-export function monthlyRow(p, { fmt, amount, lastSpan }) {
+export function monthlyRow(p, { amount, lastSpan, duration }) {
   if (p?.monthly_since != null && p?.monthly != null && p?.monthly_basis_days != null) {
-    const n = Math.round(p.monthly_basis_days);
     return {
       value: amount(p.monthly),
-      note: ` at its pace since ${shortDate(p.monthly_since)} (${fmt(n)} day${n === 1 ? "" : "s"})`,
+      note: ` at its pace since ${shortDate(p.monthly_since)} (${duration(p.monthly_basis_days * 86400)})`,
     };
   }
-  if ((isShort(p) && p?.monthly == null) || p?.monthly === null) {
-    return { value: null, note: "once it has a finished epoch" };
+  if (p?.monthly === null) {
+    return { value: null, note: "once it has a full epoch" };
   }
   const span = lastSpan(p?.monthly_basis_days);
   return {
