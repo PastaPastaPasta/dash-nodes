@@ -364,13 +364,25 @@ function rankBars(m, p) {
     const n = enabled.length;
     // Rounded down: never more than it actually beat. Rewards come in whole blocks, so many tie.
     const per100 = (k) => Math.floor((100 * k) / n);
+    // The typical evonode is the median one: those that earned nothing would drag a mean down.
+    const median = (key) => {
+      const v = enabled.map((e) => e[key]).sort((a, b) => a - b);
+      return v.length % 2 ? v[(v.length - 1) / 2] : (v[v.length / 2 - 1] + v[v.length / 2]) / 2;
+    };
+    const vsTypical = (mine, mid) => {
+      if (!(mid > 0)) return null;
+      const d = Math.round((mine / mid - 1) * 100);
+      return d === 0 ? "earned about the same as the typical evonode" : `earned ${fmt(Math.abs(d))}% ${d > 0 ? "more" : "less"} than the typical evonode`;
+    };
     const row = (label, key, when, none) => {
       const mine = me[key];
       const below = enabled.filter((e) => e[key] < mine).length;
       const same = enabled.filter((e) => e[key] === mine && e.protx !== m.protx).length;
       const ahead = per100(below), tied = per100(same);
+      const mid = median(key);
       const exact = mine > 0
-        ? `Earned more than ${fmt(below)}${same ? ` and the same as ${fmt(same)}` : ""} of the ${fmt(n)} enabled evonodes ${when}` : none;
+        ? `Earned more than ${fmt(below)}${same ? ` and the same as ${fmt(same)}` : ""} of the ${fmt(n)} enabled evonodes ${when}; ` +
+          `it earned ${amount(mine)}, the typical (median) one ${amount(mid)}` : none;
       return el("div", { class: "rank-row", title: exact },
         el("span", { class: "rank-label", text: label }),
         el("div", { class: "rank-track", role: "meter", "aria-valuemin": 0, "aria-valuemax": 100,
@@ -378,7 +390,8 @@ function rankBars(m, p) {
           mine > 0 && el("div", { class: "rank-fill", style: { width: `${ahead}%` } }),
           mine > 0 && tied > 0 && el("div", { class: "rank-tie", style: { width: `${tied}%` } })),
         el("span", { class: "rank-value" }, mine > 0
-          ? [el("b", { text: `Ahead of ${ahead}` }), tied > 0 ? ` and tied with ${tied}` : "", " of every 100"] : none));
+          ? [el("b", { text: `Ahead of ${ahead}` }), tied > 0 ? ` and tied with ${tied}` : "", " of every 100",
+            el("span", { class: "rank-vs", text: vsTypical(mine, mid) })] : none));
     };
     wrap.replaceChildren(
       row("Last 30 days", "d30", "over the last 30 days", "Earned nothing"),
