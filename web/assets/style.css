@@ -750,13 +750,23 @@ svg.epoch-bars rect:hover, svg.epoch-bars rect:focus { fill: var(--brand); outli
 .card.rewards .tile { box-shadow: none; background: var(--surface-2); }
 .card.rewards h3 { margin-top: 4px; }
 .rewards-where { margin: 4px 0 18px; }
-.rank-strip svg.ticks { width: 100%; height: 44px; display: block; }
-.rank-strip .tick { fill: color-mix(in srgb, var(--ink-2) 55%, transparent); }
-.rank-strip .mid { fill: var(--surface-2); }
-.rank-strip .median { fill: var(--ink-2); }
-.rank-strip .me { fill: var(--brand); }
-.rank-strip .strip-axis { margin-top: 4px; }
-.rank-strip .sub { margin: 8px 0 0; }
+.rank-bars { display: grid; grid-template-columns: max-content minmax(120px, 1fr) max-content; gap: 10px 14px; align-items: center; max-width: 760px; }
+.rank-row { display: contents; }
+.rank-label { color: var(--ink-2); font-size: 13px; }
+.rank-track { display: flex; height: 10px; border-radius: 5px; background: var(--surface-2); overflow: hidden; }
+.rank-fill { height: 100%; background: var(--brand); }
+.rank-row + .rank-row .rank-fill { background: color-mix(in srgb, var(--brand) 65%, var(--surface-2)); }
+.rank-tie { height: 100%; background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--brand) 55%, var(--surface-2)) 0 3px, transparent 3px 6px); }
+.rank-value { font-size: 14px; }
+.rank-value b { font-weight: 600; }
+.rank-axis { grid-column: 2; display: flex; justify-content: space-between; color: var(--muted); font-size: 11px; margin-top: -6px; }
+.rank-bars > p { grid-column: 1 / -1; margin: 2px 0 0; }
+@media (max-width: 540px) {
+  .rank-bars { grid-template-columns: 1fr; gap: 12px; }
+  .rank-row { display: grid; grid-template-columns: 1fr max-content; gap: 4px 10px; }
+  .rank-row .rank-track { grid-column: 1 / -1; grid-row: 2; }
+  .rank-axis { grid-column: 1; margin-top: -8px; }
+}
 .card.rewards .live { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--grid); }
 .card.rewards .live .card-head { margin-bottom: 6px; }
 .card.rewards .live h3 { margin: 0; color: var(--ink); font-size: 15px; }
