@@ -360,7 +360,7 @@ pub async fn handshakes(t: &Target<'_>, limit: Duration) -> bool {
 
 /// version → (their version) → verack → (their verack). Returns once both have arrived.
 async fn handshake(s: &mut Session, t: &Target<'_>, until: Instant) -> Result<p2p::Version> {
-    s.send("version", &p2p::version_payload(t.addr, 0)).await?;
+    s.send("version", &p2p::version_payload(t.addr, 0, None)).await?;
     let mut version = None;
     let mut verack = false;
     while version.is_none() || !verack {
@@ -705,7 +705,7 @@ mod tests {
         while let Ok((cmd, payload)) = p2p::read_message(&mut stream, magic, MAX_MESSAGE).await {
             let reply: Vec<Vec<u8>> = match cmd.as_str() {
                 "version" => vec![
-                    send("version", &p2p::version_payload(&me, served.len() as i32 - 1)),
+                    send("version", &p2p::version_payload(&me, served.len() as i32 - 1, None)),
                     send("sendheaders", &[]),
                     send("verack", &[]),
                     send("sendcmpct", &[0; 9]),

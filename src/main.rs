@@ -6,6 +6,7 @@ mod collector;
 mod crawler;
 mod db;
 mod geo;
+mod mnauth;
 mod network;
 mod p2p;
 mod platform;
@@ -238,6 +239,11 @@ async fn probe(addr: &str, network: &str, getaddr: bool, transport: &TransportAr
     let p = p2p::probe(net, &addr, &route, 0, getaddr, &transport::default_timeouts(addr.net())).await?;
     println!("{addr} ({}, via {route:?}) in {:.1?}", addr.net(), started.elapsed());
     println!("{:#?}", p.version);
+    match &p.mnauth {
+        // Checking the signature needs the operator key from the masternode list; the crawl does that.
+        Some(a) => println!("MNAUTH: says it is masternode {} (signature not checked here)", a.pro_tx_hash),
+        None => println!("MNAUTH: none (not a masternode)"),
+    }
     // The rules a handshake can show; reachability and Platform bans come from the crawl and dashd.
     let v = &p.version;
     let r = readiness::evaluate(&readiness::Input {

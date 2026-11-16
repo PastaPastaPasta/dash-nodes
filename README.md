@@ -13,7 +13,11 @@ mnowatch.org/user-agents and the old dashninja.pl:
   `addrv2` (BIP155), so other nodes tell it about all of them; it reaches onion peers through Tor,
   I2P peers through i2pd, CJDNS through a cjdns node, and IPv6 directly when the host reaches the
   IPv6 internet, natively or through NAT66 (or through a SOCKS5 proxy). A network without a route is still counted as *known*,
-  just not crawled; each address counts as one node, so a node on IPv4 and Tor counts twice.
+  just not crawled; each address counts as one node, so a node on IPv4 and Tor counts twice. Our `version` carries an MNAUTH
+  challenge, so a masternode answers with its ProTx hash signed by its operator key (`src/mnauth.rs`) on whatever network we
+  reached it: its onion, I2P or IPv6 address counts as a masternode though its ProTx only lists IPv4. Dash Core never gives its
+  own onion or I2P address to a peer that reached it another way, and keeps such addresses only when it can reach that network,
+  so those addresses come from Tor- and I2P-using peers' `getaddr` replies, our own dashd (which has Tor and I2P) and ProTxes.
 - **Masternode list:** the deterministic list from dashd, a live port check per masternode, version
   history, daily port-check uptime, and every payment back to DIP3 enforcement (from each block's
   coinbase and the masternode list at its height, backfilled newest first). A payment is what the

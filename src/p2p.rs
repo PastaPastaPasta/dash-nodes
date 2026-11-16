@@ -3,7 +3,8 @@
 //!
 //! We connect as an ordinary, non-masternode, non-relaying peer, so the remote treats us like any
 //! inbound light client: it answers our `version`, and answers one `getaddr` per connection. We
-//! announce `sendaddrv2` (BIP155), so the reply can include onion, I2P and CJDNS addresses.
+//! announce `sendaddrv2` (BIP155), so the reply can include onion, I2P and CJDNS addresses, and send
+//! an MNAUTH challenge, so a masternode says which one it is on any network (see mnauth.rs).
 
 use std::net::{IpAddr, Ipv6Addr};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -15,6 +16,7 @@ use tokio::net::TcpStream;
 use tokio::time::timeout;
 
 use crate::addr::{self, Host, PeerAddr};
+use crate::mnauth::{self, MnAuth};
 use crate::network::Network;
 use crate::transport::{self, Route};
 
@@ -62,11 +64,13 @@ pub struct Version {
 pub struct Probe {
     pub version: Version,
     pub addrs: Vec<PeerAddr>,
+    /// The masternode's answer to our challenge; checked against its operator key by the caller.
+    pub mnauth: Option<MnAuth>,
 }
 
-/// Connects over `route`, exchanges versions and, if `getaddr` is set, collects the peer's address
-/// sample (at most 1000 addresses). The whole exchange, writes included, is bounded by the
-/// timeouts, which are per network (see transport::default_limits).
+/// Connects over `route`, exchanges versions, reads a masternode's MNAUTH and, if `getaddr` is set,
+/// collects the peer's address sample (at most 1000 addresses). The whole exchange, writes
+/// included, is bounded by the timeouts, which are per network (see transport::default_limits).
 pub async fn probe(
     net: Network,
     addr: &PeerAddr,
@@ -75,7 +79,9 @@ pub async fn probe(
     getaddr: bool,
     t: &Timeouts,
 ) -> Result<Probe> {
-    let budget = t.connect + t.handshake + if getaddr { t.getaddr } else { Duration::ZERO } + Duration::from_secs(2);
+    // The handshake timeout covers the peer's version, and again its verack and MNAUTH.
+    let budget =
+        t.connect + 2 * t.handshake + if getaddr { t.getaddr } else { Duration::ZERO } + Duration::from_secs(2);
     timeout(budget, probe_inner(net, addr, route, start_height, getaddr, t)).await.map_err(|_| anyhow!("timeout"))?
 }
 
@@ -91,7 +97,8 @@ async fn probe_inner(
     let mut stream = transport::connect(route, addr, t.connect).await?;
 
     let magic = net.magic();
-    stream.write_all(&encode(magic, "version", &version_payload(addr, start_height))).await?;
+    let challenge: [u8; 32] = rand::random();
+    stream.write_all(&encode(magic, "version", &version_payload(addr, start_height, Some(&challenge)))).await?;
 
     let deadline = Instant::now() + t.handshake;
     let version = loop {
@@ -109,17 +116,38 @@ async fn probe_inner(
     }
     stream.write_all(&encode(magic, "verack", &[])).await?;
 
+    // Its verack, then a masternode's MNAUTH: Dash Core sends that first thing on our verack, ahead
+    // of sendheaders, so any other message after the verack means the peer isn't one.
+    let deadline = Instant::now() + t.handshake;
+    let mut mnauth = None;
+    let after_verack: Result<()> = async {
+        let mut verack = false;
+        loop {
+            let (cmd, payload) = read_before(&mut stream, magic, deadline).await?;
+            match cmd.as_str() {
+                "verack" => verack = true,
+                "mnauth" => {
+                    mnauth = Some(mnauth::parse(&payload, challenge)?);
+                    if verack {
+                        return Ok(());
+                    }
+                }
+                _ if verack => return Ok(()),
+                _ => {}
+            }
+        }
+    }
+    .await;
+    // The version is what we came for; a missing verack or MNAUTH isn't a failure.
+    if let Err(e) = &after_verack {
+        tracing::trace!(%addr, "after verack: {e:#}");
+    }
+
     let mut addrs = Vec::new();
-    if getaddr {
-        // The peer only processes getaddr after the handshake; wait for its verack first.
+    // A timeout mid-message leaves the stream unusable, and getaddr needs the handshake done.
+    if getaddr && after_verack.is_ok() {
         let deadline = Instant::now() + t.getaddr;
         let result: Result<()> = async {
-            loop {
-                let (cmd, _) = read_before(&mut stream, magic, deadline).await?;
-                if cmd == "verack" {
-                    break;
-                }
-            }
             stream.write_all(&encode(magic, "getaddr", &[])).await?;
             // We never answer pings: we're gone long before the peer would time us out.
             for _ in 0..MAX_GETADDR_MESSAGES {
@@ -145,7 +173,7 @@ async fn probe_inner(
             tracing::trace!(%addr, "getaddr: {e:#}");
         }
     }
-    Ok(Probe { version, addrs })
+    Ok(Probe { version, addrs, mnauth })
 }
 
 async fn read_before(stream: &mut TcpStream, magic: [u8; 4], deadline: Instant) -> Result<(String, Vec<u8>)> {
@@ -205,7 +233,8 @@ pub fn encode(magic: [u8; 4], cmd: &str, payload: &[u8]) -> Vec<u8> {
     out
 }
 
-pub fn version_payload(addr_you: &PeerAddr, start_height: i32) -> Vec<u8> {
+/// Our `version`. With `mnauth_challenge`, a masternode answers with MNAUTH.
+pub fn version_payload(addr_you: &PeerAddr, start_height: i32, mnauth_challenge: Option<&[u8; 32]>) -> Vec<u8> {
     let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64;
     let mut p = Vec::with_capacity(128);
     p.extend_from_slice(&PROTOCOL_VERSION.to_le_bytes());
@@ -219,8 +248,12 @@ pub fn version_payload(addr_you: &PeerAddr, start_height: i32) -> Vec<u8> {
     p.extend_from_slice(ua.as_bytes());
     p.extend_from_slice(&start_height.to_le_bytes());
     p.push(0); // fRelay = false: we don't want transaction announcements.
-    // mnauth challenge and fMasternode are optional trailing fields; leaving them out is the
-    // same as "not a masternode".
+    // mnauth challenge and fMasternode are optional trailing fields; a null challenge (or none)
+    // asks for no MNAUTH.
+    if let Some(c) = mnauth_challenge {
+        p.extend_from_slice(c);
+        p.push(0); // fMasternode = false
+    }
     p
 }
 
@@ -418,7 +451,7 @@ mod tests {
     #[test]
     fn version_roundtrip() {
         let addr: PeerAddr = "1.2.3.4:9999".parse().unwrap();
-        let payload = version_payload(&addr, 123);
+        let payload = version_payload(&addr, 123, None);
         let v = parse_version(&payload).unwrap();
         assert_eq!(v.protocol, PROTOCOL_VERSION);
         assert_eq!(v.user_agent, user_agent());
@@ -429,13 +462,91 @@ mod tests {
         assert_eq!(payload[20 + 8..20 + 26], [&[0u8; 10][..], &[0xff, 0xff, 1, 2, 3, 4], &[0x27, 0x0f]].concat()[..]);
         // An onion peer's address can't be expressed in v1: zeros.
         let onion: PeerAddr = "pg6mmjiyjmcrsslvykfwnntlaru7p5svn6y2ymmju6nubxndf4pscryd.onion:9999".parse().unwrap();
-        assert_eq!(version_payload(&onion, 1)[20 + 8..20 + 26], [0u8; 18]);
+        assert_eq!(version_payload(&onion, 1, None)[20 + 8..20 + 26], [0u8; 18]);
+    }
+
+    /// A Dash Core peer on a local port: answers our version, our verack (with MNAUTH first when
+    /// `mn` is set, signing nothing: the probe leaves checking to the caller) and a getaddr.
+    async fn fake_peer(mn: Option<[u8; 32]>) -> (PeerAddr, tokio::task::JoinHandle<Option<[u8; 32]>>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = PeerAddr::from_socket(listener.local_addr().unwrap());
+        let task = tokio::spawn(async move {
+            let (mut s, _) = listener.accept().await.unwrap();
+            let magic = Network::Testnet.magic();
+            let me: PeerAddr = "1.2.3.4:19999".parse().unwrap();
+            let mut challenge = None;
+            while let Ok((cmd, payload)) = read_message(&mut s, magic, MAX_PAYLOAD).await {
+                let mut out = Vec::new();
+                match cmd.as_str() {
+                    "version" => {
+                        // Our challenge is the 32 bytes before the trailing fMasternode.
+                        challenge = Some(payload[payload.len() - 33..payload.len() - 1].try_into().unwrap());
+                        out.push(encode(magic, "version", &version_payload(&me, 7, Some(&[9; 32]))));
+                        out.push(encode(magic, "sendaddrv2", &[]));
+                        out.push(encode(magic, "verack", &[]));
+                    }
+                    "verack" => {
+                        if let Some(protx) = mn {
+                            out.push(encode(magic, "mnauth", &[&protx[..], &[0xab; 96]].concat()));
+                        }
+                        out.push(encode(magic, "sendheaders", &[]));
+                        out.push(encode(magic, "senddsq", &[1]));
+                    }
+                    "getaddr" => {
+                        let mut a = vec![2];
+                        for ip in [[5, 6, 7, 8], [9, 10, 11, 12]] {
+                            a.extend_from_slice(&[0; 4]);
+                            a.push(1); // services (CompactSize)
+                            a.extend_from_slice(&[1, 4]);
+                            a.extend_from_slice(&ip);
+                            a.extend_from_slice(&19999u16.to_be_bytes());
+                        }
+                        out.push(encode(magic, "addrv2", &a));
+                    }
+                    _ => {}
+                }
+                for m in out {
+                    s.write_all(&m).await.unwrap();
+                }
+            }
+            challenge
+        });
+        (addr, task)
+    }
+
+    fn quick() -> Timeouts {
+        Timeouts { connect: Duration::from_secs(2), handshake: Duration::from_secs(2), getaddr: Duration::from_secs(2) }
+    }
+
+    #[tokio::test]
+    async fn probe_reads_mnauth() {
+        let mut protx = [0u8; 32];
+        protx[0] = 0x01; // little-endian on the wire: the printed hash ends in 01
+        let (addr, peer) = fake_peer(Some(protx)).await;
+        let p = probe(Network::Testnet, &addr, &Route::Direct, 1, true, &quick()).await.unwrap();
+        assert_eq!(p.version.start_height, 7);
+        let auth = p.mnauth.unwrap();
+        assert_eq!(auth.pro_tx_hash, format!("{}01", "0".repeat(62)));
+        assert_eq!(auth.sig, [0xab; 96]);
+        // MNAUTH doesn't eat the getaddr reply.
+        assert_eq!(p.addrs.len(), 2);
+        let sent = peer.await.unwrap().unwrap();
+        assert_eq!(auth.challenge, sent);
+        assert_ne!(sent, [0; 32]);
+    }
+
+    #[tokio::test]
+    async fn probe_of_a_plain_node_has_no_mnauth() {
+        let (addr, _peer) = fake_peer(None).await;
+        let p = probe(Network::Testnet, &addr, &Route::Direct, 1, false, &quick()).await.unwrap();
+        assert!(p.mnauth.is_none());
+        assert!(p.addrs.is_empty());
     }
 
     #[test]
     fn version_relay_flag() {
         let addr: PeerAddr = "1.2.3.4:9999".parse().unwrap();
-        let mut payload = version_payload(&addr, 1);
+        let mut payload = version_payload(&addr, 1, None);
         // relay = 1, then the trailing mnauth challenge and fMasternode a Dash Core node sends.
         *payload.last_mut().unwrap() = 1;
         payload.extend_from_slice(&[7u8; 32]);

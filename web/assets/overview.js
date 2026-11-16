@@ -429,7 +429,10 @@ function renderNetworks() {
         n.crawled
           ? el("td", { class: "r", text: fmt(n.reachable) })
           : el("td", { class: "r muted", title: n.reason || "", text: n.reason ? `not crawled: ${n.reason}` : "not crawled" }),
-        el("td", { class: "r", text: n.crawled ? fmt(n.masternodes) : "–" })))))));
+        el("td", { class: "r", text: n.crawled ? fmt(n.masternodes) : "–" }))))),
+    el("p", { class: "muted small", text: "Masternodes are counted on every address that proves to be one (MNAUTH), not only the one in its ProTx. " +
+      "Tor and I2P addresses only spread between nodes that use those networks, and Dash Core never gives its own onion or I2P address to a peer that reached it another way, " +
+      "so a node's Tor or I2P address is known only once another node shares it or its ProTx lists it (possible since Dash Core 24)." })));
 }
 
 let historyRequest = 0;
