@@ -236,7 +236,7 @@ async fn probe(addr: &str, network: &str, getaddr: bool, transport: &TransportAr
     let addr = resolve_addr(addr).await?;
     let route = transport.config().routes().require(addr.net())?;
     let started = Instant::now();
-    let p = p2p::probe(net, &addr, &route, 0, getaddr, &transport::default_timeouts(addr.net())).await?;
+    let p = p2p::probe(net, &addr, &route, 0, getaddr, None, &transport::default_timeouts(addr.net())).await?;
     println!("{addr} ({}, via {route:?}) in {:.1?}", addr.net(), started.elapsed());
     println!("{:#?}", p.version);
     match &p.mnauth {

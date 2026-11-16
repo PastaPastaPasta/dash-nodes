@@ -9,12 +9,20 @@
 #   RPC_ALLOW_CIDR     who may call RPC besides localhost      (default 172.30.86.0/24, the compose net)
 #   DASHD_DBCACHE_MB   -dbcache in MiB                         (default 1024)
 #   DASHD_ONION        Tor SOCKS5 proxy ip:port for .onion peers (-onion; default none)
-#   DASHD_I2PSAM       i2pd SAM bridge ip:port for I2P peers (-i2psam, outbound only; default none)
+#   DASHD_I2PSAM       i2pd SAM bridge ip:port for I2P peers (-i2psam; default none)
+#   DASHD_OVERLAY_BIND this container's ip:port on the overlay network, to take P2P connections from
+#                      Tor and I2P only (default none: no inbound connections at all)
+#   DASHD_TORCONTROL   Tor control port ip:port, for an onion service to DASHD_OVERLAY_BIND
+#   DASHD_TORPASSWORD_FILE  the control port's password (default /var/lib/tor-control/password,
+#                      which the tor container writes)
 #   DASHD_CJDNSREACHABLE  true if this container can route fc00::/8 (-cjdnsreachable; default false)
 #   DASHD_EXTRA_ARGS   extra dashd flags, word-split
 #
 # The overlay options let dashd connect to (and so keep in its address manager, which the crawler
-# reads) onion, I2P and CJDNS peers. dashd resolves them once at startup: use IP addresses.
+# reads) onion, I2P and CJDNS peers. With DASHD_OVERLAY_BIND it also has an onion service and an I2P
+# destination, which the crawler announces: Tor and I2P nodes connect to it there and tell it their
+# own onion and I2P addresses, which Dash Core never tells a peer that reached it another way. dashd
+# resolves these once at startup: use IP addresses.
 set -eu
 umask 077
 
@@ -22,6 +30,25 @@ NETWORK="${DASH_NETWORK:-mainnet}"
 RPC_USER="${RPC_USER:-dashnodes}"
 PW_FILE="${RPC_PASSWORD_FILE:-/run/secrets/rpc_password}"
 CONF=/tmp/dash.conf
+
+# The Tor control port's password, which the tor container writes on its first start.
+tor_password() {
+  f="${DASHD_TORPASSWORD_FILE:-/var/lib/tor-control/password}"
+  i=0
+  while [ ! -s "$f" ]; do
+    i=$((i + 1))
+    if [ "$i" -gt 60 ]; then
+      echo "dash-nodes-dashd: no Tor control password in $f, so no onion service" >&2
+      return 1
+    fi
+    sleep 1
+  done
+  pw="$(tr -d '\r\n' < "$f")"
+  case "$pw" in
+    *[!0-9a-f]*) echo "dash-nodes-dashd: Tor control password in $f isn't hex" >&2; return 1 ;;
+  esac
+  printf '%s\n' "$pw"
+}
 
 RPC_PASSWORD="$(tr -d '\r\n' < "$PW_FILE")"
 case "$RPC_USER$RPC_PASSWORD" in
@@ -45,14 +72,34 @@ cp /etc/dash-nodes/dash.conf "$CONF"
   echo "rpcuser=$RPC_USER"
   echo "rpcpassword=$RPC_PASSWORD"
   echo "dbcache=${DASHD_DBCACHE_MB:-1024}"
+  if [ -n "${DASHD_OVERLAY_BIND:-}" ]; then
+    # The one bind is on the overlay network, which only Tor, i2pd and our own containers reach,
+    # and it's tagged onion. I2P connections come through the SAM bridge, not a bind. The host's
+    # own addresses are never ours to announce.
+    echo 'listen=1'
+    echo "bind=$DASHD_OVERLAY_BIND=onion"
+    echo 'discover=0'
+  else
+    # Observer only: the crawler makes its own outbound connections.
+    echo 'listen=0'
+  fi
   if [ -n "${DASHD_ONION:-}" ]; then
     echo "onion=$DASHD_ONION"
-    # Outbound only: no onion service of our own (listen=0 anyway).
-    echo 'listenonion=0'
+    if [ -n "${DASHD_OVERLAY_BIND:-}" ] && [ -n "${DASHD_TORCONTROL:-}" ] && TOR_PASSWORD="$(tor_password)"; then
+      # dashd creates the onion service itself (ADD_ONION) and keeps its key in the datadir.
+      echo "torcontrol=$DASHD_TORCONTROL"
+      echo "torpassword=$TOR_PASSWORD"
+    else
+      echo 'listenonion=0'
+    fi
   fi
   if [ -n "${DASHD_I2PSAM:-}" ]; then
     echo "i2psam=$DASHD_I2PSAM"
-    echo 'i2pacceptincoming=0'
+    if [ -n "${DASHD_OVERLAY_BIND:-}" ]; then
+      echo 'i2pacceptincoming=1'
+    else
+      echo 'i2pacceptincoming=0'
+    fi
   fi
   case "${DASHD_CJDNSREACHABLE:-false}" in
     true | TRUE | True | 1 | yes | on) echo 'cjdnsreachable=1' ;;

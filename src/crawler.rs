@@ -8,8 +8,9 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use futures::StreamExt;
+use rand::Rng;
 use rand::SeedableRng;
-use rand::seq::SliceRandom;
+use rand::seq::{IndexedRandom, SliceRandom};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::{Value, json};
 
@@ -18,7 +19,7 @@ use crate::collector::pose_status;
 use crate::db::{self, day_of, get_meta, query_all, set_meta};
 use crate::mnauth::MnAuth;
 use crate::network::Network;
-use crate::p2p::{self, Probe};
+use crate::p2p::{self, Announce, Probe};
 use crate::state::NetCtx;
 use crate::transport::{Route, Routes};
 use crate::ua;
@@ -39,6 +40,9 @@ const BOOTSTRAP_GETADDR: usize = 1_000;
 const PER_CRAWL_RETENTION: i64 = 14 * DAY;
 const MN_DAILY_RETENTION: i64 = 180 * DAY;
 const NODE_RETENTION: i64 = 30 * DAY;
+/// How often each node hears our onion or I2P address: about as often as Dash Core announces its
+/// own address to a peer (AVG_LOCAL_ADDRESS_BROADCAST_INTERVAL).
+const ANNOUNCE_EVERY: i64 = DAY;
 
 pub async fn run(ctx: Arc<NetCtx>) {
     // Pick up where the last process left off, so status doesn't read "never crawled" after a restart.
@@ -93,6 +97,21 @@ pub async fn run(ctx: Arc<NetCtx>) {
     }
 }
 
+/// What a probe does besides the handshake.
+#[derive(Clone, Copy, Default)]
+struct Ask {
+    getaddr: bool,
+    announce: Option<Announce>,
+}
+
+/// A `nodes` row due for a probe.
+struct Due {
+    addr: String,
+    last_success: Option<i64>,
+    last_getaddr: Option<i64>,
+    last_announce: Option<i64>,
+}
+
 struct Outcome {
     addr: PeerAddr,
     asked_addrs: bool,
@@ -105,6 +124,7 @@ async fn crawl_once(ctx: &NetCtx) -> Result<i64> {
     // Decided once per crawl: a proxy or CJDNS router that appears later counts from the next one.
     let routes = ctx.crawl_cfg.transport.routes();
     learn_from_dashd(ctx).await?;
+    let beacon = beacon(ctx).await;
 
     let id = ctx
         .db
@@ -119,10 +139,19 @@ async fn crawl_once(ctx: &NetCtx) -> Result<i64> {
         .read(move |c| {
             // Every core P2P address of every masternode, on any network.
             let mn: Vec<String> = query_all(c, "SELECT DISTINCT addr FROM mn_addrs", [], |r| r.get(0))?;
-            let due: Vec<(String, Option<i64>, Option<i64>)> =
-                query_all(c, "SELECT addr, last_success, last_getaddr FROM nodes WHERE next_try <= ?1", [now], |r| {
-                    Ok((r.get(0)?, r.get(1)?, r.get(2)?))
-                })?;
+            let due: Vec<Due> = query_all(
+                c,
+                "SELECT addr, last_success, last_getaddr, last_announce FROM nodes WHERE next_try <= ?1",
+                [now],
+                |r| {
+                    Ok(Due {
+                        addr: r.get(0)?,
+                        last_success: r.get(1)?,
+                        last_getaddr: r.get(2)?,
+                        last_announce: r.get(3)?,
+                    })
+                },
+            )?;
             Ok((mn, due))
         })
         .await?;
@@ -140,14 +169,14 @@ async fn crawl_once(ctx: &NetCtx) -> Result<i64> {
     upsert_addrs(ctx, mn_addrs.clone(), "mnlist").await?;
     // Addresses on networks we can't reach right now stay in `nodes` untouched: known, not crawled.
     let usable = |a: &PeerAddr| routes.for_addr(a).is_some();
-    let mut targets: HashMap<PeerAddr, bool> = HashMap::new();
+    let mut targets: HashMap<PeerAddr, Ask> = HashMap::new();
     for a in mn_addrs.into_iter().filter(usable) {
-        targets.insert(a, false);
+        targets.insert(a, Ask::default());
     }
     // Ask nodes that answered recently for addresses, a random sample each crawl.
     let mut getaddr_candidates = Vec::new();
     let mut unproven = Vec::new();
-    for (addr, last_success, last_getaddr) in &due {
+    for Due { addr, last_success, last_getaddr, last_announce } in &due {
         let Ok(a) = addr.parse::<PeerAddr>() else {
             continue;
         };
@@ -156,7 +185,7 @@ async fn crawl_once(ctx: &NetCtx) -> Result<i64> {
         }
         match last_success {
             Some(t) if now - t < ACTIVE_WINDOW => {
-                targets.entry(a).or_insert(false);
+                targets.entry(a).or_default().announce = pick_announce(&beacon, *last_announce, now, &mut rng);
                 if last_getaddr.is_none_or(|t| now - t > GETADDR_EVERY) {
                     getaddr_candidates.push(a);
                 }
@@ -167,7 +196,7 @@ async fn crawl_once(ctx: &NetCtx) -> Result<i64> {
     unproven.shuffle(&mut rng);
     unproven.truncate(MAX_UNPROVEN_PER_CRAWL);
     for a in &unproven {
-        targets.entry(*a).or_insert(false);
+        targets.entry(*a).or_default();
     }
     // Bootstrap: with nothing heard yet, ask a sample of whoever we have.
     let limit = if first_crawl {
@@ -178,7 +207,7 @@ async fn crawl_once(ctx: &NetCtx) -> Result<i64> {
     };
     getaddr_candidates.shuffle(&mut rng);
     for a in getaddr_candidates.into_iter().take(limit) {
-        targets.insert(a, true);
+        targets.entry(a).or_default().getaddr = true;
     }
 
     let tip = ctx.status.read().unwrap().blocks as i32;
@@ -238,6 +267,44 @@ fn is_trusted_gossip(net: Network, a: &PeerAddr) -> bool {
     a.is_routable() && a.port == net.default_port_for(a.net())
 }
 
+/// Our dashd's onion and I2P addresses, when it accepts connections there (deploy/dashd), to
+/// announce to the nodes we probe. Dash Core never tells a peer its own onion or I2P address unless
+/// the peer reached it on that network, so without a seed or a ProTx listing one, nobody hears of
+/// any (testnet had none). Ours seed them: nodes that use Tor or I2P connect to our dashd there and
+/// announce their own addresses to it, which learn_from_dashd picks up.
+async fn beacon(ctx: &NetCtx) -> Vec<Announce> {
+    match ctx.rpc.call::<Value>("getnetworkinfo", json!([])).await {
+        Ok(info) => beacon_from(ctx.net, &info),
+        Err(e) => {
+            tracing::warn!(net = ctx.net.name(), "getnetworkinfo: {e:#}");
+            Vec::new()
+        }
+    }
+}
+
+fn beacon_from(net: Network, info: &Value) -> Vec<Announce> {
+    let Some(services) = info["localservices"].as_str().and_then(|s| u64::from_str_radix(s, 16).ok()) else {
+        return Vec::new();
+    };
+    info["localaddresses"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|e| PeerAddr::from_parts(e["address"].as_str()?, u16::try_from(e["port"].as_u64()?).ok()?))
+        .filter(|a| matches!(a.net(), AddrNet::Onion | AddrNet::I2p) && is_trusted_gossip(net, a))
+        .map(|addr| Announce { addr, services })
+        .collect()
+}
+
+/// One of our addresses for a node that hasn't heard one in ANNOUNCE_EVERY. Dash Core takes only
+/// one from a peer it just met, so each probe announces one, picked at random.
+fn pick_announce(beacon: &[Announce], last: Option<i64>, now: i64, rng: &mut impl Rng) -> Option<Announce> {
+    if last.is_some_and(|t| now - t < ANNOUNCE_EVERY) {
+        return None;
+    }
+    beacon.choose(rng).copied()
+}
+
 /// Takes the trusted gossiped addresses out of successful probes. Addresses on networks we can't
 /// reach are kept too, as known.
 fn take_gossip(ctx: &NetCtx, outcomes: &mut [Outcome]) -> Vec<PeerAddr> {
@@ -256,14 +323,14 @@ fn fresh_targets(
     gossip: &[PeerAddr],
     seen: &HashSet<PeerAddr>,
     keep: impl Fn(&PeerAddr) -> bool,
-) -> (Vec<(PeerAddr, bool)>, usize) {
+) -> (Vec<(PeerAddr, Ask)>, usize) {
     let mut new = HashSet::new();
     let mut fresh: Vec<PeerAddr> =
         gossip.iter().copied().filter(|a| keep(a) && !seen.contains(a) && new.insert(*a)).collect();
     let found = fresh.len();
     fresh.shuffle(&mut rand::rng());
     fresh.truncate(MAX_UNPROVEN_PER_CRAWL);
-    (fresh.into_iter().map(|a| (a, false)).collect(), found)
+    (fresh.into_iter().map(|a| (a, Ask::default())).collect(), found)
 }
 
 /// Probes every target over its network's route, each network with its own concurrency limit.
@@ -272,12 +339,12 @@ fn fresh_targets(
 async fn probe_all(
     ctx: &NetCtx,
     routes: &Routes,
-    targets: Vec<(PeerAddr, bool)>,
+    targets: Vec<(PeerAddr, Ask)>,
     tip: i32,
     deadline: Option<Instant>,
 ) -> Vec<Outcome> {
     let net = ctx.net;
-    let mut by_net: [Vec<(PeerAddr, bool)>; AddrNet::COUNT] = Default::default();
+    let mut by_net: [Vec<(PeerAddr, Ask)>; AddrNet::COUNT] = Default::default();
     for t in targets {
         by_net[t.0.net().index()].push(t);
     }
@@ -290,9 +357,10 @@ async fn probe_all(
             let route = &route;
             let done: Vec<Outcome> = futures::stream::iter(list)
                 .take_while(|_| std::future::ready(deadline.is_none_or(|d| Instant::now() < d)))
-                .map(|(addr, asked_addrs)| async move {
-                    let result = p2p::probe(net, &addr, route, tip, asked_addrs, &limits.timeouts).await;
-                    Outcome { addr, asked_addrs, result }
+                .map(|(addr, ask)| async move {
+                    let result =
+                        p2p::probe(net, &addr, route, tip, ask.getaddr, ask.announce.as_ref(), &limits.timeouts).await;
+                    Outcome { addr, asked_addrs: ask.getaddr, result }
                 })
                 .buffer_unordered(limits.concurrency)
                 .collect()
@@ -370,6 +438,7 @@ struct ProbeRow {
     addr: String,
     net: AddrNet,
     asked_addrs: bool,
+    announced: bool,
     ok: Option<p2p::Version>,
     mnauth: Option<MnAuth>,
     error: Option<String>,
@@ -380,14 +449,15 @@ impl ProbeRow {
     fn from(o: Outcome, geo: &crate::geo::Geo) -> ProbeRow {
         // Onion, I2P and CJDNS addresses say nothing about where a node is.
         let info = o.addr.public_ip().filter(|_| geo.loaded()).map(|ip| geo.lookup(ip));
-        let (ok, mnauth, error) = match o.result {
-            Ok(p) => (Some(p.version), p.mnauth, None),
-            Err(e) => (None, None, Some(format!("{e:#}"))),
+        let (ok, mnauth, announced, error) = match o.result {
+            Ok(p) => (Some(p.version), p.mnauth, p.announced, None),
+            Err(e) => (None, None, false, Some(format!("{e:#}"))),
         };
         ProbeRow {
             addr: o.addr.to_string(),
             net: o.addr.net(),
             asked_addrs: o.asked_addrs,
+            announced,
             ok,
             mnauth,
             error,
@@ -418,7 +488,7 @@ fn record(
             "UPDATE nodes SET last_tried = ?2, last_success = ?2, fail_streak = 0, next_try = ?2,
                 last_crawl = ?3, last_ok = 1, last_error = NULL, user_agent = ?4, protocol = ?5, services = ?6,
                 start_height = ?7, latency_ms = ?8, last_getaddr = CASE WHEN ?9 THEN ?2 ELSE last_getaddr END,
-                relay = ?10, mn_protx = ?11
+                relay = ?10, mn_protx = ?11, last_announce = CASE WHEN ?12 THEN ?2 ELSE last_announce END
              WHERE addr = ?1",
         )?;
         // Failures: nodes seen recently are retried every crawl (they count toward uptime);
@@ -454,6 +524,7 @@ fn record(
                     r.asked_addrs,
                     v.relay,
                     mn_protx,
+                    r.announced,
                 ])?,
                 None => fail_st.execute(params![r.addr, now, id, r.error, ACTIVE_WINDOW, NEW_ADDR_TRIES])?,
             };
@@ -785,11 +856,86 @@ mod tests {
             addr: addr.to_string(),
             net: addr.net(),
             asked_addrs: false,
+            announced: false,
             ok: Some(version),
             mnauth,
             error: None,
             geo: None,
         }
+    }
+
+    /// dashd's getnetworkinfo, trimmed: what a testnet dashd with an onion service and an I2P
+    /// destination reports.
+    fn networkinfo() -> Value {
+        json!({
+            "localservices": "0000000000000c04",
+            "localaddresses": [
+                {"address": "ntn5iqxkkvhgvhiax3wpvsapvwdrnxyosujbrfyi2fltrbeygfg52gqd.onion", "port": 19999, "score": 4},
+                {"address": "tzjs7fa7xnfnukeauhgpvol5eieojj2luhdn5skyuirnzzuojm6q.b32.i2p", "port": 0, "score": 4},
+                {"address": "203.0.113.7", "port": 19999, "score": 1},
+                {"address": "pg6mmjiyjmcrsslvykfwnntlaru7p5svn6y2ymmju6nubxndf4pscryd.onion", "port": 9999, "score": 1},
+            ],
+        })
+    }
+
+    #[test]
+    fn beacon_is_our_onion_and_i2p_addresses() {
+        let b = beacon_from(Network::Testnet, &networkinfo());
+        let addrs: Vec<String> = b.iter().map(|a| a.addr.to_string()).collect();
+        // Clearnet isn't ours to announce (and is private here), and nothing off the default port.
+        assert_eq!(
+            addrs,
+            [
+                "ntn5iqxkkvhgvhiax3wpvsapvwdrnxyosujbrfyi2fltrbeygfg52gqd.onion:19999",
+                "tzjs7fa7xnfnukeauhgpvol5eieojj2luhdn5skyuirnzzuojm6q.b32.i2p:0"
+            ]
+        );
+        assert!(b.iter().all(|a| a.services == 0xc04));
+        // A dashd that doesn't accept inbound has none, and a reply without services gives nothing.
+        assert!(beacon_from(Network::Testnet, &json!({"localservices": "0c04", "localaddresses": []})).is_empty());
+        let mut info = networkinfo();
+        info.as_object_mut().unwrap().remove("localservices");
+        assert!(beacon_from(Network::Testnet, &info).is_empty());
+    }
+
+    #[test]
+    fn announcements_go_out_daily_to_each_node() {
+        let beacon = beacon_from(Network::Testnet, &networkinfo());
+        let mut rng = rand::rngs::StdRng::seed_from_u64(1);
+        let now = 10 * DAY;
+        assert!(pick_announce(&beacon, None, now, &mut rng).is_some());
+        assert!(pick_announce(&beacon, Some(now - ANNOUNCE_EVERY), now, &mut rng).is_some());
+        assert!(pick_announce(&beacon, Some(now - ANNOUNCE_EVERY + 1), now, &mut rng).is_none());
+        assert!(pick_announce(&[], None, now, &mut rng).is_none());
+        // Both addresses get their turn.
+        let picked: HashSet<PeerAddr> =
+            (0..64).filter_map(|_| pick_announce(&beacon, None, now, &mut rng)).map(|a| a.addr).collect();
+        assert_eq!(picked.len(), 2);
+    }
+
+    #[test]
+    fn record_remembers_announcements() {
+        let mut c = db::open_memory();
+        let routes = TransportConfig {
+            ipv6: Toggle::Off,
+            ipv6_proxy: None,
+            tor_proxy: None,
+            i2p_proxy: None,
+            cjdns: Toggle::Off,
+        }
+        .routes();
+        let last = |c: &Connection, a: &str| -> Option<i64> {
+            c.query_row("SELECT last_announce FROM nodes WHERE addr = ?1", [a], |r| r.get(0)).unwrap()
+        };
+        c.execute("INSERT INTO crawls (id, started) VALUES (1, 100)", []).unwrap();
+        let told = ProbeRow { announced: true, ..reached("5.6.7.8:9999", 70242, None) };
+        record(&mut c, 1, 100, 1, 2, 0, vec![told, reached("5.6.7.9:9999", 70242, None)], &routes).unwrap();
+        assert_eq!(last(&c, "5.6.7.8:9999"), Some(100));
+        assert_eq!(last(&c, "5.6.7.9:9999"), None);
+        // A later probe that announces nothing keeps the time.
+        c.execute("INSERT INTO crawls (id, started) VALUES (2, 200)", []).unwrap();
+        record(&mut c, 2, 200, 1, 1, 0, vec![reached("5.6.7.8:9999", 70242, None)], &routes).unwrap();
+        assert_eq!(last(&c, "5.6.7.8:9999"), Some(100));
     }
 
     /// An onion address that signs our challenge with a masternode's operator key counts as that

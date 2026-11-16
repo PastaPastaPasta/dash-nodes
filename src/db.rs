@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS nodes (
     fail_streak   INTEGER NOT NULL DEFAULT 0,
     next_try      INTEGER NOT NULL DEFAULT 0,
     last_getaddr  INTEGER,
+    last_announce INTEGER,                   -- last time we told it our onion or I2P address
     last_crawl    INTEGER,                   -- crawls.id of the last probe
     last_ok       INTEGER NOT NULL DEFAULT 0,-- 1 if that probe succeeded
     last_error    TEXT,
@@ -288,7 +289,7 @@ pub struct Db {
 }
 
 /// Columns added after the first release, for databases created before them: (table, column, type).
-const ADDED_COLUMNS: [(&str, &str, &str); 11] = [
+const ADDED_COLUMNS: [(&str, &str, &str); 12] = [
     ("nodes", "continent", "TEXT"),
     ("nodes", "city", "TEXT"),
     ("nodes", "lat", "REAL"),
@@ -300,6 +301,7 @@ const ADDED_COLUMNS: [(&str, &str, &str); 11] = [
     ("masternodes", "platform_banned", "INTEGER"),
     ("platform_status", "drive_protocol_next", "INTEGER"),
     ("nodes", "mn_protx", "TEXT"),
+    ("nodes", "last_announce", "INTEGER"),
 ];
 
 /// Every core P2P address of every registered masternode (the primary `service` for rows the
@@ -574,8 +576,14 @@ mod tests {
             .replace(
                 "    lon           REAL,\n    mn_protx      TEXT                       -- masternode it proved to be (MNAUTH) when last reached\n",
                 "    lon           REAL\n",
-            );
-        assert!(!old.contains("relay ") && !old.contains("platform_banned") && !old.contains("mn_protx"));
+            )
+            .replace("    last_announce INTEGER,                   -- last time we told it our onion or I2P address\n", "");
+        assert!(
+            !old.contains("relay ")
+                && !old.contains("platform_banned")
+                && !old.contains("mn_protx")
+                && !old.contains("last_announce")
+        );
         {
             let c = Connection::open(&path).unwrap();
             c.execute_batch(&old).unwrap();
@@ -588,10 +596,14 @@ mod tests {
         let db = Db::open(&path).unwrap();
         let c = lock(&db.writer);
         // Handshakes from before the column have no relay flag: unknown, not off.
-        let (relay, mn_protx): (Option<i64>, Option<String>) =
-            c.query_row("SELECT relay, mn_protx FROM nodes", [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+        let (relay, mn_protx, last_announce): (Option<i64>, Option<String>, Option<i64>) = c
+            .query_row("SELECT relay, mn_protx, last_announce FROM nodes", [], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+            })
+            .unwrap();
         assert_eq!(relay, None);
         assert_eq!(mn_protx, None);
+        assert_eq!(last_announce, None);
         c.execute(
             "INSERT INTO masternodes (protx, type, first_seen, updated, platform_banned) VALUES ('p', 'Evo', 0, 0, 1)",
             [],

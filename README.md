@@ -18,6 +18,10 @@ mnowatch.org/user-agents and the old dashninja.pl:
   reached it: its onion, I2P or IPv6 address counts as a masternode though its ProTx only lists IPv4. Dash Core never gives its
   own onion or I2P address to a peer that reached it another way, and keeps such addresses only when it can reach that network,
   so those addresses come from Tor- and I2P-using peers' `getaddr` replies, our own dashd (which has Tor and I2P) and ProTxes.
+  Where no node knows any (testnet had none), nobody can share one, so our dashds seed them: each has an onion service and an
+  I2P destination, and the crawler tells every node it reaches one of those addresses about once a day (`addrv2`). Nodes that
+  use Tor or I2P connect to our dashd there and announce their own onion or I2P address to it, and the crawler reads those
+  from dashd. Our dashds count as reachable onion and I2P nodes themselves.
 - **Masternode list:** the deterministic list from dashd, a live port check per masternode, version
   history, daily port-check uptime, and every payment back to DIP3 enforcement (from each block's
   coinbase and the masternode list at its height, backfilled newest first). A payment is what the
@@ -56,7 +60,7 @@ site (`web/`, plain HTML and JS with no build step). It keeps one SQLite file pe
 The public site doesn't talk to the crawler host:
 
 ```
-crawler host (no inbound)                          Cloudflare
+crawler host (inbound: Tor, I2P)                   Cloudflare
 dashd ×2 ─ app (crawler, SQLite, API :8080) ─ publisher ──S3 PUT──────────────▶ R2 (dash-nodes-data)
                                              bench ──PUT /_ingest──▶ Worker ─▶ R2       │
                        radar.dashhq.org, nodes.dashhq.org ◀── Worker: static assets + /api/v1/* from R2
@@ -164,7 +168,7 @@ The compose stack (Docker Engine 28+, Compose 2.33+) adds these; only the app's 
 
 | Service | Address | |
 |---|---|---|
-| `tor` | 172.30.88.10:9050 on `overlay` | Tor client (Debian package), SOCKS only, no relay or exit |
+| `tor` | 172.30.88.10:9050 (SOCKS), :9051 (control) on `overlay` | Tor client (Debian package), no relay or exit; the dashds make their onion services through the control port (password in the `tor-control` volume) |
 | `i2pd` | 172.30.88.11:4447 (SOCKS), :7656 (SAM) on `overlay` | `purplei2p/i2pd`, firewalled, bandwidth class L, ≤200 transit tunnels, no console |
 | `cjdns` (profile `cjdns`) | fd86:d4a5:1c3e:186::fe on `cjdns` | cjdns built from the upstream tag (`deploy/cjdns`, commit-checked), peers from `deploy/cjdns/peers.json` (hyperboria/peers, IPv4) plus cjdns' DNS seeds; NATs fc00::/8 out of its TUN |
 | `cjdns-route` (profile `cjdns`) | host network | keeps the host route `fc00::/8 via` the cjdns container (removed when it stops) |
@@ -174,8 +178,13 @@ The compose stack (Docker Engine 28+, Compose 2.33+) adds these; only the app's 
 Tor and i2pd run with no capabilities, read-only, on their own `overlay` network, so they can't
 reach dashd's RPC on `core`.
 
-Both dashds use Tor (`-onion`, `-listenonion=0`) and i2pd (`-i2psam`, `-i2pacceptincoming=0`), so
-their address managers, which the crawler reads, keep onion and I2P peers. With `CJDNS=true` they
+Both dashds use Tor (`-onion`) and i2pd (`-i2psam`), so their address managers, which the crawler
+reads, keep onion and I2P peers. They also take P2P connections over Tor and I2P, and only there: each
+listens on its own address on `overlay` (172.30.88.12:9996 mainnet, 172.30.88.13:19996 testnet,
+`-bind=…=onion`), where Tor's onion service for it points (`-torcontrol`, which keeps the service's
+key in the datadir), and accepts I2P through i2pd's SAM bridge (`-i2pacceptincoming=1`). Nothing on
+the host's addresses: `overlay` isn't published, and `-discover=0`. The crawler announces both
+addresses (see Every address network); `DASHD_OVERLAY_BIND` unset turns all of this off. With `CJDNS=true` they
 also get `-cjdnsreachable=1`. dashd, the app and cjdns share the IPv6-only `cjdns` network (ULA,
 no IPv4), whose gateway is the host. On a host without IPv6, internet IPv6 from there
 fails within about a second; on a host with IPv6, Docker's NAT66 makes it work.
@@ -359,7 +368,9 @@ from its `deploy/` directory.
   unprivileged LXC container that takes two lines in the container's config on its host:
   `lxc.cgroup2.devices.allow: c 10:200 rwm` and
   `lxc.mount.entry: /dev/net/tun dev/net/tun none bind,create=file`. Their state is in the
-  `dash-nodes_{tor,i2pd,cjdns}-data` volumes (the cjdns volume holds its keys and fc address).
+  `dash-nodes_{tor,i2pd,cjdns}-data` volumes (the cjdns volume holds its keys and fc address). The dashds'
+  onion and I2P keys are in their datadirs (`onion_v3_private_key`, `i2p_private_key`), so their addresses
+  survive a new Tor or i2pd volume.
   Without a TUN device, leave the `cjdns` profile off and `CJDNS=false`.
 - **Bench (2026-10-30):** the `bench` service runs from the app image (`docker compose up -d app
   bench` after a build); its results are in the `dash-nodes_bench-state` volume. It idles until

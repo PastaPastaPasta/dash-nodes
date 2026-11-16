@@ -1,5 +1,7 @@
-# dash-nodes Tor client. The SOCKS port is only reachable on the compose network (it isn't
-# published), and SocksPolicy limits it to private ranges besides.
+# dash-nodes Tor client, plus the control port the dashds create their onion services through
+# (dashd -torcontrol). Both ports are only reachable on the compose network (neither is published);
+# SocksPolicy limits SOCKS to private ranges besides, and the control port takes the password
+# entrypoint.sh passes in (HashedControlPassword).
 SocksPort 0.0.0.0:9050 ExtendedErrors
 SocksPolicy accept 127.0.0.0/8
 SocksPolicy accept 10.0.0.0/8
@@ -12,7 +14,7 @@ ORPort 0
 DirPort 0
 ExitRelay 0
 ExitPolicy reject *:*
-ControlPort 0
+ControlPort 0.0.0.0:9051
 DataDirectory /var/lib/tor
 AvoidDiskWrites 1
 Log notice stdout
