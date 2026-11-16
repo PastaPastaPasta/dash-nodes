@@ -759,12 +759,15 @@ svg.epoch-bars rect:hover, svg.epoch-bars rect:focus { fill: var(--brand); outli
 .rank-tie { height: 100%; background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--brand) 55%, var(--surface-2)) 0 3px, transparent 3px 6px); }
 .rank-value { font-size: 14px; }
 .rank-value b { font-weight: 600; }
+.rank-vs { display: block; color: var(--muted); font-size: 12.5px; margin-top: 1px; }
+.rank-vs:empty { display: none; }
 .rank-axis { grid-column: 2; display: flex; justify-content: space-between; color: var(--muted); font-size: 11px; margin-top: -6px; }
 .rank-bars > p { grid-column: 1 / -1; margin: 2px 0 0; }
 @media (max-width: 540px) {
   .rank-bars { grid-template-columns: 1fr; gap: 12px; }
   .rank-row { display: grid; grid-template-columns: 1fr max-content; gap: 4px 10px; }
   .rank-row .rank-track { grid-column: 1 / -1; grid-row: 2; }
+  .rank-row .rank-value { text-align: right; }
   .rank-axis { grid-column: 1; margin-top: -8px; }
 }
 .card.rewards .live { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--grid); }
