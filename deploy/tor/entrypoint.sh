@@ -11,4 +11,4 @@ if [ ! -s "$PW" ]; then
   mv -f "$PW.tmp" "$PW"
 fi
 HASH=$(tor --quiet --hash-password "$(cat "$PW")")
-exec tor -f /etc/tor/torrc --HashedControlPassword "$HASH"
+exec tor -f /etc/tor/torrc --ControlPort 0.0.0.0:9051 --HashedControlPassword "$HASH"

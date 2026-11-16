@@ -37,7 +37,7 @@ tor_password() {
   i=0
   while [ ! -s "$f" ]; do
     i=$((i + 1))
-    if [ "$i" -gt 60 ]; then
+    if [ "$i" -gt 300 ]; then
       echo "dash-nodes-dashd: no Tor control password in $f, so no onion service" >&2
       return 1
     fi
@@ -79,19 +79,21 @@ cp /etc/dash-nodes/dash.conf "$CONF"
     echo 'listen=1'
     echo "bind=$DASHD_OVERLAY_BIND=onion"
     echo 'discover=0'
+    # Room for Tor and I2P peers without the default's ~115 inbound slots.
+    echo 'maxconnections=64'
   else
     # Observer only: the crawler makes its own outbound connections.
     echo 'listen=0'
   fi
   if [ -n "${DASHD_ONION:-}" ]; then
     echo "onion=$DASHD_ONION"
-    if [ -n "${DASHD_OVERLAY_BIND:-}" ] && [ -n "${DASHD_TORCONTROL:-}" ] && TOR_PASSWORD="$(tor_password)"; then
-      # dashd creates the onion service itself (ADD_ONION) and keeps its key in the datadir.
-      echo "torcontrol=$DASHD_TORCONTROL"
-      echo "torpassword=$TOR_PASSWORD"
-    else
-      echo 'listenonion=0'
-    fi
+  fi
+  if [ -n "${DASHD_OVERLAY_BIND:-}" ] && [ -n "${DASHD_TORCONTROL:-}" ] && TOR_PASSWORD="$(tor_password)"; then
+    # dashd creates the onion service itself (ADD_ONION) and keeps its key in the datadir.
+    echo "torcontrol=$DASHD_TORCONTROL"
+    echo "torpassword=$TOR_PASSWORD"
+  else
+    echo 'listenonion=0'
   fi
   if [ -n "${DASHD_I2PSAM:-}" ]; then
     echo "i2psam=$DASHD_I2PSAM"

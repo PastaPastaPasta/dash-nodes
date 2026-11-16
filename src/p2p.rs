@@ -67,7 +67,7 @@ pub struct Probe {
     pub addrs: Vec<PeerAddr>,
     /// The masternode's answer to our challenge; checked against its operator key by the caller.
     pub mnauth: Option<MnAuth>,
-    /// Whether we sent the peer our address (see `probe`'s `announce`).
+    /// Whether the peer took our address (see `probe`'s `announce`).
     pub announced: bool,
 }
 
@@ -78,8 +78,8 @@ pub struct Announce {
     pub services: u64,
 }
 
-/// Connects over `route`, exchanges versions, reads a masternode's MNAUTH, sends `announce` in an
-/// `addrv2` if given and, if `getaddr` is set, collects the peer's address sample (at most 1000
+/// Connects over `route`, exchanges versions, reads a masternode's MNAUTH, tells the peer about
+/// `announce` if given and, if `getaddr` is set, collects the peer's address sample (at most 1000
 /// addresses). The whole exchange, writes included, is bounded by the timeouts, which are per
 /// network (see transport::default_limits).
 pub async fn probe(
@@ -91,9 +91,12 @@ pub async fn probe(
     announce: Option<&Announce>,
     t: &Timeouts,
 ) -> Result<Probe> {
-    // The handshake timeout covers the peer's version, and again its verack and MNAUTH.
-    let budget =
-        t.connect + 2 * t.handshake + if getaddr { t.getaddr } else { Duration::ZERO } + Duration::from_secs(2);
+    // The handshake timeout covers the peer's version, again its verack and MNAUTH, and the pong
+    // that confirms an announcement.
+    let budget = t.connect
+        + if announce.is_some() { 3 } else { 2 } * t.handshake
+        + if getaddr { t.getaddr } else { Duration::ZERO }
+        + Duration::from_secs(2);
     timeout(budget, probe_inner(net, addr, route, start_height, getaddr, announce, t))
         .await
         .map_err(|_| anyhow!("timeout"))?
@@ -168,8 +171,11 @@ async fn probe_inner(
         && after_verack.is_ok()
         && version.protocol >= ADDRV2_PROTO_VERSION
     {
-        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as u32;
-        announced = stream.write_all(&encode(magic, "addrv2", &addrv2_payload(a, now))).await.is_ok();
+        let result = confirm_announce(&mut stream, magic, a, Instant::now() + t.handshake).await;
+        if let Err(e) = &result {
+            tracing::trace!(%addr, "announce: {e:#}");
+        }
+        announced = result.is_ok();
     }
 
     let mut addrs = Vec::new();
@@ -203,6 +209,25 @@ async fn probe_inner(
         }
     }
     Ok(Probe { version, addrs, mnauth, announced })
+}
+
+/// Sends `a` in an `addrv2`, then a ping, and waits for the pong. Dash Core handles a peer's messages
+/// in order, so the pong means the address was processed; one we hang up on right after sending can
+/// be dropped unread.
+async fn confirm_announce(stream: &mut TcpStream, magic: [u8; 4], a: &Announce, deadline: Instant) -> Result<()> {
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as u32;
+    let nonce: u64 = rand::random();
+    stream
+        .write_all(
+            &[encode(magic, "addrv2", &addrv2_payload(a, now)), encode(magic, "ping", &nonce.to_le_bytes())].concat(),
+        )
+        .await?;
+    loop {
+        let (cmd, payload) = read_before(stream, magic, deadline).await?;
+        if cmd == "pong" && payload == nonce.to_le_bytes() {
+            return Ok(());
+        }
+    }
 }
 
 async fn read_before(stream: &mut TcpStream, magic: [u8; 4], deadline: Instant) -> Result<(String, Vec<u8>)> {
@@ -517,6 +542,14 @@ mod tests {
     /// MNAUTH first when `mn` is set, signing nothing: the probe leaves checking to the caller) and a
     /// getaddr.
     async fn fake_peer(mn: Option<[u8; 32]>, protocol: i32) -> (PeerAddr, tokio::task::JoinHandle<Got>) {
+        fake_peer_pong(mn, protocol, true).await
+    }
+
+    async fn fake_peer_pong(
+        mn: Option<[u8; 32]>,
+        protocol: i32,
+        pong: bool,
+    ) -> (PeerAddr, tokio::task::JoinHandle<Got>) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = PeerAddr::from_socket(listener.local_addr().unwrap());
         let task = tokio::spawn(async move {
@@ -555,6 +588,7 @@ mod tests {
                         out.push(encode(magic, "addrv2", &a));
                     }
                     "addrv2" => got.addrv2.push(payload),
+                    "ping" if pong => out.push(encode(magic, "pong", &payload)),
                     _ => {}
                 }
                 for m in out {
@@ -619,6 +653,19 @@ mod tests {
         assert!(now.abs_diff(time) < 60);
         // Services as a CompactSize: 0xfd, then 0x0c04 little-endian.
         assert_eq!(msg[5..8], [0xfd, 0x04, 0x0c]);
+    }
+
+    #[tokio::test]
+    async fn an_announcement_counts_once_the_peer_answers_our_ping() {
+        let (addr, peer) = fake_peer_pong(None, PROTOCOL_VERSION, false).await;
+        let p = probe(Network::Testnet, &addr, &Route::Direct, 1, false, Some(&beacon()), &quick()).await.unwrap();
+        // Sent, but with no pong we can't tell the peer read it.
+        assert!(!p.announced);
+        drop(p);
+        assert_eq!(peer.await.unwrap().addrv2.len(), 1);
+        let (addr, _peer) = fake_peer(None, PROTOCOL_VERSION).await;
+        let p = probe(Network::Testnet, &addr, &Route::Direct, 1, false, Some(&beacon()), &quick()).await.unwrap();
+        assert!(p.announced);
     }
 
     #[tokio::test]
