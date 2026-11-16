@@ -29,7 +29,7 @@ use rand::seq::SliceRandom;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::{Value, json};
 
-use crate::api::{median4, round_to, round4};
+use crate::api::{median4, registered_at, round_to, round4};
 use crate::db::{self, get_meta, query_all, set_meta};
 use crate::network::Network;
 use crate::platform::{self, Field, fields, msg, uint};
@@ -1853,20 +1853,23 @@ const EPOCH_SPANS: &str = "WITH spans AS (
 // Windows of finished epochs ("the last 30 days") start at an epoch, so the payouts are a range scan of
 // their primary key. An epoch is paid out when the next one starts.
 
+/// The first finished epoch that started at or after `since` (epoch, start), if any.
+fn first_epoch_since(c: &Connection, since: i64) -> Result<Option<(i64, i64)>> {
+    Ok(c.query_row(
+        "SELECT epoch, first_block_time FROM platform_epochs WHERE first_block_time >= ?1 ORDER BY epoch LIMIT 1",
+        [since],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )
+    .optional()?)
+}
+
 /// The first finished epoch paid out at or after `since`, if any.
 fn first_paid_since(c: &Connection, current_start: i64, since: i64) -> Result<Option<i64>> {
     if current_start < since {
         return Ok(None);
     }
-    let next: Option<i64> = c
-        .query_row(
-            "SELECT epoch FROM platform_epochs WHERE first_block_time >= ?1 ORDER BY epoch LIMIT 1",
-            [since],
-            |r| r.get(0),
-        )
-        .optional()?;
-    Ok(match next {
-        Some(e) => Some(e - 1),
+    Ok(match first_epoch_since(c, since)? {
+        Some((e, _)) => Some(e - 1),
         None => latest_finalized(c)?,
     })
 }
@@ -1900,14 +1903,7 @@ fn earned_since(c: &Connection, current_start: i64, since: i64) -> Result<HashMa
 /// Platform's yearly return on 4,000 DASH for each evonode (`protx`, or all) over the finished epochs
 /// that started since `since` (credits over the epochs' own span, annualized), and that span in days.
 fn yields(c: &Connection, since: i64, protx: Option<&str>) -> Result<(HashMap<String, f64>, f64)> {
-    let first: Option<(i64, i64)> = c
-        .query_row(
-            "SELECT epoch, first_block_time FROM platform_epochs WHERE first_block_time >= ?1 ORDER BY epoch LIMIT 1",
-            [since],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        )
-        .optional()?;
-    let Some((epoch, start)) = first else { return Ok((HashMap::new(), 0.0)) };
+    let Some((epoch, start)) = first_epoch_since(c, since)? else { return Ok((HashMap::new(), 0.0)) };
     let span = current_start(c)? - start;
     if span <= 0 {
         return Ok((HashMap::new(), 0.0));
@@ -1952,8 +1948,33 @@ fn blocks_in(c: &Connection, epoch: Option<i64>) -> Result<HashMap<String, i64>>
     })?)
 }
 
-/// Each evonode's monthly Platform rewards at the pace of the last six finished epochs, and their span in days.
-fn monthly(c: &Connection, start: i64) -> Result<(HashMap<String, i64>, Option<f64>)> {
+/// Monthly Platform rewards (credits per 30 days) for `protx` (or all) over the finished epochs from
+/// `(epoch, from)` up to `start`, and that span in days.
+fn monthly_from(
+    c: &Connection,
+    start: i64,
+    (epoch, from): (i64, i64),
+    protx: Option<&str>,
+) -> Result<Option<(HashMap<String, i64>, f64)>> {
+    let span = start - from;
+    if span <= 0 {
+        return Ok(None);
+    }
+    let per_month = 30.0 * DAY as f64 / span as f64;
+    let rows = earned_from(c, Some(epoch), protx)?;
+    Ok(Some((rows.into_iter().map(|(p, cr)| (p, (cr as f64 * per_month) as i64)).collect(), span as f64 / DAY as f64)))
+}
+
+#[derive(Default)]
+struct Monthly {
+    credits: HashMap<String, i64>,
+    basis_days: Option<f64>,
+    since: Option<i64>,
+}
+
+/// Each evonode's monthly Platform rewards at the pace of the last six finished epochs, their span in
+/// days, and when the first of those six started.
+fn monthly(c: &Connection, start: i64) -> Result<Monthly> {
     let sixth: Option<(i64, i64)> = c
         .query_row(
             "SELECT epoch, first_block_time FROM platform_epochs ORDER BY epoch DESC LIMIT 1 OFFSET 5",
@@ -1961,11 +1982,11 @@ fn monthly(c: &Connection, start: i64) -> Result<(HashMap<String, i64>, Option<f
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .optional()?;
-    let Some((epoch, from)) = sixth.filter(|(_, from)| start > *from) else { return Ok((HashMap::new(), None)) };
-    let span = start - from;
-    let per_month = 30.0 * DAY as f64 / span as f64;
-    let rows = earned_from(c, Some(epoch), None)?;
-    Ok((rows.into_iter().map(|(p, cr)| (p, (cr as f64 * per_month) as i64)).collect(), Some(span as f64 / DAY as f64)))
+    let Some(ep) = sixth else { return Ok(Monthly::default()) };
+    let Some((credits, days)) = monthly_from(c, start, ep, None)? else {
+        return Ok(Monthly::default());
+    };
+    Ok(Monthly { credits, basis_days: Some(days), since: Some(ep.1) })
 }
 
 /// The pool so far in the current epoch: Core block rewards for its Core blocks up to the chain-locked
@@ -1985,8 +2006,9 @@ pub struct Board {
     /// Every enabled evonode's 30-day rewards (zeros count), ascending: where one sits among them.
     d30_enabled: Vec<i64>,
     monthly: HashMap<String, i64>,
-    /// The span `monthly` is at the pace of, in days.
+    /// The span `monthly` is at the pace of, in days, and when that six-epoch window started.
     monthly_basis: Option<f64>,
+    monthly_since: Option<i64>,
     epoch_blocks: HashMap<String, i64>,
     epoch_total: i64,
     balances: HashMap<String, Option<i64>>,
@@ -2016,7 +2038,7 @@ fn board(c: &Connection) -> Result<Board> {
     )?;
     let mut d30_enabled: Vec<i64> = enabled.iter().map(|p| d30.get(p).copied().unwrap_or(0)).collect();
     d30_enabled.sort_unstable();
-    let (monthly, monthly_basis) = monthly(c, start)?;
+    let Monthly { credits: monthly, basis_days: monthly_basis, since: monthly_since } = monthly(c, start)?;
     Ok(Board {
         epochs: epochs_json(c, start)?,
         yields: platform_yields(c, db::now() - YIELD_DAYS * DAY)?,
@@ -2025,6 +2047,7 @@ fn board(c: &Connection) -> Result<Board> {
         d30_enabled,
         monthly,
         monthly_basis,
+        monthly_since,
         epoch_total: epoch_blocks.values().sum(),
         epoch_blocks,
         balances: query_all(c, "SELECT protx, credits FROM platform_balances", [], |r| Ok((r.get(0)?, r.get(1)?)))?,
@@ -2264,8 +2287,24 @@ pub fn mn_json(c: &Connection, protx: &str, view: &View, window_days: i64) -> Re
         Some(f) => epochs.into_iter().filter(|e| e["epoch"].as_i64() >= Some(f)).collect(),
         None => Vec::new(),
     };
+    let now_ts = db::now();
+    let since = registered_at(c, protx)?;
+    let history_days = since.map(|s| (now_ts - s).max(0) / DAY);
+    let short = history_days.is_some_and(|d| d < 30);
+    // A node registered after the board's six-epoch window started gets its own pace, from the first
+    // finished epoch it was in from the start; null until an epoch finishes.
+    let (monthly, monthly_basis_days, monthly_since) = match (since, b.monthly_since) {
+        (Some(s), Some(w)) if s > w => match first_epoch_since(c, s)? {
+            Some(ep) => match monthly_from(c, start, ep, Some(protx))? {
+                Some((m, days)) => (Some(m.get(protx).copied().unwrap_or(0)), Some(days), Some(ep.1)),
+                None => (None, None, None),
+            },
+            None => (None, None, None),
+        },
+        _ => (Some(b.monthly.get(protx).copied().unwrap_or(0)), b.monthly_basis, None),
+    };
     let sum_since = |days: i64| -> Result<i64> {
-        let from = first_paid_since(c, start, db::now() - days * DAY)?;
+        let from = first_paid_since(c, start, now_ts - days * DAY)?;
         Ok(earned_from(c, from, Some(protx))?.get(protx).copied().unwrap_or(0))
     };
     let (lifetime, paid_epochs): (i64, i64) = c.query_row(
@@ -2330,16 +2369,18 @@ pub fn mn_json(c: &Connection, protx: &str, view: &View, window_days: i64) -> Re
         .optional()?;
     Ok(json!({
         "first_epoch": first_epoch,
+        "since": since,
+        "history_days": history_days,
         "epochs": epochs,
         "totals": {
             "last_epoch": c.query_row("SELECT credits FROM platform_payouts WHERE protx = ?1 AND epoch = ?2", params![protx, max_epoch], |r| r.get::<_, i64>(0)).optional()?.unwrap_or(0),
             "last_epoch_index": max_epoch,
             "d30": sum_since(30)?, "d90": sum_since(90)?, "d365": sum_since(365)?, "lifetime": lifetime, "epochs_paid": paid_epochs,
         },
-        "d30_percentile": (!all30.is_empty()).then(|| round_to(below as f64 / all30.len() as f64, 3)),
+        "d30_percentile": (!short && !all30.is_empty()).then(|| round_to(below as f64 / all30.len() as f64, 3)),
         "d30_of": all30.len(),
-        "monthly": b.monthly.get(protx).copied().unwrap_or(0), "monthly_basis_days": b.monthly_basis,
-        "annual_yield": platform_yield(c, protx, db::now() - window_days * DAY)?.map(round4),
+        "monthly": monthly, "monthly_basis_days": monthly_basis_days, "monthly_since": monthly_since,
+        "annual_yield": platform_yield(c, protx, now_ts - window_days * DAY)?.map(round4),
         "current": current,
         "watched": watched_json(c, protx)?,
         "turns_30d": turns(last30, cur_epoch.unwrap_or(0))?,
@@ -3185,5 +3226,80 @@ mod tests {
         assert_eq!(parse_explorer(&v), (Some(36_235_244_983_446), Some(87)));
         assert_eq!(parse_explorer(&json!({"totalReward": "12", "epochInfo": null})), (Some(12), None));
         assert_eq!(parse_explorer(&json!({"message": "not found"})), (None, None));
+    }
+
+    #[test]
+    fn mn_json_uses_each_short_nodes_own_window_and_leaves_old_nodes_unchanged() {
+        let c = scratch_db("short-history");
+        let now = db::now();
+        let cur_start = now - 4 * DAY;
+        // Six finished 9-day epochs (81..=86, 54 days in all) before current epoch 87.
+        for i in 0..6 {
+            let ep = 81 + i;
+            let start = cur_start - (6 - i) * 9 * DAY;
+            c.execute(
+                "INSERT INTO platform_epochs VALUES (?1, ?2, ?3, 0, 0, 10, 0, 0, 0, 14, 2)",
+                params![ep, ep * 10, start],
+            )
+            .unwrap();
+            c.execute("INSERT INTO platform_payouts VALUES (?1, 'old', 5, 600000000000)", [ep]).unwrap();
+        }
+        // `short` registered 20.5 days ago (mid-epoch 85): epoch 86 is its first full finished epoch.
+        // `mid` registered 35.5 days ago (mid-epoch 83): past 30 days, still after epoch 81's start.
+        // `fresh` registered 2.5 days ago (inside current epoch 87): no finished epoch yet.
+        let (t_old, t_mid, t_short, t_fresh) =
+            (now - 100 * DAY - DAY / 2, now - 35 * DAY - DAY / 2, now - 20 * DAY - DAY / 2, now - 2 * DAY - DAY / 2);
+        c.execute_batch(&format!(
+            "INSERT INTO blocks VALUES (1, 'a', '', {t_old}, 0), (2, 'b', '', {t_mid}, 0),
+                (3, 'c', '', {t_short}, 0), (4, 'd', '', {t_fresh}, 0);
+             INSERT INTO masternodes (protx, type, registered_height, first_seen, updated) VALUES
+                ('old', 'Evo', 1, 0, 0), ('mid', 'Evo', 2, 0, 0), ('short', 'Evo', 3, 0, 0),
+                ('fresh', 'Evo', 4, 0, 0), ('unindexed', 'Evo', 99, 0, 0);
+             INSERT INTO platform_payouts VALUES (83, 'mid', 2, 200000000000), (84, 'mid', 5, 900000000000),
+                (85, 'mid', 5, 900000000000), (86, 'mid', 5, 900000000000),
+                (85, 'short', 2, 500000000000), (86, 'short', 5, 900000000000);
+             INSERT INTO meta VALUES ('platform_now', '{{\"epoch\": 87, \"start\": {cur_start}}}');"
+        ))
+        .unwrap();
+        let view = View { schedule: None, board: Some(Arc::new(board(&c).unwrap())) };
+
+        // Registered after the six-epoch window with < 30 days: own pace from epoch 86, null percentile.
+        let s = mn_json(&c, "short", &view, 20).unwrap();
+        assert_eq!((s["since"].as_i64(), s["history_days"].as_i64()), (Some(t_short), Some(20)));
+        assert_eq!(s["monthly_since"], json!(cur_start - 9 * DAY));
+        assert_eq!(s["monthly_basis_days"], json!(9.0));
+        assert_eq!(s["monthly"], json!(3_000_000_000_000i64)); // 9 DASH over 9 days -> 30 DASH / 30 days
+        assert_eq!((s["d30_percentile"].clone(), s["d30_of"].as_u64()), (Value::Null, Some(5)));
+
+        // Registered inside the current epoch: no finished epoch yet, so monthly and its basis are null.
+        let f = mn_json(&c, "fresh", &view, 2).unwrap();
+        assert_eq!((f["since"].as_i64(), f["history_days"].as_i64()), (Some(t_fresh), Some(2)));
+        assert_eq!(
+            (f["monthly"].clone(), f["monthly_basis_days"].clone(), f["monthly_since"].clone()),
+            (Value::Null, Value::Null, Value::Null)
+        );
+        assert_eq!((f["d30_percentile"].clone(), f["d30_of"].as_u64()), (Value::Null, Some(5)));
+
+        // Registered 35 days ago (after the 54-day window started, >= 30 days): own pace from epoch 84, keeps percentile.
+        let m = mn_json(&c, "mid", &view, 35).unwrap();
+        assert_eq!(m["history_days"], json!(35));
+        assert_eq!(m["monthly_since"], json!(cur_start - 27 * DAY));
+        assert_eq!(m["monthly_basis_days"], json!(27.0));
+        assert_eq!(m["monthly"], json!(3_000_000_000_000i64)); // 27 DASH over 27 days (partial epoch 83 skipped)
+        assert!(m["d30_percentile"].is_f64());
+
+        // Old node (and one whose registration block predates the index): board's six-epoch pace, ranked.
+        let o = mn_json(&c, "old", &view, 90).unwrap();
+        assert_eq!((o["since"].as_i64(), o["history_days"].as_i64()), (Some(t_old), Some(100)));
+        assert_eq!(o["monthly"], json!(2_000_000_000_000i64)); // 36 DASH over 54 days -> 20 DASH / 30 days
+        assert_eq!(o["monthly_basis_days"], json!(54.0));
+        assert_eq!(o["monthly_since"], Value::Null);
+        assert_eq!((o["d30_percentile"].as_f64(), o["d30_of"].as_u64()), (Some(0.6), Some(5)));
+
+        let u = mn_json(&c, "unindexed", &view, 90).unwrap();
+        assert_eq!((u["since"].clone(), u["history_days"].clone()), (Value::Null, Value::Null));
+        assert_eq!((u["monthly"].as_i64(), u["monthly_basis_days"].as_f64()), (Some(0), Some(54.0)));
+        assert_eq!(u["monthly_since"], Value::Null);
+        assert_eq!(u["d30_percentile"], json!(0.0));
     }
 }

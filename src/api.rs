@@ -683,19 +683,23 @@ fn paid_since(c: &Connection, protx: &str, from: Option<i64>) -> Result<i64> {
     )?)
 }
 
+/// When `protx` registered (unix seconds), if its registration block is in the payments index.
+pub(crate) fn registered_at(c: &Connection, protx: &str) -> Result<Option<i64>> {
+    Ok(c.query_row(
+        "SELECT b.time FROM masternodes m JOIN blocks b ON b.height = m.registered_height WHERE m.protx = ?1",
+        [protx],
+        |r| r.get(0),
+    )
+    .optional()?)
+}
+
 /// Paid in the last 30, 90 and 365 days (as far as the payments index goes back), and the annualized
 /// yield over the last 90 days, or since registration or the start of the index if later (none under
 /// two weeks: too few payments to say).
 fn mn_returns(c: &Connection, protx: &str, evo: bool, removed: bool) -> Result<Value> {
     let now = db::now();
     let paid = |days: i64| -> Result<i64> { paid_since(c, protx, height_at(c, now - days * DAY)?) };
-    let registered: Option<i64> = c
-        .query_row(
-            "SELECT b.time FROM masternodes m JOIN blocks b ON b.height = m.registered_height WHERE m.protx = ?1",
-            [protx],
-            |r| r.get(0),
-        )
-        .optional()?;
+    let registered = registered_at(c, protx)?;
     let indexed_since = index_start(c)?;
     let from = [Some(now - RETURN_WINDOW * DAY), registered, indexed_since].into_iter().flatten().max().unwrap_or(now);
     // Whole days, and payments summed over exactly those days.

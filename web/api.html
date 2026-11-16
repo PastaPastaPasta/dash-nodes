@@ -113,10 +113,11 @@
         for, up to 120: <code>{epoch, start, end, blocks, credits, share, rank, of}</code> (<code>share</code> of the epoch's blocks, and its
         <code>rank</code> by credits among the <code>of</code> evonodes that proposed); <code>totals</code> (<code>last_epoch</code> and its
         <code>last_epoch_index</code>, <code>d30</code>, <code>d90</code>, <code>d365</code> by when each epoch was paid out,
-        <code>lifetime</code> since <code>first_epoch</code>, <code>epochs_paid</code>); <code>d30_percentile</code> (the share of the
-        <code>d30_of</code> enabled evonodes that earned less over 30 days); <code>monthly</code> (at its pace over
-        <code>monthly_basis_days</code>, the last six epochs) and <code>annual_yield</code> on 4,000 DASH over the same window as
-        <code>returns</code>; <code>current</code> (this epoch: <code>blocks</code> of <code>blocks_total</code>, <code>rank</code>,
+        <code>lifetime</code> since <code>first_epoch</code>, <code>epochs_paid</code>); <code>since</code> (registration time) and
+        <code>history_days</code>; <code>d30_percentile</code> (the share of the <code>d30_of</code> enabled evonodes that earned less
+        over 30 days, <code>null</code> under 30 days); <code>monthly</code> (at its pace over <code>monthly_basis_days</code>: the last
+        six epochs, or from <code>monthly_since</code> for a newer node, <code>null</code> before its first finished epoch) and
+        <code>annual_yield</code> on 4,000 DASH over the same window as <code>returns</code>; <code>current</code> (this epoch: <code>blocks</code> of <code>blocks_total</code>, <code>rank</code>,
         <code>pool_so_far</code> from Core block rewards, <code>accrued</code>, its share of that, and <code>turns</code>); <code>watched</code>
         (finished epochs we sampled the validator sets in: <code>expected</code> blocks for the sets it was in, <code>actual</code>,
         <code>turns</code> seen, <code>missed</code> and the sampling <code>coverage</code>); <code>turns_30d</code>; <code>next</code>
