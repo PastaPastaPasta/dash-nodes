@@ -102,6 +102,9 @@ pub async fn run(ctx: Arc<NetCtx>) {
 struct Ask {
     getaddr: bool,
     announce: Option<Announce>,
+    /// Expected up (a masternode, or a node that answered within ACTIVE_WINDOW): a failed probe
+    /// gets a second try this crawl.
+    retry: bool,
 }
 
 /// A `nodes` row due for a probe.
@@ -171,7 +174,7 @@ async fn crawl_once(ctx: &NetCtx) -> Result<i64> {
     let usable = |a: &PeerAddr| routes.for_addr(a).is_some();
     let mut targets: HashMap<PeerAddr, Ask> = HashMap::new();
     for a in mn_addrs.into_iter().filter(usable) {
-        targets.insert(a, Ask::default());
+        targets.insert(a, Ask { retry: true, ..Ask::default() });
     }
     // Ask nodes that answered recently for addresses, a random sample each crawl.
     let mut getaddr_candidates = Vec::new();
@@ -185,7 +188,9 @@ async fn crawl_once(ctx: &NetCtx) -> Result<i64> {
         }
         match last_success {
             Some(t) if now - t < ACTIVE_WINDOW => {
-                targets.entry(a).or_default().announce = pick_announce(&beacon, *last_announce, now, &mut rng);
+                let ask = targets.entry(a).or_default();
+                ask.announce = pick_announce(&beacon, *last_announce, now, &mut rng);
+                ask.retry = true;
                 if last_getaddr.is_none_or(|t| now - t > GETADDR_EVERY) {
                     getaddr_candidates.push(a);
                 }
@@ -333,9 +338,9 @@ fn fresh_targets(
     (fresh.into_iter().map(|a| (a, Ask::default())).collect(), found)
 }
 
-/// Probes every target over its network's route, each network with its own concurrency limit.
-/// With a `deadline`, no new probe starts after it (running ones finish within their timeouts);
-/// probes that didn't start aren't recorded and keep their place for the next crawl.
+/// Probes every target over its network's route, each network with its own concurrency limit (see
+/// `probe_twice`). With a `deadline`, no new probe starts after it (running ones finish within their
+/// timeouts); probes that didn't start aren't recorded and keep their place for the next crawl.
 async fn probe_all(
     ctx: &NetCtx,
     routes: &Routes,
@@ -355,16 +360,12 @@ async fn probe_all(
             let Some(route) = route else { return Vec::new() };
             let total = list.len();
             let route = &route;
-            let done: Vec<Outcome> = futures::stream::iter(list)
-                .take_while(|_| std::future::ready(deadline.is_none_or(|d| Instant::now() < d)))
-                .map(|(addr, ask)| async move {
-                    let result =
-                        p2p::probe(net, &addr, route, tip, ask.getaddr, ask.announce.as_ref(), &limits.timeouts).await;
-                    Outcome { addr, asked_addrs: ask.getaddr, result }
-                })
-                .buffer_unordered(limits.concurrency)
-                .collect()
-                .await;
+            let probe = |addr: PeerAddr, ask: Ask| async move {
+                let result =
+                    p2p::probe(net, &addr, route, tip, ask.getaddr, ask.announce.as_ref(), &limits.timeouts).await;
+                Outcome { addr, asked_addrs: ask.getaddr, result }
+            };
+            let (done, retried) = probe_twice(list, limits.concurrency, deadline, probe).await;
             if done.len() < total {
                 tracing::info!(
                     net = net.name(),
@@ -372,10 +373,68 @@ async fn probe_all(
                     total - done.len()
                 );
             }
+            if retried.tried > 0 {
+                tracing::info!(
+                    net = net.name(),
+                    "{an}: {} of {} retried probes answered",
+                    retried.answered,
+                    retried.tried
+                );
+            }
             done
         }
     });
     futures::future::join_all(runs).await.into_iter().flatten().collect()
+}
+
+#[derive(Debug, Default, PartialEq)]
+struct Retried {
+    tried: usize,
+    answered: usize,
+}
+
+/// Probes `list`, `concurrency` at a time, giving each failure whose `Ask::retry` is set a second
+/// try and keeping that answer. A live node fails a probe now and then (a Tor circuit or onion
+/// descriptor fetch that doesn't come through, a lost packet), and its reachability, uptime and the
+/// network counts come from one crawl, so a single attempt would count it as down. Other addresses
+/// aren't retried: nearly all are gone, and they come back with backoff anyway. Addresses expected
+/// up go first, then their second tries, then the rest, so the rest is what a deadline cuts.
+async fn probe_twice<F, Fut>(
+    list: Vec<(PeerAddr, Ask)>,
+    concurrency: usize,
+    deadline: Option<Instant>,
+    probe: F,
+) -> (Vec<Outcome>, Retried)
+where
+    F: Fn(PeerAddr, Ask) -> Fut,
+    Fut: std::future::Future<Output = Outcome>,
+{
+    let pass = |list: Vec<(PeerAddr, Ask)>| {
+        futures::stream::iter(list)
+            .take_while(move |_| std::future::ready(deadline.is_none_or(|d| Instant::now() < d)))
+            .map(|(addr, ask)| {
+                let probing = probe(addr, ask);
+                async move { (ask, probing.await) }
+            })
+            .buffer_unordered(concurrency)
+            .collect::<Vec<_>>()
+    };
+    let (expected, rest): (Vec<_>, Vec<_>) = list.into_iter().partition(|(_, ask)| ask.retry);
+    let mut done = pass(expected).await;
+    let at: HashMap<PeerAddr, usize> = done.iter().enumerate().map(|(i, (_, o))| (o.addr, i)).collect();
+    let again = done.iter().filter(|(_, o)| o.result.is_err()).map(|(ask, o)| (o.addr, *ask));
+    let mut retried = Retried::default();
+    for (ask, o) in pass(again.chain(rest).collect()).await {
+        if ask.retry {
+            retried.tried += 1;
+            retried.answered += usize::from(o.result.is_ok());
+            let i = at[&o.addr];
+            done[i] = (ask, o);
+        } else {
+            done.push((ask, o));
+        }
+    }
+    (done.into_iter().map(|(_, o)| o).collect(), retried)
 }
 
 /// Pulls dashd's address manager into `nodes`; on an empty database, falls back to DNS seeds.
@@ -876,6 +935,78 @@ mod tests {
                 {"address": "pg6mmjiyjmcrsslvykfwnntlaru7p5svn6y2ymmju6nubxndf4pscryd.onion", "port": 9999, "score": 1},
             ],
         })
+    }
+
+    /// Fake probes: each address answers once it has failed `fails[addr]` times. Returns which
+    /// addresses answered and how often each was probed.
+    async fn run_twice(
+        targets: &[(&str, bool, usize)],
+        deadline: Option<Instant>,
+        delay: Duration,
+        concurrency: usize,
+    ) -> (HashMap<String, bool>, HashMap<String, usize>, Retried) {
+        let fails: HashMap<PeerAddr, usize> = targets.iter().map(|(a, _, f)| (a.parse().unwrap(), *f)).collect();
+        let calls = std::sync::Mutex::new(HashMap::<PeerAddr, usize>::new());
+        let list = targets.iter().map(|(a, retry, _)| (a.parse().unwrap(), Ask { retry: *retry, ..Ask::default() }));
+        let probe = |addr: PeerAddr, _: Ask| {
+            let n = {
+                let mut calls = calls.lock().unwrap();
+                let n = calls.entry(addr).or_default();
+                *n += 1;
+                *n
+            };
+            let result = if n > fails[&addr] {
+                let version = p2p::Version {
+                    protocol: 70242,
+                    services: 1,
+                    user_agent: "/Dash Core:24.0.1/".into(),
+                    start_height: 1,
+                    relay: true,
+                    latency_ms: 1,
+                };
+                Ok(Probe { version, addrs: Vec::new(), mnauth: None, announced: false })
+            } else {
+                Err(anyhow::anyhow!("socks: onion service descriptor not found"))
+            };
+            async move {
+                tokio::time::sleep(delay).await;
+                Outcome { addr, asked_addrs: false, result }
+            }
+        };
+        let (done, retried) = probe_twice(list.collect(), concurrency, deadline, probe).await;
+        let up: HashMap<String, bool> = done.iter().map(|o| (o.addr.to_string(), o.result.is_ok())).collect();
+        assert_eq!(up.len(), done.len(), "one outcome per address");
+        let calls = calls.into_inner().unwrap().into_iter().map(|(a, n)| (a.to_string(), n)).collect();
+        (up, calls, retried)
+    }
+
+    #[tokio::test]
+    async fn a_node_expected_up_gets_a_second_try() {
+        let flaky = "pg6mmjiyjmcrsslvykfwnntlaru7p5svn6y2ymmju6nubxndf4pscryd.onion:9999";
+        let gone = "5v5lgddolcidtt2qmhmvyka2ewht4mkmmj73tfwuimlckgmqb5lthtid.onion:9999";
+        let never = "ntn5iqxkkvhgvhiax3wpvsapvwdrnxyosujbrfyi2fltrbeygfg52gqd.onion:9999";
+        let fine = "5.6.7.8:9999";
+        let (up, calls, retried) = run_twice(
+            &[(flaky, true, 1), (gone, true, 2), (never, false, 1), (fine, true, 0)],
+            None,
+            Duration::ZERO,
+            4,
+        )
+        .await;
+        assert_eq!(up.len(), 4);
+        assert!(up[flaky] && up[fine]);
+        assert!(!up[gone] && !up[never]);
+        assert_eq!((calls[flaky], calls[gone], calls[never], calls[fine]), (2, 2, 1, 1));
+        assert_eq!(retried, Retried { tried: 2, answered: 1 });
+        // Out of time: no second tries either.
+        let (up, calls, _) = run_twice(&[(flaky, true, 1)], Some(Instant::now()), Duration::ZERO, 4).await;
+        assert!(up.is_empty() && calls.is_empty());
+        // Time for two probes: the second try comes before an address that never answered.
+        let step = Duration::from_millis(200);
+        let deadline = Some(Instant::now() + step * 3 / 2);
+        let (up, calls, _) = run_twice(&[(never, false, 0), (flaky, true, 1)], deadline, step, 1).await;
+        assert_eq!(up.get(flaky), Some(&true));
+        assert!(!calls.contains_key(never));
     }
 
     #[test]

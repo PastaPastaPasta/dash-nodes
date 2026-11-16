@@ -8,7 +8,8 @@ mnowatch.org/user-agents and the old dashninja.pl:
 - **Network crawl:** every 15 minutes it handshakes with every registered masternode, every node that
   answered in the past week, and new addresses from our dashd and other nodes' `getaddr` replies. From
   each it records the user agent, protocol, services, reported height and handshake time, plus
-  city, country and hosting ASN (DB-IP Lite).
+  city, country and hosting ASN (DB-IP Lite). A masternode or recently seen node that doesn't answer gets a second try
+  in the same crawl, so one dropped Tor circuit or packet doesn't count it as down.
 - **Every address network:** IPv4, IPv6, Tor v3 onion services, I2P and CJDNS. The crawler speaks
   `addrv2` (BIP155), so other nodes tell it about all of them; it reaches onion peers through Tor,
   I2P peers through i2pd, CJDNS through a cjdns node, and IPv6 directly when the host reaches the
