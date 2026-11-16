@@ -138,6 +138,7 @@ async fn probe_inner(
     // of sendheaders, so any other message after the verack means the peer isn't one.
     let deadline = Instant::now() + t.handshake;
     let mut mnauth = None;
+    let mut peer_addrv2 = false;
     let after_verack: Result<()> = async {
         let mut verack = false;
         loop {
@@ -152,6 +153,7 @@ async fn probe_inner(
                         return Ok(());
                     }
                 }
+                "sendaddrv2" if !verack => peer_addrv2 = true,
                 _ if verack => return Ok(()),
                 _ => {}
             }
@@ -165,22 +167,25 @@ async fn probe_inner(
 
     // Dash Core takes addresses only once the handshake is done, and only about one from a peer it
     // just met (its address token bucket starts at 1 and refills at 0.1 a second): one per probe.
-    // Peers older than BIP155 can't read an onion or I2P address.
+    // Only peers that asked for addrv2 (BIP155) can read an onion or I2P address.
     let mut announced = false;
+    let mut stream_ok = after_verack.is_ok();
     if let Some(a) = announce
-        && after_verack.is_ok()
+        && stream_ok
         && version.protocol >= ADDRV2_PROTO_VERSION
+        && peer_addrv2
     {
         let result = confirm_announce(&mut stream, magic, a, Instant::now() + t.handshake).await;
         if let Err(e) = &result {
             tracing::trace!(%addr, "announce: {e:#}");
         }
         announced = result.is_ok();
+        stream_ok = announced;
     }
 
     let mut addrs = Vec::new();
     // A timeout mid-message leaves the stream unusable, and getaddr needs the handshake done.
-    if getaddr && after_verack.is_ok() {
+    if getaddr && stream_ok {
         let deadline = Instant::now() + t.getaddr;
         let result: Result<()> = async {
             stream.write_all(&encode(magic, "getaddr", &[])).await?;
@@ -566,7 +571,9 @@ mod tests {
                         let mut v = version_payload(&me, 7, Some(&[9; 32]));
                         v[..4].copy_from_slice(&protocol.to_le_bytes());
                         out.push(encode(magic, "version", &v));
-                        out.push(encode(magic, "sendaddrv2", &[]));
+                        if protocol >= ADDRV2_PROTO_VERSION {
+                            out.push(encode(magic, "sendaddrv2", &[]));
+                        }
                         out.push(encode(magic, "verack", &[]));
                     }
                     "verack" => {
