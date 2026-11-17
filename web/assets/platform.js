@@ -180,7 +180,7 @@ function renderAll() {
   const PAGE = 50;
   $("all-lede").textContent = `Every registered evonode: what it earned, what it can withdraw, and when its next block is due. ` +
     `"A month" is at the pace of ${lastSpan(doc.returns.monthly_basis_days) ?? "its last six finished epochs, once there are six"}` +
-    `${doc.evonodes.some((e) => "monthly_since" in e) ? ", or a newer evonode's own pace since it registered" : ""}. Click a column to sort; open an evonode for its history.`;
+    `${doc.evonodes.some((e) => e.monthly_since != null) ? ", or a newer evonode's own pace from its first full epoch" : ""}. Click a column to sort; open an evonode for its history.`;
   const matches = (e) => {
     if (state.show === "proposed" && !e.epoch_blocks) return false;
     if (state.show === "idle" && (e.next || e.status !== "enabled")) return false;

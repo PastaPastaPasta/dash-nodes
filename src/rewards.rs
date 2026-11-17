@@ -2026,8 +2026,9 @@ pub struct Board {
     /// Every enabled evonode's 30-day rewards (zeros count), ascending: where one sits among them.
     d30_enabled: Vec<i64>,
     monthly: HashMap<String, i64>,
-    /// The span `monthly` is at the pace of, in days.
+    /// The span `monthly` is at the pace of, in days, and when that six-epoch window started.
     monthly_basis: Option<f64>,
+    window_start: Option<i64>,
     /// Evonodes registered after that six-epoch window started, at their own pace (None: no finished epoch yet).
     young: HashMap<String, Option<Pace>>,
     epoch_blocks: HashMap<String, i64>,
@@ -2042,9 +2043,11 @@ pub struct Board {
 
 impl Board {
     /// An evonode's monthly pace: its own if it's younger than the six-epoch window, else the board's.
-    fn pace(&self, protx: &str) -> Option<Pace> {
+    /// One registered (`registered`) since the board was built has no finished epoch yet.
+    fn pace(&self, protx: &str, registered: Option<i64>) -> Option<Pace> {
         match self.young.get(protx) {
             Some(own) => *own,
+            None if registered.zip(self.window_start).is_some_and(|(r, w)| r > w) => None,
             None => Some(Pace {
                 credits: self.monthly.get(protx).copied().unwrap_or(0),
                 basis_days: self.monthly_basis,
@@ -2074,7 +2077,7 @@ fn board(c: &Connection) -> Result<Board> {
     let mut d30_enabled: Vec<i64> = enabled.iter().map(|p| d30.get(p).copied().unwrap_or(0)).collect();
     d30_enabled.sort_unstable();
     let Monthly { credits: monthly, basis_days: monthly_basis, since: monthly_since } = monthly(c, start)?;
-    // A handful at most, so one query each is fine.
+    // Few, so one query each is fine.
     let young: Vec<(String, i64)> = match monthly_since {
         Some(w) => query_all(
             c,
@@ -2085,7 +2088,13 @@ fn board(c: &Connection) -> Result<Board> {
         )?,
         None => Vec::new(),
     };
-    let young = young.into_iter().map(|(p, t)| Ok((p.clone(), own_pace(c, start, &p, t)?))).collect::<Result<_>>()?;
+    let young = young
+        .into_iter()
+        .map(|(p, t)| {
+            let pace = own_pace(c, start, &p, t)?;
+            Ok((p, pace))
+        })
+        .collect::<Result<_>>()?;
     Ok(Board {
         epochs: epochs_json(c, start)?,
         yields: platform_yields(c, db::now() - YIELD_DAYS * DAY)?,
@@ -2094,6 +2103,7 @@ fn board(c: &Connection) -> Result<Board> {
         d30_enabled,
         monthly,
         monthly_basis,
+        window_start: monthly_since,
         young,
         epoch_total: epoch_blocks.values().sum(),
         epoch_blocks,
@@ -2178,11 +2188,13 @@ pub fn network_json(c: &Connection, view: &View, net: Network) -> Result<Value> 
         drive: Option<String>,
         supports: Option<i64>,
         next_epoch: Option<i64>,
+        registered: Option<i64>,
     }
     let evonodes: Vec<Evo> = query_all(
         c,
-        "SELECT m.protx, m.service, m.pose_ban_height, s.drive, s.drive_protocol_latest, s.drive_protocol_next
+        "SELECT m.protx, m.service, m.pose_ban_height, s.drive, s.drive_protocol_latest, s.drive_protocol_next, b.time
          FROM masternodes m LEFT JOIN platform_status s ON s.protx = m.protx AND s.ts > ?1
+         LEFT JOIN blocks b ON b.height = m.registered_height
          WHERE m.type = 'Evo' AND m.removed IS NULL ORDER BY m.protx",
         [db::now() - DAY],
         |r| {
@@ -2193,6 +2205,7 @@ pub fn network_json(c: &Connection, view: &View, net: Network) -> Result<Value> 
                 drive: r.get(3)?,
                 supports: r.get(4)?,
                 next_epoch: r.get(5)?,
+                registered: r.get(6)?,
             })
         },
     )?;
@@ -2201,7 +2214,7 @@ pub fn network_json(c: &Connection, view: &View, net: Network) -> Result<Value> 
         .iter()
         .map(|e| {
             let p = &e.protx;
-            let pace = b.pace(p);
+            let pace = b.pace(p, e.registered);
             json!({
                 "protx": p, "service": e.service, "status": crate::collector::pose_status(e.ban), "drive": e.drive,
                 "supports": e.supports, "vote": b.votes.get(p),
@@ -2288,7 +2301,7 @@ fn epochs_json(c: &Connection, current_start: i64) -> Result<Vec<Value>> {
 
 /// Median evonode returns: Platform rewards per epoch and per month, and the yearly yield from Platform
 /// over the last YIELD_DAYS days (Core's comes from payments, in the summary). The monthly median is over
-/// the evonodes there for the whole six-epoch window, so it's at that window's pace.
+/// the evonodes registered before the six-epoch window started, so it's at that window's pace.
 fn network_returns(b: &Board) -> Value {
     let mut m: Vec<i64> = b.monthly.iter().filter(|(p, _)| !b.young.contains_key(*p)).map(|(_, &v)| v).collect();
     m.sort_unstable();
@@ -2341,7 +2354,7 @@ pub fn mn_json(c: &Connection, protx: &str, view: &View, window_days: i64) -> Re
     let since = registered_at(c, protx)?;
     let history_days = since.map(|s| (now_ts - s).max(0) / DAY);
     let short = history_days.is_some_and(|d| d < 30);
-    let pace = b.pace(protx);
+    let pace = b.pace(protx, since);
     let sum_since = |days: i64| -> Result<i64> {
         let from = first_paid_since(c, start, now_ts - days * DAY)?;
         Ok(earned_from(c, from, Some(protx))?.get(protx).copied().unwrap_or(0))
@@ -3374,8 +3387,7 @@ mod tests {
                 ('mid', 'Evo', 2, 0, 0), ('short', 'Evo', 3, 0, 0), ('fresh', 'Evo', 4, 0, 0);
              INSERT INTO platform_payouts VALUES (83, 'mid', 2, 200000000000), (84, 'mid', 5, 900000000000),
                 (85, 'mid', 5, 900000000000), (86, 'mid', 5, 900000000000),
-                (85, 'short', 2, 500000000000), (86, 'short', 5, 900000000000),
-                (87, 'fresh', 1, 100000000000);
+                (85, 'short', 2, 500000000000), (86, 'short', 5, 900000000000);
              INSERT INTO meta VALUES ('platform_now', '{{\"epoch\": 87, \"start\": {cur_start}}}');"
         ))
         .unwrap();
@@ -3391,7 +3403,7 @@ mod tests {
             assert_eq!((&r["monthly"], &r["monthly_since"]), (&page["monthly"], &page["monthly_since"]), "{p}");
         }
         assert_eq!(row("short")["monthly_since"], json!(cur_start - 9 * DAY));
-        // Registered inside the current epoch: null, whatever it's earned so far.
+        // Registered inside the current epoch: null.
         let f = row("fresh");
         assert_eq!((f["monthly"].clone(), f["monthly_since"].clone()), (Value::Null, Value::Null));
         // Old nodes keep the six-epoch pace, zero for one that earned nothing, and no since.
@@ -3407,5 +3419,17 @@ mod tests {
         assert_eq!(ret["median_monthly"], json!(2_000_000_000_000i64));
         assert_eq!(ret["evonodes_paid"], json!(2));
         assert_eq!(ret["monthly_basis_days"], json!(54.0));
+
+        // Registered after the board was built: null on the table and its page until the next build.
+        c.execute_batch(&format!(
+            "INSERT INTO blocks VALUES (5, 'e', '', {}, 0);
+             INSERT INTO masternodes (protx, type, registered_height, first_seen, updated) VALUES ('late', 'Evo', 5, 0, 0);",
+            now - DAY
+        ))
+        .unwrap();
+        let doc = network_json(&c, &view, Network::Mainnet).unwrap();
+        let late = doc["evonodes"].as_array().unwrap().iter().find(|r| r["protx"] == "late").unwrap().clone();
+        assert_eq!(late["monthly"], Value::Null);
+        assert_eq!(mn_json(&c, "late", &view, 1).unwrap()["monthly"], Value::Null);
     }
 }

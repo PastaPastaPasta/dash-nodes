@@ -153,7 +153,12 @@ test("monthlyCell shows a newer evonode's own pace, and a dash before its first 
 });
 
 test("monthlySortKey puts a null estimate below every number", () => {
-  const rows = [{ monthly: null }, { monthly: 0 }, { monthly: 5 }];
-  assert.deepEqual([...rows].sort((a, b) => monthlySortKey(b) - monthlySortKey(a)).map((r) => r.monthly), [5, 0, null]);
-  assert.deepEqual([...rows].sort((a, b) => monthlySortKey(a) - monthlySortKey(b)).map((r) => r.monthly), [null, 0, 5]);
+  const rows = [{ monthly: null, id: "a" }, { monthly: 0, id: "b" }, { monthly: null, id: "c" }, { monthly: 5, id: "d" }];
+  // The Platform table's comparator: by key, then by ProTx.
+  const by = (dir) => (a, b) => {
+    const x = monthlySortKey(a), y = monthlySortKey(b);
+    return (x < y ? -1 : x > y ? 1 : 0) * dir || (a.id < b.id ? -1 : 1);
+  };
+  assert.deepEqual([...rows].sort(by(-1)).map((r) => r.id), ["d", "b", "a", "c"]);
+  assert.deepEqual([...rows].sort(by(1)).map((r) => r.id), ["a", "c", "b", "d"]);
 });
