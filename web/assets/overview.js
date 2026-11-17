@@ -475,7 +475,8 @@ async function loadHistory() {
   const [v, s, a] = await Promise.all([
     api(`${net}/history?scope=${scope}&dim=version&days=${days}&top=20`),
     api(`${net}/history?dim=totals&days=${days}`),
-    api(`${net}/history?scope=all&dim=network&days=${days}&top=20`),
+    // The address breakdown is extra: without it the other two charts still draw.
+    api(`${net}/history?scope=all&dim=network&days=${days}&top=20`).catch(() => null),
   ]);
   if (mine !== historyRequest) return; // a newer scope or range was picked meanwhile
   keepVersions(v, 6);
@@ -490,7 +491,7 @@ async function loadHistory() {
   // Masternodes only: reachable_nodes counts addresses, which the chart below breaks down by network.
   s.series = s.series.filter((x) => x.key !== "reachable_nodes");
   const order = Object.keys(NET_SLOTS);
-  a.series.sort((x, y) => order.indexOf(x.key) - order.indexOf(y.key));
+  a?.series.sort((x, y) => order.indexOf(x.key) - order.indexOf(y.key));
   const labels = { masternodes: "Enabled masternodes", masternodes_reachable: "Masternodes reachable" };
   const vopts = { stacked: true, share: true, palette: versionPalette, label: (k) => (k === "Unknown" ? "No answer this week" : k), title: "Version share over time", height: 240 };
   // The two counts sit close together far from zero: an axis that starts at zero flattens them.
@@ -501,6 +502,8 @@ async function loadHistory() {
   else versionsChart = timeChart($("versions-chart"), v, vopts);
   if (sizeChart) sizeChart.update(s, sopts);
   else sizeChart = timeChart($("size-chart"), s, sopts);
+  $("addr-chart").closest(".ov-chart").hidden = !a;
+  if (!a) return;
   if (addrChart) addrChart.update(a, aopts);
   else addrChart = timeChart($("addr-chart"), a, aopts);
 }

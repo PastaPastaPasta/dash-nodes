@@ -472,7 +472,7 @@ function renderHeadline() {
     const mns = pts.reduce((a, p) => a + p.masternodes, 0);
     headline.replaceChildren(el("b", { class: "num", text: fmt(total) }), ` reachable IP addresses in ${fmt(pts.length)} places; ${fmt(mns)} are masternodes'.`);
     foot.textContent = "A node reachable on both IPv4 and IPv6 counts at each address." +
-      (geo?.unlocated ? ` ${fmt(geo.unlocated)} reachable Tor and I2P addresses have no location, so they aren't drawn.` : "");
+      (geo?.unlocated ? ` ${fmt(geo.unlocated)} reachable addresses (Tor and I2P among them) have no location, so they aren't drawn.` : "");
     return;
   }
   // What's drawn: the filters, less the hidden chips. With no chip hidden, the same masternodes the

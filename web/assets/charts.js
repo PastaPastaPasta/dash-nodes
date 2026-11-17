@@ -167,10 +167,12 @@ export function timeChart(container, data, opts) {
     for (const m of marks) {
       const xx = Math.round(x(m.t)) + 0.5;
       root.append(svg("line", { x1: xx, x2: xx, y1: M.t - 4, y2: M.t + ph, class: "mark" }));
-      const end = xx > M.l + pw * 0.6;
-      const tx = svg("text", { x: end ? xx + 4 : xx - 4, y: M.t - 8, "text-anchor": end ? "end" : "start", class: "mark-label" });
+      const tx = svg("text", { y: M.t - 8, class: "mark-label" });
       tx.textContent = m.label;
       root.append(tx);
+      // Ends at the mark when it fits on the left, else starts there; either way inside the plot.
+      const w = tx.getComputedTextLength();
+      tx.setAttribute("x", Math.max(M.l, Math.min(xx + 4 - (xx + 4 - w >= M.l ? w : 0), W - M.r - w)));
     }
 
     const xhair = svg("line", { y1: M.t, y2: M.t + ph, class: "xhair", visibility: "hidden" });
