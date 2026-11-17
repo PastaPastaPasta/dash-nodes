@@ -150,14 +150,17 @@
         blocks this epoch voted for it), <code>required</code> (1 + <code>required_pct</code>% of <code>enabled_evonodes</code>, rounded down; <code>required_pct</code> is Drive's share for the protocol that judges the votes, 67 since protocol 3),
         <code>versions</code> as <code>[[version, votes], …]</code>, <code>phase</code> (<code>active</code>, <code>voting</code> or
         <code>locked_in</code>, when evonodes report a higher <code>next_epoch</code> protocol) and <code>next_epoch_reported_by</code>.
-        <code>returns</code>: the <code>median_monthly</code> evonode Platform reward at the pace of the last six epochs and the
+        <code>returns</code>: the <code>median_monthly</code> evonode Platform reward at the pace of the last six epochs (over the
+        <code>evonodes_paid</code> evonodes registered before those six epochs started and paid in them) and the
         <code>median_platform_yield</code> on 4,000 DASH over the last 90 days. <code>epochs</code>, newest first, up to 120:
         <code>{epoch, start, end, duration, first_height, blocks, proposers, pool, core_rewards, fees, per_block, protocol_version,
         blocks_spread, credits_spread}</code>, the spreads as <code>{p10, p50, p90, min, max}</code> over the evonodes that proposed.
         <code>schedule</code>: who proposes next, from validator sets sampled every 90 seconds (<code>{ts, height, epoch, block_secs,
         next: [{protx, slots, eta}]}</code>, an estimate; <code>null</code> when none could be read for 5 minutes). <code>evonodes</code>: every registered evonode as
-        <code>{protx, service, status, drive, supports, vote, epoch_blocks, last_blocks, last_epoch, d30, monthly, balance, next}</code>
-        (<code>supports</code> is the newest protocol its Drive supports; <code>balance</code> its masternode identity's credits).</p>
+        <code>{protx, service, status, drive, supports, vote, epoch_blocks, last_blocks, last_epoch, d30, monthly, monthly_since, balance, next}</code>
+        (<code>supports</code> is the newest protocol its Drive supports; <code>monthly</code> is as on its masternode page: the
+        last six epochs' pace, or for an evonode registered since they started its own pace from <code>monthly_since</code>, and
+        <code>null</code> before its first finished epoch; <code>balance</code> its masternode identity's credits).</p>
       <pre class="code">curl https://radar.dashhq.org/api/v1/mainnet/platform | jq '.upgrade'</pre>
     </div>
     <div class="api-ep" id="activation" data-anchor="GET /api/v1/{net}/activation">
