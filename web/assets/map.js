@@ -257,7 +257,7 @@ function mnDonut(f) {
 
 function nodeDonut(f) {
   const p = f.properties;
-  const label = `${fmt(p.nodes)} reachable nodes, ${fmt(p.masternodes)} of them masternodes`;
+  const label = `${fmt(p.nodes)} reachable addresses, ${fmt(p.masternodes)} of them masternodes'`;
   return donut([["s1", p.masternodes], ["s3", p.nodes - p.masternodes]], p.nodes, label, () => {
     if (p.cluster) zoomInto("nodes", p.cluster_id, f.geometry.coordinates, () => showCity(p));
     else showCity(p);
@@ -438,7 +438,7 @@ function showCity(p) {
   groupBox.hidden = false;
   groupBox.replaceChildren(
     groupHead((!p.cluster && place(geo.points[p.i])) || "This area", () => { groupBox.hidden = true; foldDetails(); }),
-    el("p", { class: "sub", text: `${fmt(p.nodes)} reachable nodes: ${fmt(p.masternodes)} masternodes and ${fmt(p.nodes - p.masternodes)} other full nodes.` }));
+    el("p", { class: "sub", text: `${fmt(p.nodes)} reachable addresses: ${fmt(p.masternodes)} of masternodes and ${fmt(p.nodes - p.masternodes)} of other full nodes.` }));
   showDetails();
 }
 
@@ -470,8 +470,9 @@ function renderHeadline() {
     const pts = geo?.points || [];
     const total = pts.reduce((a, p) => a + p.nodes, 0);
     const mns = pts.reduce((a, p) => a + p.masternodes, 0);
-    headline.replaceChildren(el("b", { class: "num", text: fmt(total) }), ` reachable nodes in ${fmt(pts.length)} places; ${fmt(mns)} are masternodes.`);
-    foot.textContent = geo?.unlocated ? `${fmt(geo.unlocated)} reachable nodes on Tor or I2P have no location, so they aren't drawn.` : "";
+    headline.replaceChildren(el("b", { class: "num", text: fmt(total) }), ` reachable IP addresses in ${fmt(pts.length)} places; ${fmt(mns)} are masternodes'.`);
+    foot.textContent = "A node reachable on both IPv4 and IPv6 counts at each address." +
+      (geo?.unlocated ? ` ${fmt(geo.unlocated)} reachable Tor and I2P addresses have no location, so they aren't drawn.` : "");
     return;
   }
   // What's drawn: the filters, less the hidden chips. With no chip hidden, the same masternodes the
