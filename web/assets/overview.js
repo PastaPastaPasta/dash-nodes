@@ -19,8 +19,11 @@ const sizePalette = new Palette();
 /** Each address network keeps its color whatever the range shows. */
 const NET_SLOTS = { ipv4: 1, ipv6: 2, onion: 3, i2p: 4, cjdns: 5 };
 const netPalette = { assign() {}, color: (k) => (NET_SLOTS[k] ? `var(--s${NET_SLOTS[k]})` : "var(--other)") };
-/** Changes in what the crawl finds, so a step in the counts isn't read as growth. */
-const CRAWL_CHANGES = [{ t: Date.UTC(2026, 10, 16, 3, 45) / 1000, label: "Tor & I2P discovery added" }];
+/** Changes in what the crawl finds, where each network's counts first stepped, so a step isn't read as growth. */
+const CRAWL_CHANGES = {
+  mainnet: [{ t: Date.UTC(2026, 10, 16, 15, 30) / 1000, label: "Tor & I2P discovery added" }],
+  testnet: [{ t: Date.UTC(2026, 10, 16, 3, 45) / 1000, label: "Tor & I2P discovery added" }],
+};
 let versionsChart, sizeChart, addrChart, summary;
 const $ = (id) => document.getElementById(id);
 
@@ -493,7 +496,7 @@ async function loadHistory() {
   // The two counts sit close together far from zero: an axis that starts at zero flattens them.
   const sopts = { stacked: false, zero: false, palette: sizePalette, label: (k) => labels[k] || k, title: "Masternodes, each counted once", height: 180 };
   const aopts = { stacked: true, palette: netPalette, label: (k) => ADDRESS_NETWORKS[k] || k, title: "Reachable addresses by network",
-    height: 200, marks: CRAWL_CHANGES };
+    height: 200, marks: CRAWL_CHANGES[net] };
   if (versionsChart) versionsChart.update(v, vopts);
   else versionsChart = timeChart($("versions-chart"), v, vopts);
   if (sizeChart) sizeChart.update(s, sopts);
