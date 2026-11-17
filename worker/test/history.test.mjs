@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { shortDate, uptimeTile, rank30Note, earnedRows, monthlyRow, missedTurns } from "../../web/assets/history.js";
+import { shortDate, uptimeTile, rank30Note, earnedRows, monthlyRow, monthlyCell, monthlySortKey, missedTurns } from "../../web/assets/history.js";
 
 const f = {
   fmt: (n) => (n == null ? "–" : Math.round(n).toLocaleString("en-US")),
@@ -138,4 +138,22 @@ test("missed turns name the registration date under 30 days and keep 'last 30 da
   assert.equal(missedTurns({ since: OCT_25, history_days: 30, turns_30d }, f), "0 of 34 turns, last 30 days");
   assert.equal(missedTurns({ turns_30d }, f), "0 of 34 turns, last 30 days");
   assert.equal(missedTurns({ since: OCT_25, history_days: 22, turns_30d: { missed: 0, turns: 0 } }, f), null);
+});
+
+test("monthlyCell shows a newer evonode's own pace, and a dash before its first finished epoch", () => {
+  assert.deepEqual(monthlyCell({ monthly: 3_008_399_738_045, monthly_since: OCT_30 }, f),
+    { text: "30.08 DASH", under: "since 30 Oct", title: null });
+  assert.deepEqual(monthlyCell({ monthly: null, monthly_since: null }, f),
+    { text: "–", under: null, title: "No finished epoch since it registered" });
+  assert.deepEqual(monthlyCell({ monthly: 2_000_000_000_000, monthly_since: null }, f),
+    { text: "20 DASH", under: null, title: null });
+  assert.deepEqual(monthlyCell({ monthly: 0, monthly_since: null }, f), { text: "0 DASH", under: null, title: null });
+  // Rows published before `monthly_since` existed render as they did.
+  assert.deepEqual(monthlyCell({ monthly: 775_000_000_000 }, f), { text: "7.75 DASH", under: null, title: null });
+});
+
+test("monthlySortKey puts a null estimate below every number", () => {
+  const rows = [{ monthly: null }, { monthly: 0 }, { monthly: 5 }];
+  assert.deepEqual([...rows].sort((a, b) => monthlySortKey(b) - monthlySortKey(a)).map((r) => r.monthly), [5, 0, null]);
+  assert.deepEqual([...rows].sort((a, b) => monthlySortKey(a) - monthlySortKey(b)).map((r) => r.monthly), [null, 0, 5]);
 });

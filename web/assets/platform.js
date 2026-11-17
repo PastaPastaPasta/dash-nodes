@@ -2,6 +2,7 @@
 import { api, chrome, currentNet, el, fmt, pct, href, ago, dateTime, amount, inAbout, shortHash, badge, segmented, searchBox, toDash, labelled, lastSpan } from "./common.js";
 import { svg, sized, axisScale, valueAxis, epochAxis } from "./charts.js";
 import { upgradeView } from "./platform-upgrade.js";
+import { monthlyCell, monthlySortKey } from "./history.js";
 
 chrome("platform");
 const net = currentNet();
@@ -161,7 +162,10 @@ const COLUMNS = [
   { key: "last_epoch", label: "Last epoch", r: true, get: (e) => e.last_epoch,
     cell: (e) => el("td", { class: "r" }, amount(e.last_epoch), el("small", { class: "under", text: `${fmt(e.last_blocks)} blocks` })) },
   { key: "d30", label: "30 days", r: true, get: (e) => e.d30, cell: (e) => el("td", { class: "r", text: amount(e.d30) }) },
-  { key: "monthly", label: "A month (est.)", r: true, get: (e) => e.monthly, cell: (e) => el("td", { class: "r", text: amount(e.monthly) }) },
+  { key: "monthly", label: "A month (est.)", r: true, get: monthlySortKey, cell: (e) => {
+    const m = monthlyCell(e, { amount });
+    return el("td", { class: "r", title: m.title }, m.text, m.under ? el("small", { class: "under", text: m.under }) : null);
+  } },
   { key: "balance", label: "Claimable", r: true, get: (e) => e.balance ?? -1, cell: (e) => el("td", { class: "r", text: e.balance != null ? amount(e.balance) : "–" }) },
   { key: "next", label: "Next block", r: true, get: (e) => e.next ?? Infinity,
     cell: (e) => el("td", { class: "r", title: e.next ? dateTime(e.next) : doc.schedule ? "Not in a validator set that takes turns now" : "Unknown: the validator sets haven't been read lately" },
@@ -175,7 +179,8 @@ function renderAll() {
   const state = { q: "", show: "all", sort: "monthly", dir: -1, page: 0 };
   const PAGE = 50;
   $("all-lede").textContent = `Every registered evonode: what it earned, what it can withdraw, and when its next block is due. ` +
-    `"A month" is at the pace of ${lastSpan(doc.returns.monthly_basis_days) ?? "its last six finished epochs, once there are six"}. Click a column to sort; open an evonode for its history.`;
+    `"A month" is at the pace of ${lastSpan(doc.returns.monthly_basis_days) ?? "its last six finished epochs, once there are six"}` +
+    `${doc.evonodes.some((e) => "monthly_since" in e) ? ", or a newer evonode's own pace since it registered" : ""}. Click a column to sort; open an evonode for its history.`;
   const matches = (e) => {
     if (state.show === "proposed" && !e.epoch_blocks) return false;
     if (state.show === "idle" && (e.next || e.status !== "enabled")) return false;

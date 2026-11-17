@@ -1,5 +1,6 @@
 // Window labels and rows for a masternode page (mn.js) when the node has fewer than 30 days of
-// history, or registered after the board's six-epoch pace window started. Pure functions, no DOM:
+// history, or registered after the board's six-epoch pace window started, and that node's cell on
+// the Platform page's table (platform.js). Pure functions, no DOM:
 // formatting helpers come in from common.js, and missing fields fall back to the 30-day behaviour
 // while a deploy rolls out.
 
@@ -80,6 +81,18 @@ export function monthlyRow(p, { amount, lastSpan, duration }) {
     note: span ? ` at its pace of ${span}` : " once six epochs have finished",
   };
 }
+
+/**
+ * The Platform table's "A month (est.)" cell for one evonode row as { text, under, title }: `under`
+ * names when a newer node's own pace starts, and a node with no finished epoch yet shows "–".
+ */
+export function monthlyCell(e, { amount }) {
+  if (e.monthly === null) return { text: "–", under: null, title: "No finished epoch since it registered" };
+  return { text: amount(e.monthly), under: e.monthly_since != null ? `since ${shortDate(e.monthly_since)}` : null, title: null };
+}
+
+/** Sort key for that column: a null estimate sorts below every number. */
+export const monthlySortKey = (e) => e.monthly ?? -Infinity;
 
 /** The "Missed turns we saw" value text, or null when no turns were seen. */
 export function missedTurns(p, { fmt }) {
