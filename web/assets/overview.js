@@ -16,7 +16,15 @@ const SW_VIEWS = [["now", "Now"], ["time", "Over time"]];
 let swView = params.get("versions") === "time" ? "time" : "now";
 
 const sizePalette = new Palette();
-let versionsChart, sizeChart, summary;
+/** Each address network keeps its color whatever the range shows. */
+const NET_SLOTS = { ipv4: 1, ipv6: 2, onion: 3, i2p: 4, cjdns: 5 };
+const netPalette = { assign() {}, color: (k) => (NET_SLOTS[k] ? `var(--s${NET_SLOTS[k]})` : "var(--other)") };
+/** Changes in what the crawl finds, where each network's counts first stepped, so a step isn't read as growth. */
+const CRAWL_CHANGES = {
+  mainnet: [{ t: Date.UTC(2026, 10, 16, 15, 30) / 1000, label: "Tor & I2P discovery added" }],
+  testnet: [{ t: Date.UTC(2026, 10, 16, 3, 45) / 1000, label: "Tor & I2P discovery added" }],
+};
+let versionsChart, sizeChart, addrChart, summary;
 const $ = (id) => document.getElementById(id);
 
 function remember() {
@@ -135,10 +143,13 @@ function renderHero() {
   const c = summary.crawl, prev = summary.day_ago, all = summary.dists.all || {}, mn = summary.dists.mn || {};
   const type = Object.fromEntries(mn.type || []);
   const status = Object.fromEntries(mn.status || []);
-  const diff = prev ? c.reachable - prev.reachable : null;
-  $("hero-title").textContent = `${fmt(c.reachable)} Dash nodes answered our last crawl`;
-  $("hero-sub").textContent = `Among them ${fmt(c.mn_reachable)} of the ${fmt(c.mn_total)} enabled masternodes. ` +
-    (diff ? `That's ${fmt(Math.abs(diff))} ${diff > 0 ? "more" : "fewer"} nodes than a day ago. ` : "") +
+  const diff = prev?.mn_reachable != null ? c.mn_reachable - prev.mn_reachable : null;
+  const nets = (summary.networks || []).filter((n) => n.reachable).map((n) => ADDRESS_NETWORKS[n.network] || n.network);
+  const on = nets.length > 1 ? ` on ${nets.slice(0, -1).join(", ")} and ${nets.at(-1)}` : "";
+  $("hero-title").textContent = `${fmt(c.mn_reachable)} masternodes answered our last crawl`;
+  $("hero-sub").textContent = `Of the ${fmt(c.mn_total)} enabled, each counted once. ` +
+    (diff ? `That's ${fmt(Math.abs(diff))} ${diff > 0 ? "more" : "fewer"} than a day ago. ` : "") +
+    `In all ${fmt(c.reachable)} addresses answered${on}; a node reachable on several networks counts at each. ` +
     `Crawled ${ago(c.finished)}, at block ${fmt(c.tip_height)}.`;
   // Every stat leads somewhere: the list it counts, or the section that explains it.
   const stat = (value, label, note, to, tone, onclick) => el("div", { class: tone ? `stat-${tone}` : null },
@@ -400,9 +411,10 @@ function renderReach() {
   if (rows.length) shareBar($("reach-bar"), $("reach-legend"), rows, { color: (k) => colors[k], label: (k) => names[k] });
   const lede = $("reach-lede");
   if (scope === "nonmn") {
-    lede.textContent = `${fmt(total(d.version || []))} other full nodes accept connections. Nodes that only connect out can't be seen from outside, so the real number is higher.`;
+    lede.textContent = `Other full nodes accept connections at ${fmt(total(d.version || []))} addresses. A node reachable on several networks counts at each, ` +
+      "and nodes that only connect out can't be seen from outside.";
   } else if (scope === "all") {
-    lede.textContent = `${fmt(c.reachable)} nodes answered out of ${fmt(c.tried)} addresses tried. Counted are nodes that answered at least once this week, plus every enabled masternode.`;
+    lede.textContent = `${fmt(c.reachable)} addresses answered out of ${fmt(c.tried)} tried. Counted are addresses that answered at least once this week, plus every enabled masternode's.`;
   } else {
     lede.textContent = yes + no
       ? `${pct(yes / (yes + no))} of enabled ${noun()} answered our handshake on their registered address; ${fmt(no)} didn't.`
@@ -459,9 +471,12 @@ async function loadHistory() {
   const mine = ++historyRequest;
   versionsChart?.loading();
   sizeChart?.loading();
-  const [v, s] = await Promise.all([
+  addrChart?.loading();
+  const [v, s, a] = await Promise.all([
     api(`${net}/history?scope=${scope}&dim=version&days=${days}&top=20`),
     api(`${net}/history?dim=totals&days=${days}`),
+    // The address breakdown is extra: without it the other two charts still draw.
+    api(`${net}/history?scope=all&dim=network&days=${days}&top=20`).catch(() => null),
   ]);
   if (mine !== historyRequest) return; // a newer scope or range was picked meanwhile
   keepVersions(v, 6);
@@ -473,14 +488,24 @@ async function loadHistory() {
   $("sw-since").textContent = t0 && t0 > Date.now() / 1000 - Number(days) * 86400 + 86400
     ? `Our history starts ${new Date(t0 * 1000).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" })}, so this range shows less than it asks for.`
     : "";
-  const labels = { reachable_nodes: "Reachable nodes", masternodes: "Enabled masternodes", masternodes_reachable: "Masternodes reachable" };
+  // Masternodes only: reachable_nodes counts addresses, which the chart below breaks down by network.
+  s.series = s.series.filter((x) => x.key !== "reachable_nodes");
+  const order = Object.keys(NET_SLOTS);
+  a?.series.sort((x, y) => order.indexOf(x.key) - order.indexOf(y.key));
+  const labels = { masternodes: "Enabled masternodes", masternodes_reachable: "Masternodes reachable" };
   const vopts = { stacked: true, share: true, palette: versionPalette, label: (k) => (k === "Unknown" ? "No answer this week" : k), title: "Version share over time", height: 240 };
-  // The three counts sit close together far from zero: an axis that starts at zero flattens them.
-  const sopts = { stacked: false, zero: false, palette: sizePalette, label: (k) => labels[k] || k, title: "Network size", height: 220 };
+  // The two counts sit close together far from zero: an axis that starts at zero flattens them.
+  const sopts = { stacked: false, zero: false, palette: sizePalette, label: (k) => labels[k] || k, title: "Masternodes, each counted once", height: 180 };
+  const aopts = { stacked: true, palette: netPalette, label: (k) => ADDRESS_NETWORKS[k] || k, title: "Reachable addresses by network",
+    height: 200, marks: CRAWL_CHANGES[net] };
   if (versionsChart) versionsChart.update(v, vopts);
   else versionsChart = timeChart($("versions-chart"), v, vopts);
   if (sizeChart) sizeChart.update(s, sopts);
   else sizeChart = timeChart($("size-chart"), s, sopts);
+  $("addr-chart").closest(".ov-chart").hidden = !a;
+  if (!a) return;
+  if (addrChart) addrChart.update(a, aopts);
+  else addrChart = timeChart($("addr-chart"), a, aopts);
 }
 
 async function loadHistorySafely() {

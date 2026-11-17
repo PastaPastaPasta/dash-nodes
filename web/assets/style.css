@@ -186,6 +186,8 @@ main { max-width: 1280px; width: 100%; margin: 0 auto; padding: 22px 20px 48px; 
 .chart .baseline { stroke: var(--axis); stroke-width: 1; shape-rendering: crispEdges; }
 .chart .tick { fill: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
 .chart .xhair { stroke: var(--axis); stroke-width: 1; }
+.chart .mark { stroke: var(--ink-2); stroke-width: 1; stroke-dasharray: 3 3; shape-rendering: crispEdges; }
+.chart .mark-label { fill: var(--ink-2); font-size: 11px; }
 .chart.loading { opacity: 0.45; transition: opacity .15s; }
 .legend { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 10px; font-size: 12.5px; color: var(--ink-2); }
 .legend span { display: inline-flex; align-items: center; gap: 6px; }
@@ -466,6 +468,8 @@ main.overview { padding-top: 26px; }
 .chart-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
 .chart-head h3 { margin: 0; }
 .ov-chart { background: var(--surface); border-radius: 12px; box-shadow: 0 0 0 1px var(--ring); padding: 14px 16px 12px; }
+.ov-charts { display: grid; gap: 16px; }
+.chart-note { margin: 10px 0 0; }
 
 .sharebar { display: flex; gap: 2px; height: 30px; border-radius: 7px; overflow: hidden; }
 .sharebar.thin { height: 12px; border-radius: 4px; margin-bottom: 14px; }

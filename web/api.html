@@ -49,7 +49,7 @@
         as unreachable. <code>masternodes</code> counts the registered masternodes reachable on the network, at an address their ProTx
         lists or at one that proved to be them by MNAUTH (signed with the operator key), so a masternode on Tor, I2P or IPv6 counts
         there though its ProTx only lists IPv4. Each counts once per network however many addresses answer for it.</p>
-      <p class="sub">Scopes: <code>all</code> (every node that answered), <code>nonmn</code> (those that aren't masternodes),
+      <p class="sub">Scopes: <code>all</code> (every address that answered), <code>nonmn</code> (those that aren't masternodes'),
         <code>mn</code> and <code>evo</code> (every enabled masternode or evonode, reachable or not, keyed by the user agent it last
         announced in the past 7 days, else <code>Unknown</code>).</p>
       <p class="sub">Dimensions: <code>ua</code>, <code>version</code>, <code>client</code>, <code>protocol</code>, <code>country</code> (ISO 3166),
@@ -78,12 +78,15 @@
       <h3>GET /api/v1/{net}/history?scope=mn&amp;dim=version&amp;days=30&amp;top=8</h3>
       <p class="sub">A time series of one distribution: <code>{resolution, t: [...], series: [{key, values}]}</code>. Up to 14 days back
         it has one point per crawl; past that, daily averages. Keys outside the top <code>top</code> (by total over the window) fold into
-        <code>Other</code>. <code>dim=totals</code> returns reachable nodes, enabled masternodes and reachable masternodes instead.
+        <code>Other</code>. <code>dim=totals</code> returns <code>reachable_nodes</code>, <code>masternodes</code> (enabled) and
+        <code>masternodes_reachable</code> instead. <code>reachable_nodes</code> counts addresses that answered, not nodes: a node
+        doesn't tell peers its addresses on other networks, so one reachable on IPv4 and Tor counts twice
+        (<code>scope=all&amp;dim=network</code> breaks it down by network). The masternode counts are of masternodes, each once.
         <code>days</code> is one of 1, 7, 14, 30, 90 and 365 (default 30); <code>top</code> is 1 to 20 (default 8).</p>
     </div>
     <div class="api-ep" id="geo" data-anchor="GET /api/v1/{net}/geo">
       <h3>GET /api/v1/{net}/geo</h3>
-      <p class="sub">Every node that answered the latest crawl, counted per city and never by address:
+      <p class="sub">Every IP address that answered the latest crawl, counted per city without the addresses themselves:
         <code>{crawl_id, points: [{lat, lon, city, country, nodes, masternodes}], unlocated}</code>. Onion and I2P nodes have no
         location and only count in <code>unlocated</code>.</p>
     </div>

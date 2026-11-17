@@ -66,7 +66,8 @@ function fmtWhen(t, resolution) {
 /**
  * Time-series chart.
  * data: {t: [unix...], series: [{key, values}], resolution}
- * opts: {stacked, share, zero (false: fit the axis to the data), palette, label(key), height, valueFmt}
+ * opts: {stacked, share, zero (false: fit the axis to the data), palette, label(key), height, valueFmt,
+ *        marks: [{t, label}] (dated events drawn as a dashed line, e.g. a change in what's counted)}
  * Returns {update(data, opts)}.
  */
 export function timeChart(container, data, opts) {
@@ -88,13 +89,15 @@ export function timeChart(container, data, opts) {
   function draw() {
     const { data, opts } = state;
     const label = opts.label || ((k) => k);
-    const H = opts.height || 240, X = 22, M = { l: 44, r: 10, t: 8 };
+    const t = data.t;
+    const marks = (opts.marks || []).filter((m) => t.length >= 2 && m.t > t[0] && m.t <= t.at(-1));
+    // Marks are labelled in a strip above the plot, so a label never covers the data.
+    const H = opts.height || 240, X = 22, M = { l: 44, r: 10, t: marks.length ? 22 : 8 };
     const W = Math.max(280, width);
     const pw = W - M.l - M.r, ph = H - M.t;
     host.querySelector("svg")?.remove();
     const root = svg("svg", { viewBox: `0 0 ${W} ${H + X}`, height: H + X, role: "img", "aria-label": opts.title || "chart" });
     host.prepend(root);
-    const t = data.t;
     if (t.length < 2) {
       const msg = svg("text", { x: W / 2, y: H / 2, "text-anchor": "middle", class: "tick" });
       msg.textContent = t.length ? "History builds up as crawls run; check back after the next one." : "No data for this range yet.";
@@ -160,6 +163,17 @@ export function timeChart(container, data, opts) {
         root.append(svg("circle", { cx: x(t[last]), cy: y(hi[j][last]), r: 4, fill: color, stroke: "var(--surface)", "stroke-width": 2 }));
       }
     });
+
+    for (const m of marks) {
+      const xx = Math.round(x(m.t)) + 0.5;
+      root.append(svg("line", { x1: xx, x2: xx, y1: M.t - 4, y2: M.t + ph, class: "mark" }));
+      const tx = svg("text", { y: M.t - 8, class: "mark-label" });
+      tx.textContent = m.label;
+      root.append(tx);
+      // Ends at the mark when it fits on the left, else starts there; either way inside the plot.
+      const w = tx.getComputedTextLength();
+      tx.setAttribute("x", Math.max(M.l, Math.min(xx + 4 - (xx + 4 - w >= M.l ? w : 0), W - M.r - w)));
+    }
 
     const xhair = svg("line", { y1: M.t, y2: M.t + ph, class: "xhair", visibility: "hidden" });
     root.append(xhair);
