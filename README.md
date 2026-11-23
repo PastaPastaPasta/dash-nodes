@@ -79,7 +79,7 @@ dashd ×2 ─ app (crawler, SQLite, API :8080) ─ publisher ──S3 PUT──�
   instead (that's how a local `wrangler dev` gets seeded), but in production every upload would then
   be a Worker request, and a full republish (a new host, or a payments backfill) is ~26k of them.
 - Speed-test vantages upload through `/_ingest` with their own tokens, which the Worker limits to
-  their own documents (R2 tokens can't be limited to a key prefix); that's a few dozen an hour.
+  their own documents (R2 tokens can't be limited to a key prefix); with `BENCH_PUBLISH_INTERVAL=3600` that's a handful an hour per vantage.
 - If the crawler host is down, the site keeps serving the last published data and says how old it is.
 - **Hostnames:** both are Workers Custom Domains of the `dash-nodes` Worker (`routes` in
   `worker/wrangler.jsonc`), so they serve the same site and API. radar.dashhq.org is the canonical

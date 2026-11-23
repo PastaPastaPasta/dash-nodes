@@ -45,24 +45,22 @@ export async function api(path) {
   return r.json();
 }
 
-/** Tiny element builder. Text is always set via textContent (data is untrusted). */
 /**
- * Calls `fn` every `ms` while the page is visible. A hidden tab asks nothing; when it is shown again after a full
- * interval it calls `fn` at once, so the page catches up. Every call is a Worker request against a daily allowance.
+ * Calls `fn` about every `ms` while the page is visible. A hidden tab asks nothing; once it is shown again after a
+ * full interval it calls `fn` at once. Every call is a Worker request against a daily allowance.
  */
 export function everyVisible(fn, ms) {
   let last = Date.now();
   const tick = () => {
-    if (document.hidden) return;
+    if (document.hidden || Date.now() - last < ms) return;
     last = Date.now();
     fn();
   };
-  setInterval(tick, ms);
-  document.addEventListener("visibilitychange", () => {
-    if (!document.hidden && Date.now() - last >= ms) tick();
-  });
+  setInterval(tick, Math.min(ms, 30_000));
+  document.addEventListener("visibilitychange", tick);
 }
 
+/** Tiny element builder. Text is always set via textContent (data is untrusted). */
 export function el(tag, attrs = {}, ...children) {
   const e = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs)) {
