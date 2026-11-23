@@ -260,7 +260,7 @@ body, `x-body-encoding: gzip`; a round stops at the first failed upload and resu
 | `BENCH_CONCURRENCY`, `BENCH_SWEEP_CONCURRENCY` | `2`, `8` | tests at once, paced and with `--sweep` |
 | `BENCH_MAX_MBIT` | `24` | don't start tests above this download rate |
 | `BENCH_DEPTH`, `BENCH_STALL_SECS`, `BENCH_TEST_TIMEOUT`, `BENCH_PINGS` | `50000`, `10`, `120`, `5` | |
-| `BENCH_PUBLISH_INTERVAL`, `STATE_DIR` | `600`, `./bench-state` (`/state` in the image) | |
+| `BENCH_PUBLISH_INTERVAL`, `STATE_DIR` | `600` (the compose files set `3600`), `./bench-state` (`/state` in the image) | |
 
 The transports are the crawler's (`TOR_PROXY`, `I2P_PROXY`, `CRAWL_IPV6`, `IPV6_PROXY`, `CJDNS`);
 masternodes on a network without a route are skipped, not failed.

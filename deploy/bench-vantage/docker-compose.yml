@@ -39,6 +39,8 @@ services:
       NETWORKS: ${NETWORKS:-mainnet testnet}
       CYCLE_DAYS: ${CYCLE_DAYS:-14}
       BENCH_CONCURRENCY: ${BENCH_CONCURRENCY:-2}
+      # Each upload is a Worker request; results only need to reach the site hourly.
+      BENCH_PUBLISH_INTERVAL: ${BENCH_PUBLISH_INTERVAL:-3600}
       BENCH_MAX_MBIT: ${BENCH_MAX_MBIT:-24}
       STATE_DIR: /state
       CRAWL_IPV6: ${CRAWL_IPV6:-auto}
