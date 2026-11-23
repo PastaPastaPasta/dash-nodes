@@ -79,7 +79,7 @@ dashd ×2 ─ app (crawler, SQLite, API :8080) ─ publisher ──S3 PUT──�
   instead (that's how a local `wrangler dev` gets seeded), but in production every upload would then
   be a Worker request, and a full republish (a new host, or a payments backfill) is ~26k of them.
 - Speed-test vantages upload through `/_ingest` with their own tokens, which the Worker limits to
-  their own documents (R2 tokens can't be limited to a key prefix); that's a few dozen an hour.
+  their own documents (R2 tokens can't be limited to a key prefix); with `BENCH_PUBLISH_INTERVAL=3600` that's a handful an hour per vantage.
 - If the crawler host is down, the site keeps serving the last published data and says how old it is.
 - **Hostnames:** both are Workers Custom Domains of the `dash-nodes` Worker (`routes` in
   `worker/wrangler.jsonc`), so they serve the same site and API. radar.dashhq.org is the canonical
@@ -260,7 +260,7 @@ body, `x-body-encoding: gzip`; a round stops at the first failed upload and resu
 | `BENCH_CONCURRENCY`, `BENCH_SWEEP_CONCURRENCY` | `2`, `8` | tests at once, paced and with `--sweep` |
 | `BENCH_MAX_MBIT` | `24` | don't start tests above this download rate |
 | `BENCH_DEPTH`, `BENCH_STALL_SECS`, `BENCH_TEST_TIMEOUT`, `BENCH_PINGS` | `50000`, `10`, `120`, `5` | |
-| `BENCH_PUBLISH_INTERVAL`, `STATE_DIR` | `600`, `./bench-state` (`/state` in the image) | |
+| `BENCH_PUBLISH_INTERVAL`, `STATE_DIR` | `600` (the compose files set `3600`), `./bench-state` (`/state` in the image) | |
 
 The transports are the crawler's (`TOR_PROXY`, `I2P_PROXY`, `CRAWL_IPV6`, `IPV6_PROXY`, `CJDNS`);
 masternodes on a network without a route are skipped, not failed.

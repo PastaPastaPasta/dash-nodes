@@ -1,5 +1,5 @@
 // /v24: Dash Core 24's activation (the crawler's activation.rs, /api/v1/{net}/activation).
-import { api, chrome, currentNet, el, fmt, href, dateTime, shortHash, badge, labelled, share } from "./common.js";
+import { api, chrome, currentNet, el, everyVisible, fmt, href, dateTime, shortHash, badge, labelled, share } from "./common.js";
 import { svg, valueAxis } from "./charts.js";
 
 chrome("v24");
@@ -455,5 +455,5 @@ async function main() {
 }
 
 main();
-// If fetching fails, the last reading is drawn again, so it turns stale on the page as time passes.
-setInterval(() => load().catch(() => last && render(last)), 60_000);
+// About once a block. If fetching fails, the last reading is drawn again, so it turns stale on the page as time passes.
+everyVisible(() => load().catch(() => last && render(last)), 150_000);

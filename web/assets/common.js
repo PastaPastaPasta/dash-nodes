@@ -45,6 +45,21 @@ export async function api(path) {
   return r.json();
 }
 
+/**
+ * Calls `fn` about every `ms` while the page is visible. A hidden tab asks nothing; once it is shown again after a
+ * full interval it calls `fn` at once. Every call is a Worker request against a daily allowance.
+ */
+export function everyVisible(fn, ms) {
+  let last = Date.now();
+  const tick = () => {
+    if (document.hidden || Date.now() - last < ms) return;
+    last = Date.now();
+    fn();
+  };
+  setInterval(tick, Math.min(ms, 30_000));
+  document.addEventListener("visibilitychange", tick);
+}
+
 /** Tiny element builder. Text is always set via textContent (data is untrusted). */
 export function el(tag, attrs = {}, ...children) {
   const e = document.createElement(tag);
@@ -450,7 +465,7 @@ export function chrome(page, { footer = true, ownScroll = false } = {}) {
       el("a", { href: href("/api"), text: "API" }), " · ",
       "IP geolocation by ", el("a", { href: "https://db-ip.com", text: "DB-IP" }), " (CC BY 4.0)"))));
   refreshStatus();
-  setInterval(refreshStatus, 60_000);
+  everyVisible(refreshStatus, 5 * 60_000);
 }
 
 // ---- section links: every section marked `data-anchor="<name>"` (with a stable id) gets a link beside its heading ----
