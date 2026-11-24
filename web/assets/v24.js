@@ -52,7 +52,7 @@ function render(doc) {
   const key = JSON.stringify([{ ...doc, updated: null }, stale]);
   if (key === shown) return;
   const focused = document.activeElement?.dataset?.key;
-  const openTip = document.querySelector(".v24-tip:popover-open")?.id;
+  const openTip = openNote?.note.isConnected ? openNote.note.id : null;
   const o = d.outlook || {};
   const pace = doc.block_seconds;
   renderBanner(doc, d, stale);
@@ -65,6 +65,7 @@ function render(doc) {
   renderHow(doc, d);
   if (focused) document.querySelector(`[data-key="${focused}"]`)?.focus();
   if (openTip) $(openTip)?.showPopover();
+  if (openNote?.note.closest("section[hidden]")) openNote.note.hidePopover();
   shown = key; // only once drawn, so a reading that failed to draw is tried again
 }
 
@@ -207,11 +208,12 @@ const at = (ratio) => `${Math.min(1, Math.max(0, ratio)) * 100}%`;
 const pinAt = (ratio) => ({ left: at(ratio), transform: `translateX(-${at(ratio)})` });
 
 const INFO_ICON = '<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M8 7.3v3.9" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><circle cx="8" cy="4.9" r="1" fill="currentColor"/></svg>';
+/** The open note and the controller of its scroll and resize listeners. */
+let openNote = null;
 /**
  * An info button and its note, for the fine print a reading doesn't need at a glance. The note is a popover: it opens
  * on click, tap or Enter, and Escape or a click elsewhere closes it. Returns [button, note]; the note goes anywhere.
  */
-let tipListeners = null;
 function infoTip(id, label, ...body) {
   const note = el("div", { id, popover: "auto", class: "v24-tip" }, ...body);
   const button = el("button", { type: "button", class: "v24-info", "aria-label": label, title: label, popovertarget: id, "data-key": id });
@@ -223,14 +225,18 @@ function infoTip(id, label, ...body) {
     note.style.left = `${left}px`;
     note.style.top = `${below + t.height <= innerHeight - m || above < m ? below : above}px`;
   };
-  // Placed in the frame it opens in. Only one note is open at a time, and a redraw removes one without a toggle
-  // event, so whichever opens next (or closes) lets go of the last one's listeners.
+  // Placed in the frame it opens in. A redraw removes an open note without a toggle event, so the next note to open
+  // lets go of its listeners; a note that closes lets go only of its own, as the next one may already be open.
   note.addEventListener("beforetoggle", (e) => {
-    tipListeners?.abort();
-    if (e.newState !== "open") return;
-    tipListeners = new AbortController();
-    requestAnimationFrame(place);
-    for (const ev of ["scroll", "resize"]) addEventListener(ev, place, { capture: true, passive: true, signal: tipListeners.signal });
+    if (e.newState === "open") {
+      openNote?.controller.abort();
+      openNote = { note, controller: new AbortController() };
+      requestAnimationFrame(place);
+      for (const ev of ["scroll", "resize"]) addEventListener(ev, place, { capture: true, passive: true, signal: openNote.controller.signal });
+    } else if (openNote?.note === note) {
+      openNote.controller.abort();
+      openNote = null;
+    }
   });
   return [button, note];
 }
