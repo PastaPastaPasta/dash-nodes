@@ -428,17 +428,16 @@ export function chrome(page, { footer = true, ownScroll = false } = {}) {
   paintTheme();
   // Named here because narrow screens hide the text and the logo is decoration.
   // Phones show a short name and, where the network switch is in the menu, which network this is.
-  const brand = el("a", { class: "brand", href: href("/"), "aria-label": net === "testnet" ? "DashHQ Radar, testnet" : "DashHQ Radar, mainnet",
-    "aria-current": page === "overview" ? "page" : null });
+  const brand = el("a", { class: "brand", href: href("/"), "aria-label": net === "testnet" ? "DashHQ Radar, testnet" : "DashHQ Radar, mainnet" });
   brand.append(el("img", { src: "/assets/icons/mark-96.png", alt: "", width: 22, height: 22 }));
   brand.append(el("span", { class: "brand-name", text: "DashHQ Radar" }), el("span", { class: "brand-short", text: "Radar" }));
   brand.append(el("b", { class: `net-badge ${net}`, text: net === "testnet" ? "Testnet" : "Mainnet" }));
   // Phones: the network switch, theme and status fold into a menu behind one button.
-  const more = el("button", { class: "more-toggle", type: "button", "aria-label": "Network and display settings", "aria-expanded": "false", "aria-controls": "top-right" });
+  const more = el("button", { class: "more-toggle", type: "button", "aria-label": "More pages, network and display", "aria-expanded": "false", "aria-controls": "top-right" });
   more.innerHTML = MORE;
   const right = el("div", { class: "top-right", id: "top-right" }, status, seg,
     el("div", { class: "menu-row" }, theme, el("a", { class: "menu-only", href: href("/api"), text: "API" }),
-      el("a", { class: "menu-narrow", href: href("/changes"), text: "Changes" })));
+      el("a", { class: "menu-narrow", href: href("/changes"), "aria-current": page === "changes" ? "page" : null, text: "Changes" })));
   const header = el("header", { class: "top" }, el("div", { class: "top-inner" }, brand, nav, more, right));
   const setMenu = (open) => { header.classList.toggle("menu-open", open); more.setAttribute("aria-expanded", String(open)); };
   more.addEventListener("click", (e) => { e.stopPropagation(); setMenu(!header.classList.contains("menu-open")); });

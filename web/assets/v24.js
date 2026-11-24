@@ -135,7 +135,7 @@ function renderStatus(doc, d, o) {
       : o.earliest_start ? stat("Next window that counts", `block ${fmt(o.earliest_start.height)}`,
         `${o.earliest_start.estimated ? "about " : ""}${dateTime(o.earliest_start.time)}${o.phase === "waiting_for_signal" ? ", at the earliest" : ""}`) : null,
     o.earliest_activation ? stat("Earliest activation", `block ${fmt(o.earliest_activation.height)}`, `about ${dateTime(o.earliest_activation.time)}`) : null,
-    o.activation_if_reached ? stat("Activation if it locks in", `block ${fmt(o.activation_if_reached.height)}`, `about ${dateTime(o.activation_if_reached.time)}`) : null,
+    o.activation_if_reached ? stat("Activation if this window locks in", `block ${fmt(o.activation_if_reached.height)}`, `about ${dateTime(o.activation_if_reached.time)}`) : null,
     o.activation && o.phase !== "active" ? stat("Activation", `block ${fmt(o.activation.height)}`, `about ${dateTime(o.activation.time)}`) : null,
     stat("Masternode signal", d.ehf.height ? `block ${fmt(d.ehf.height)}` : "not mined yet",
       d.ehf.height ? (d.ehf.block?.time ? dateTime(d.ehf.block.time) : "") : "needed before any window counts", d.ehf.height ? "good" : null),
@@ -484,8 +484,8 @@ function renderMiners(d, o, pace) {
   const p = d.params;
   const started = ["started", "locked_in", "active", "failed"].includes(d.state) || d.windows.some((w) => w.state === "started");
   $("miners-lede").textContent = started
-    ? `Blocks that set bit ${p.bit} count as signalling. In the last ${fmt(d.recent.blocks)} blocks, ${fmt(d.recent.count)} did.`
-    : `Miners can't vote yet. From the first window that counts, blocks that set bit ${p.bit} count as signalling. ` +
+    ? `Blocks that set bit ${p.bit} (with the top version bits 001) count as signalling. In the last ${fmt(d.recent.blocks)} blocks, ${fmt(d.recent.count)} did.`
+    : `Miners can't vote yet. From the first window that counts, blocks that set bit ${p.bit} (with the top version bits 001) count as signalling. ` +
       `In the last ${fmt(d.recent.blocks)} blocks, ${fmt(d.recent.count)} already set it.`;
   renderWindow(d);
   renderWindows(d, o, pace);
@@ -596,7 +596,7 @@ function renderWindows(d, o, pace) {
     const every = Math.ceil(list.length / Math.max(2, Math.floor(W / 64)));
     const now = list.findIndex((s) => s.current);
     list.forEach((s, i) => {
-      if (i !== now && ((list.length - 1 - i) % every || (now >= 0 && Math.abs(i - now) < every))) return;
+      if (i !== now && ((list.length - 1 - i) % every || (now >= 0 && Math.abs(i - now) < every / 2))) return;
       const t = svg("text", { x: center(i), y: H - 18, "text-anchor": "middle", class: "tick" });
       t.textContent = `#${s.attempt + 1}`;
       const t2 = svg("text", { x: center(i), y: H - 5, "text-anchor": "middle", class: "tick" });
@@ -639,10 +639,10 @@ function renderThresholds(doc, d, o, pace) {
       el("td", { class: w ? "r num" : "r num none", text: w ? `${fmt(w.count)}${w.mined < p.window ? ` of ${fmt(w.mined)} so far` : ""}` : "–" })));
   });
   $("thresholds-lede").textContent = `Each window needs this many of its ${fmt(p.window)} blocks to signal: ${fmt(p.threshold_start)} at first, ` +
-    `falling after each window that misses, down to ${fmt(p.threshold_min)}.`;
+    `falling after each window that misses, down to ${fmt(p.threshold_min)}. ` + (decided ? "" : done.size ? "Dates to come are estimates."
+      : "Dates are estimates from the earliest start; if the signal comes later, they all move by whole windows.");
   $("thresholds-formula").textContent = `${fmt(p.threshold_start)} − attempt² × ${fmt(p.window)} ÷ 100 ÷ ${p.falloff_coeff}, rounded down at each step, ` +
-    `never below ${fmt(p.threshold_min)}. ` + (decided ? "" : done.size ? "Dates of windows to come are estimates."
-      : "Window dates are estimates from the earliest possible start; if the signal comes later, they all move by whole windows.");
+    `never below ${fmt(p.threshold_min)}.`;
   $("thresholds-table").replaceChildren(
     el("thead", {}, el("tr", {}, ...heads.map((h, i) => el("th", { class: i > 2 ? "r" : null, text: h })))),
     el("tbody", {}, ...rows));
