@@ -94,6 +94,9 @@ nav.main a:hover { background: var(--surface-2); text-decoration: none; color: v
 nav.main a[aria-current="page"] { color: var(--ink); background: var(--surface-2); }
 .top-right { margin-left: auto; display: flex; align-items: center; gap: 12px; }
 .net-badge { font-size: 11.5px; font-weight: 650; padding: 2px 7px; border-radius: 999px; background: color-mix(in srgb, var(--warning) 25%, transparent); color: var(--ink); }
+/* Mainnet is named only where the network switch is folded into the menu (below 1200 px). */
+.net-badge.mainnet { display: none; background: var(--surface-2); color: var(--ink-2); }
+.brand-short { display: none; }
 .more-toggle { display: none; font: inherit; background: none; border: 0; color: var(--ink-2); padding: 6px; border-radius: 8px; cursor: pointer; margin-left: auto; }
 .more-toggle svg { width: 20px; height: 20px; display: block; }
 /* Below 1200 px the status, network switch and theme don't fit beside the brand and every tab, so
@@ -111,12 +114,13 @@ nav.main a[aria-current="page"] { color: var(--ink); background: var(--surface-2
   .top-right .seg.net { justify-content: stretch; }
   .top-right .seg.net button { flex: 1; }
   .top-right .theme-toggle { align-self: flex-start; }
+  .net-badge.mainnet { display: inline; }
 }
 /* Phones and small tablets: the logo loses its name and API moves into the menu. Same breakpoint as
    the map's bottom sheet. */
 @media (max-width: 900px) {
   .top-inner { gap: 6px; padding: 6px 10px; }
-  .brand span { display: none; }
+  .brand-name { display: none; }
   .brand img { width: 26px; height: 26px; }
   nav.main { overflow-x: auto; scrollbar-width: none; flex: 1; min-width: 0; }
   nav.main::-webkit-scrollbar { display: none; }
@@ -124,25 +128,25 @@ nav.main a[aria-current="page"] { color: var(--ink); background: var(--surface-2
   .top-right .menu-only { display: block; }
   nav.main a.nav-api { display: none; }
 }
-/* Phones: every tab fits without scrolling. The Overview tab links home too, so the logo gives way
-   (testnet keeps its badge) and the tabs tighten. */
+/* Phones: the logo, a short name and the network lead; Overview (the logo links home) and Changes
+   move into the menu, so the other tabs fit without scrolling. */
 @media (max-width: 540px) {
-  .top-inner { gap: 4px; padding: 6px 8px; }
+  .top-inner { gap: 6px; padding: 6px 8px; }
   .more-toggle { padding: 6px 4px; }
-  .brand img { display: none; }
-  .brand:not(:has(.net-badge)) { display: none; }
+  .brand { gap: 5px; flex: none; font-size: 14px; }
+  .brand img { width: 20px; height: 20px; }
+  .brand .brand-short { display: inline; }
   .net-badge { font-size: 10.5px; padding: 2px 5px; }
   nav.main a { padding: 7px 5px; font-size: 13px; }
-  .brand:has(.net-badge) ~ nav.main a { padding-inline: 4px; }
-  /* With the testnet badge, five tabs don't fit: Changes moves into the menu. */
-  .brand:has(.net-badge) ~ nav.main a.nav-changes { display: none; }
-  header.top:has(.net-badge) .menu-narrow { display: block; }
+  nav.main a.nav-overview, nav.main a.nav-changes { display: none; }
+  header.top .menu-narrow { display: block; }
 }
-/* 360 px phones on testnet (the badge takes ~50 px), and 320 px ones: a little smaller still. */
+/* 360 and 320 px phones: a little smaller still, and at 320 px the short name gives way. */
 @media (max-width: 380px) {
   nav.main { gap: 0; }
-  nav.main a, .brand:has(.net-badge) ~ nav.main a { padding-inline: 4px; font-size: 12.5px; }
+  nav.main a { padding-inline: 4px; font-size: 12.5px; }
 }
+@media (max-width: 350px) { .brand .brand-short { display: none; } }
 .chain-status { color: var(--muted); font-size: 12.5px; white-space: nowrap; }
 .chain-status .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 6px; vertical-align: 1px; background: var(--muted); }
 .chain-status .dot.ok { background: var(--good); }
@@ -714,7 +718,7 @@ button.link { font: inherit; font-size: 13px; background: none; border: 0; paddi
 /* ---- stat rows (overview: earnings, Platform) ---- */
 .stat-row { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 18px 24px; margin: 18px 0 22px; }
 .stat-row div { border-left: 2px solid var(--grid); padding-left: 12px; }
-.stat-row dt { color: var(--muted); font-size: 13px; }
+.stat-row dt { color: var(--muted); font-size: 13px; text-wrap: balance; }
 .stat-row dd { margin: 2px 0 0; font-size: 22px; font-weight: 650; font-stretch: 110%; line-height: 1.2; }
 .stat-row small { display: block; font-size: 12.5px; font-weight: 450; font-stretch: 100%; color: var(--muted); margin-top: 3px; }
 .stat-row .stat-good { border-left: 4px solid var(--good); }
@@ -820,6 +824,28 @@ tr.gap td { border-top: 2px dashed var(--grid); }
 .prose { max-width: 760px; }
 .activation code { overflow-wrap: anywhere; }
 #thresholds-table td, #thresholds-table th { white-space: nowrap; }
+/* Phones: each window is a two-line card (window and threshold, then start and signalled), with no sideways scroll. */
+@media (max-width: 640px) {
+  #thresholds .table-wrap { overflow: clip; }
+  #thresholds-table thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  #thresholds-table, #thresholds-table tbody { display: block; }
+  #thresholds-table tr { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 12px; padding: 8px 12px; border-bottom: 1px solid var(--grid); }
+  #thresholds-table tr:last-child { border-bottom: 0; }
+  #thresholds-table tr.gap { border-top: 2px dashed var(--grid); }
+  #thresholds-table tr.now { background: color-mix(in srgb, var(--brand) 8%, transparent); }
+  #thresholds-table td { padding: 0; border: 0; background: none; text-align: left; white-space: normal; }
+  #thresholds-table td:nth-child(2), #thresholds-table th:nth-child(2), #thresholds-table .about { display: none; }
+  #thresholds-table td:nth-child(1) { font-weight: 600; }
+  #thresholds-table td:nth-child(3) { grid-row: 2; color: var(--ink-2); font-size: 13px; }
+  #thresholds-table td:nth-child(4), #thresholds-table td:nth-child(5) { text-align: right; }
+  #thresholds-table td:nth-child(5) { grid-row: 2; grid-column: 2; font-size: 13px; color: var(--ink-2); }
+  #thresholds-table td:nth-child(5)::before { content: "signalled "; color: var(--muted); }
+  #thresholds-table td.none { display: none; }
+  #thresholds-table td:nth-child(4)::before { content: "needs "; color: var(--muted); font-weight: 400; font-size: 13px; }
+}
+.ov-head .ov-details { margin-top: 8px; }
+.ov-head .ov-details p { margin: 6px 0 0; }
+.prose details > div { margin-top: 10px; }
 .prose p { color: var(--ink-2); margin: 0 0 12px; }
 .v24-card .hero-links { margin: 0; }
 /* Can this window lock in, and which pools signal: a verdict, then the window and the pools as bars. */
@@ -856,10 +882,10 @@ tr.gap td { border-top: 2px dashed var(--grid); }
 .v24-pools > span + span { box-shadow: inset 2px 0 0 var(--page); }
 .v24-pools > .v24-yes + .v24-no { box-shadow: inset 4px 0 0 var(--page); }
 .v24-pools > span + span .v24-seg { padding-left: 9px; }
-.v24-seg { padding: 0 7px; overflow: hidden; white-space: nowrap; font-size: 12.5px; font-weight: 650; font-variant-numeric: tabular-nums; color: var(--surface); }
+.v24-seg { padding: 0 7px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; font-weight: 650; font-variant-numeric: tabular-nums; color: var(--surface); }
 .v24-seg-not { display: none; }
 @container (max-width: 64px) { .v24-seg { display: none; } }
-@container (max-width: 120px) { .v24-seg-name { display: none; } }
+@container (max-width: 120px) { .v24-seg-pct { display: none; } }
 @container (min-width: 230px) { .v24-seg-not { display: inline; } }
 #pools .v24-bar-box { margin-bottom: 18px; }
 .v24-stats { grid-template-columns: repeat(4, minmax(0, 1fr)); }

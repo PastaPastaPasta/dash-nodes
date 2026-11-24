@@ -144,10 +144,8 @@ function renderStatus(doc, d, o) {
   $("milestones").replaceChildren(...milestones(d, o).map(([what, m, done]) =>
     el("li", { class: done ? "done" : null }, el("span", { class: "what", text: what }),
       el("span", { class: "at" }, m ? `${when(m)}${m.estimated ? " (estimate)" : ""}` : "–"))));
-  $("status-note").replaceChildren(
-    `Read from our dashd (${doc.dashd || "unknown version"}) at block ${fmt(doc.tip.height)}, ${dateTime(doc.updated)}. `,
-    `Times to come are estimates at the last ${fmt(doc.pace_blocks)} blocks' pace, ${Math.round(doc.block_seconds)} s a block; `,
-    "a slower or faster chain moves them, and the masternode signal can come later than its earliest block.");
+  $("status-note").textContent = `Our dashd (${doc.dashd || "unknown version"}), block ${fmt(doc.tip.height)}, ${dateTime(doc.updated)}. ` +
+    `Times to come are estimates at ${Math.round(doc.block_seconds)} s a block.`;
   $("status").hidden = false;
 }
 
@@ -365,7 +363,7 @@ function renderPools(d) {
       needed != null ? el("span", { class: "v24-mlabel", style: pinAt(needed), "aria-hidden": "true", text: `${neededShare} needed` }) : null,
       el("div", { class: "v24-pools", "aria-hidden": "true" }, ...segments.map((s) =>
         el("span", { class: s.on ? "v24-yes" : "v24-no", style: { flexGrow: String(s.blocks) }, title: say(s), "data-pool": s.name, "data-blocker": s === blocker },
-          el("span", { class: "v24-seg" }, el("span", { class: "v24-seg-name", text: s.name }), " ", el("span", { text: ofShare(s.blocks, w.mined) }),
+          el("span", { class: "v24-seg" }, el("span", { class: "v24-seg-name", text: s.name }), el("span", { class: "v24-seg-pct", text: ` ${ofShare(s.blocks, w.mined)}` }),
             s === blocker ? el("span", { class: "v24-seg-not", text: " · not signalling" }) : null)))),
       needed != null ? el("b", { class: "v24-mark tick", style: { left: at(needed) }, "aria-hidden": "true" }) : null),
     el("div", { class: "legend", "aria-hidden": "true" },
@@ -486,12 +484,9 @@ function renderMiners(d, o, pace) {
   const p = d.params;
   const started = ["started", "locked_in", "active", "failed"].includes(d.state) || d.windows.some((w) => w.state === "started");
   $("miners-lede").textContent = started
-    ? `Each ${fmt(p.window)}-block window, blocks that set bit ${p.bit} (with the top version bits 001) count as signalling. ` +
-      `A window with as many as its threshold locks v24 in. In the last ${fmt(d.recent.blocks)} blocks, ${fmt(d.recent.count)} signalled.`
-    : `Miners can't vote yet. From the first window that counts, each ${fmt(p.window)}-block window's blocks that set bit ${p.bit} ` +
-      `(with the top version bits 001) count; ${fmt(p.threshold_start)} of them (${share(p.threshold_start, p.window)}) lock v24 in, ` +
-      `and each window that falls short lowers the bar for the next, down to ${fmt(p.threshold_min)} (${share(p.threshold_min, p.window)}). ` +
-      `In the last ${fmt(d.recent.blocks)} blocks, ${fmt(d.recent.count)} already set bit ${p.bit}.`;
+    ? `Blocks that set bit ${p.bit} (with the top version bits 001) count as signalling. In the last ${fmt(d.recent.blocks)} blocks, ${fmt(d.recent.count)} did.`
+    : `Miners can't vote yet. From the first window that counts, blocks that set bit ${p.bit} (with the top version bits 001) count as signalling. ` +
+      `In the last ${fmt(d.recent.blocks)} blocks, ${fmt(d.recent.count)} already set it.`;
   renderWindow(d);
   renderWindows(d, o, pace);
   $("miners").hidden = false;
@@ -597,9 +592,11 @@ function renderWindows(d, o, pace) {
       g.append(svg("rect", { x: x - bw / 2 - 2, y: row(tShare) - 1, width: bw + 4, height: 2.5, class: "mark" }));
       root.append(g);
     });
+    // Labels every few windows, counted from the last, and always the current one (the others give way to it).
     const every = Math.ceil(list.length / Math.max(2, Math.floor(W / 64)));
+    const now = list.findIndex((s) => s.current);
     list.forEach((s, i) => {
-      if ((list.length - 1 - i) % every) return;
+      if (i !== now && ((list.length - 1 - i) % every || (now >= 0 && Math.abs(i - now) * slot < 56))) return;
       const t = svg("text", { x: center(i), y: H - 18, "text-anchor": "middle", class: "tick" });
       t.textContent = `#${s.attempt + 1}`;
       const t2 = svg("text", { x: center(i), y: H - 5, "text-anchor": "middle", class: "tick" });
@@ -614,7 +611,7 @@ function renderWindows(d, o, pace) {
 
 function renderThresholds(doc, d, o, pace) {
   const p = d.params;
-  const heads = ["Window", "From block", "Starts", "Threshold", "Share", "Signalled"];
+  const heads = ["Window", "From block", "Starts", "Threshold", "Signalled"];
   const done = new Map(d.windows.filter((w) => w.attempt != null).map((w) => [w.attempt, w]));
   // Windows to come are dated from the next one (anchored where the tip is, like the milestones): the
   // earliest first window while waiting, the next window while signalling, none once it's decided.
@@ -637,15 +634,15 @@ function renderThresholds(doc, d, o, pace) {
       el("td", {}, `#${s.attempt + 1}`, isNow ? [" ", el("span", { class: "pill", text: "now" })] : null,
         s.attempt === lockIn ? [" ", el("span", { class: "pill", text: "locks in at today's pace" })] : null),
       el("td", { class: "num", text: start ? fmt(start.height) : "–" }),
-      el("td", { text: start?.time != null ? `${start.estimated ? "about " : ""}${dateTime(start.time)}` : "–" }),
-      el("td", { class: "r num", text: `${fmt(s.threshold)} of ${fmt(p.window)}` }),
-      el("td", { class: "r num", text: share(s.threshold, p.window) }),
-      el("td", { class: "r num", text: w ? `${fmt(w.count)}${w.mined < p.window ? ` of ${fmt(w.mined)} so far` : ""}` : "–" })));
+      el("td", {}, start?.time != null && start.estimated ? el("span", { class: "about", text: "about " }) : null, start?.time != null ? dateTime(start.time) : "–"),
+      el("td", { class: "r num" }, fmt(s.threshold), el("small", { class: "muted", text: ` ${share(s.threshold, p.window)}` })),
+      el("td", { class: w ? "r num" : "r num none", text: w ? `${fmt(w.count)}${w.mined < p.window ? ` of ${fmt(w.mined)} so far` : ""}` : "–" })));
   });
-  $("thresholds-lede").textContent = `The threshold starts at ${fmt(p.threshold_start)} of ${fmt(p.window)} blocks and drops after each window ` +
-    `that misses it: ${fmt(p.threshold_start)} − attempt² × ${fmt(p.window)} ÷ 100 ÷ ${p.falloff_coeff}, rounded down at each step, ` +
-    `never below ${fmt(p.threshold_min)}. ` + (decided ? "" : done.size ? "Dates of windows to come are estimates."
-      : "Window dates are estimates from the earliest possible start; if the signal comes later, they all move by whole windows.");
+  $("thresholds-lede").textContent = `Each window needs this many of its ${fmt(p.window)} blocks to signal: ${fmt(p.threshold_start)} at first, ` +
+    `falling after each window that misses, down to ${fmt(p.threshold_min)}. ` + (decided ? "" : done.size ? "Dates to come are estimates."
+      : "Dates are estimates from the earliest start; if the signal comes later, they all move by whole windows.");
+  $("thresholds-formula").textContent = `${fmt(p.threshold_start)} − attempt² × ${fmt(p.window)} ÷ 100 ÷ ${p.falloff_coeff}, rounded down at each step, ` +
+    `never below ${fmt(p.threshold_min)}.`;
   $("thresholds-table").replaceChildren(
     el("thead", {}, el("tr", {}, ...heads.map((h, i) => el("th", { class: i > 2 ? "r" : null, text: h })))),
     el("tbody", {}, ...rows));
@@ -658,6 +655,8 @@ function renderHow(doc, d) {
   const p = d.params;
   const src = (path, text) => el("a", { href: `${CORE}/${path}`, text });
   const evo = doc.deployments.find((x) => x.name === "evo_shares");
+  $("how-summary").textContent = "Two gates. First the masternodes sign the v24 signal and a miner puts it in a block; then miners signal, " +
+    "window by window. The first window that reaches its threshold locks v24 in, and it activates one window later.";
   $("how-body").replaceChildren(
     el("p", {}, `v24 is a hard fork (deployment bit ${p.bit}) with two gates. First the masternodes: after ${dateTime(p.start_time)} `,
       `(by the chain's median time past), a ${doc.mnhf} quorum signs the v24 request and a miner puts the signature in a block. `,
