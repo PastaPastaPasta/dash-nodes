@@ -872,8 +872,11 @@ tr.gap td { border-top: 2px dashed var(--grid); }
 .v24-info:focus-visible { outline: 2px solid var(--brand); outline-offset: 1px; }
 @media (pointer: coarse) { .v24-info { width: 40px; height: 40px; margin: -11px -8px; } }
 .v24-tip { position: fixed; inset: auto; margin: 0; width: max-content; max-width: min(380px, calc(100vw - 24px)); padding: 10px 12px; border: 0; border-radius: 10px; background: var(--surface); color: var(--ink); box-shadow: 0 0 0 1px var(--ring), var(--shadow); outline: 1px solid transparent; font-size: 13.5px; line-height: 1.5; }
-/* Without popover support a note is never shown. */
-@supports not selector(:popover-open) { .v24-tip, .v24-info { display: none; } }
+/* Without popover support the notes show inline, under what they explain. */
+@supports not selector(:popover-open) {
+  .v24-info { display: none; }
+  .v24-tip { position: static; display: block; width: auto; max-width: 760px; margin-top: 8px; padding: 0; background: none; box-shadow: none; color: var(--ink-2); font-size: 13px; }
+}
 .v24-tip p { margin: 0; }
 .v24-tip p + p { margin-top: 8px; }
 @media (forced-colors: active) {

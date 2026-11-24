@@ -59,13 +59,14 @@ function render(doc) {
   renderStatus(doc, d, o);
   renderLockIn(doc, d);
   renderPools(d);
+  if (openTip) $(openTip)?.showPopover();
+  if (openNote?.note.closest("section[hidden]")) openNote.note.hidePopover();
+  else if (openNote && !openNote.note.isConnected) { openNote.controller.abort(); openNote = null; }
   renderSignal(d, o);
   renderMiners(d, o, pace);
   renderThresholds(doc, d, o, pace);
   renderHow(doc, d);
   if (focused) document.querySelector(`[data-key="${focused}"]`)?.focus();
-  if (openTip) $(openTip)?.showPopover();
-  if (openNote?.note.closest("section[hidden]")) openNote.note.hidePopover();
   shown = key; // only once drawn, so a reading that failed to draw is tried again
 }
 
@@ -220,7 +221,7 @@ function infoTip(id, label, ...body) {
   button.innerHTML = INFO_ICON;
   const place = () => {
     const b = button.getBoundingClientRect(), t = note.getBoundingClientRect(), m = 12;
-    const left = Math.max(m, Math.min(b.left + b.width / 2 - t.width / 2, innerWidth - m - t.width));
+    const left = Math.max(m, Math.min(b.left + b.width / 2 - t.width / 2, document.documentElement.clientWidth - m - t.width));
     const below = b.bottom + 6, above = b.top - 6 - t.height;
     note.style.left = `${left}px`;
     note.style.top = `${below + t.height <= innerHeight - m || above < m ? below : above}px`;
@@ -359,8 +360,8 @@ function renderPools(d) {
   const needed = w.threshold == null ? null : w.threshold / d.params.window;
   const say = (s) => `${s.name}: ${ofShare(s.blocks, w.mined)}, ${s.on ? "signalling" : "not signalling"}`;
   $("pools-bar").replaceChildren(
-    el("div", { class: "v24-bar", role: "img", "aria-label": `Share of this window's blocks by pool: ${segments.map(say).join("; ")}${needed != null ? `. ${Math.round(needed * 100)}% must signal` : ""}` },
-      needed != null ? el("span", { class: "v24-mlabel", style: pinAt(needed), "aria-hidden": "true", text: `${Math.round(needed * 100)}% needed` }) : null,
+    el("div", { class: "v24-bar", role: "img", "aria-label": `Share of this window's blocks by pool: ${segments.map(say).join("; ")}${needed != null ? `. ${share(w.threshold, d.params.window)} must signal` : ""}` },
+      needed != null ? el("span", { class: "v24-mlabel", style: pinAt(needed), "aria-hidden": "true", text: `${share(w.threshold, d.params.window)} needed` }) : null,
       el("div", { class: "v24-pools", "aria-hidden": "true" }, ...segments.map((s) =>
         el("span", { class: s.on ? "v24-yes" : "v24-no", style: { flexGrow: String(s.blocks) }, title: say(s), "data-pool": s.name, "data-blocker": s === blocker },
           el("span", { class: "v24-seg" }, el("span", { class: "v24-seg-name", text: s.name }), " ", el("span", { text: ofShare(s.blocks, w.mined) }),
