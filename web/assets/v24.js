@@ -358,10 +358,11 @@ function renderPools(d) {
   const blocker = segments.find((s) => !s.on);
   const yes = segments.filter((s) => s.on).reduce((a, s) => a + s.blocks, 0);
   const needed = w.threshold == null ? null : w.threshold / d.params.window;
+  const neededShare = w.threshold == null ? null : share(w.threshold, d.params.window);
   const say = (s) => `${s.name}: ${ofShare(s.blocks, w.mined)}, ${s.on ? "signalling" : "not signalling"}`;
   $("pools-bar").replaceChildren(
-    el("div", { class: "v24-bar", role: "img", "aria-label": `Share of this window's blocks by pool: ${segments.map(say).join("; ")}${needed != null ? `. ${share(w.threshold, d.params.window)} must signal` : ""}` },
-      needed != null ? el("span", { class: "v24-mlabel", style: pinAt(needed), "aria-hidden": "true", text: `${share(w.threshold, d.params.window)} needed` }) : null,
+    el("div", { class: "v24-bar", role: "img", "aria-label": `Share of this window's blocks by pool: ${segments.map(say).join("; ")}${needed != null ? `. ${neededShare} must signal` : ""}` },
+      needed != null ? el("span", { class: "v24-mlabel", style: pinAt(needed), "aria-hidden": "true", text: `${neededShare} needed` }) : null,
       el("div", { class: "v24-pools", "aria-hidden": "true" }, ...segments.map((s) =>
         el("span", { class: s.on ? "v24-yes" : "v24-no", style: { flexGrow: String(s.blocks) }, title: say(s), "data-pool": s.name, "data-blocker": s === blocker },
           el("span", { class: "v24-seg" }, el("span", { class: "v24-seg-name", text: s.name }), " ", el("span", { text: ofShare(s.blocks, w.mined) }),
