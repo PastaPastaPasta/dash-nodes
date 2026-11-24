@@ -868,10 +868,10 @@ tr.gap td { border-top: 2px dashed var(--grid); }
 .v24-info:hover, .v24-info:focus-visible { background: var(--surface-2); color: var(--ink); }
 .v24-info:focus-visible { outline: 2px solid var(--brand); outline-offset: 1px; }
 @media (pointer: coarse) { .v24-info { width: 40px; height: 40px; margin: -11px -8px; } }
-.v24-tip { position: fixed; inset: auto; margin: 0; width: max-content; max-width: min(380px, calc(100vw - 24px)); padding: 10px 12px; border: 0; border-radius: 10px; background: var(--surface); color: var(--ink); box-shadow: 0 0 0 1px var(--ring), var(--shadow); font-size: 13.5px; line-height: 1.5; }
+.v24-tip { position: fixed; inset: auto; margin: 0; width: max-content; max-width: min(380px, calc(100vw - 24px)); padding: 10px 12px; border: 0; border-radius: 10px; background: var(--surface); color: var(--ink); box-shadow: 0 0 0 1px var(--ring), var(--shadow); outline: 1px solid transparent; font-size: 13.5px; line-height: 1.5; }
 .v24-tip p { margin: 0; }
 .v24-tip p + p { margin-top: 8px; }
 @media (forced-colors: active) {
   .windows-chart .bar, .windows-chart .mark, .window-chart .actual, .milestones li.done::before { forced-color-adjust: none; }
-  .v24-track, .v24-pools, .v24-mark, .v24-verdict, .legend i.v24-sw-pace { forced-color-adjust: none; }
+  .v24-track, .v24-pools, .v24-mark, .v24-verdict { forced-color-adjust: none; }
 }

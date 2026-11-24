@@ -52,6 +52,7 @@ function render(doc) {
   const key = JSON.stringify([{ ...doc, updated: null }, stale]);
   if (key === shown) return;
   const focused = document.activeElement?.dataset?.key;
+  const openTip = document.querySelector(".v24-tip:popover-open")?.id;
   const o = d.outlook || {};
   const pace = doc.block_seconds;
   renderBanner(doc, d, stale);
@@ -63,6 +64,7 @@ function render(doc) {
   renderThresholds(doc, d, o, pace);
   renderHow(doc, d);
   if (focused) document.querySelector(`[data-key="${focused}"]`)?.focus();
+  if (openTip) $(openTip)?.showPopover();
   shown = key; // only once drawn, so a reading that failed to draw is tried again
 }
 
@@ -209,9 +211,10 @@ const INFO_ICON = '<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="
  * An info button and its note, for the fine print a reading doesn't need at a glance. The note is a popover: it opens
  * on click, tap or Enter, and Escape or a click elsewhere closes it. Returns [button, note]; the note goes anywhere.
  */
+let tipListeners = null;
 function infoTip(id, label, ...body) {
   const note = el("div", { id, popover: "auto", class: "v24-tip" }, ...body);
-  const button = el("button", { type: "button", class: "v24-info", "aria-label": label, title: label, popovertarget: id });
+  const button = el("button", { type: "button", class: "v24-info", "aria-label": label, title: label, popovertarget: id, "data-key": id });
   button.innerHTML = INFO_ICON;
   const place = () => {
     const b = button.getBoundingClientRect(), t = note.getBoundingClientRect(), m = 12;
@@ -220,10 +223,14 @@ function infoTip(id, label, ...body) {
     note.style.left = `${left}px`;
     note.style.top = `${below + t.height <= innerHeight - m || above < m ? below : above}px`;
   };
-  note.addEventListener("toggle", (e) => {
-    const open = e.newState === "open";
-    if (open) place();
-    for (const ev of ["scroll", "resize"]) (open ? addEventListener : removeEventListener)(ev, place, { capture: true, passive: true });
+  // Placed in the frame it opens in. Only one note is open at a time, and a redraw removes one without a toggle
+  // event, so whichever opens next (or closes) lets go of the last one's listeners.
+  note.addEventListener("beforetoggle", (e) => {
+    tipListeners?.abort();
+    if (e.newState !== "open") return;
+    tipListeners = new AbortController();
+    requestAnimationFrame(place);
+    for (const ev of ["scroll", "resize"]) addEventListener(ev, place, { capture: true, passive: true, signal: tipListeners.signal });
   });
   return [button, note];
 }
@@ -295,7 +302,7 @@ function renderWindowBar(w, size) {
     el("div", { class: "legend", "aria-hidden": "true" },
       legendKey("v24-yes", "Signalled ", fmt(w.count)),
       legendKey("v24-no", "Not signalled ", fmt(lost)),
-      legendKey("v24-sw-pace", "Left, at today's pace ", fmt(w.remaining))));
+      paced ? legendKey("v24-sw-pace", "Left, at today's pace ", fmt(w.remaining)) : null));
 }
 
 /** Which window locks in at today's pace, in one line; how that's worked out sits behind an info button. */
@@ -346,7 +353,7 @@ function renderPools(d) {
   const needed = w.threshold == null ? null : w.threshold / d.params.window;
   const say = (s) => `${s.name}: ${ofShare(s.blocks, w.mined)}, ${s.on ? "signalling" : "not signalling"}`;
   $("pools-bar").replaceChildren(
-    el("div", { class: "v24-bar", role: "img", "aria-label": `Share of this window's blocks by pool: ${segments.map(say).join("; ")}` },
+    el("div", { class: "v24-bar", role: "img", "aria-label": `Share of this window's blocks by pool: ${segments.map(say).join("; ")}${needed != null ? `. ${Math.round(needed * 100)}% must signal` : ""}` },
       needed != null ? el("span", { class: "v24-mlabel", style: pinAt(needed), "aria-hidden": "true", text: `${Math.round(needed * 100)}% needed` }) : null,
       el("div", { class: "v24-pools", "aria-hidden": "true" }, ...segments.map((s) =>
         el("span", { class: s.on ? "v24-yes" : "v24-no", style: { flexGrow: String(s.blocks) }, title: say(s), "data-pool": s.name, "data-blocker": s === blocker },
