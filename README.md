@@ -42,7 +42,8 @@ mnowatch.org/user-agents and the old dashninja.pl:
   that must sign it, with how many of its members run 24) and miners' signalling, window by window, against the falling
   lock-in threshold. It reads every block header since shortly before the windows that matter, works the states out
   with Core's rules (v24.0.0's parameters), checks them against dashd's `getdeploymentinfo`, and estimates the dates to
-  come from the recent block pace. `dash-nodes activation --rpc <url> --db <file>` prints one reading. dashd must be
+  come from the recent block pace. While miners' signals count, it also reads the coinbase of each block in the current
+  window and counts blocks and signals per pool its tag names (best effort: a tag is what the miner wrote). `dash-nodes activation --rpc <url> --db <file>` prints one reading. dashd must be
   24.0.0 or newer: earlier builds don't define the mainnet deployment.
 - **Map:** every masternode (or every reachable node, counted per city) placed by the city its IP
   geolocates to (DB-IP City Lite), clustered, colored by port-check status, version or type, with the
