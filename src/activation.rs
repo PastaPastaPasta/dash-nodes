@@ -239,12 +239,85 @@ pub fn walk(d: &Deployment, windows: &[Window], seed: (State, i64), signal: Opti
 }
 
 /// A stored block header.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct Header {
     pub height: i64,
     pub time: i64,
     pub mediantime: i64,
     pub version: i64,
+    /// What its coinbase says about who mined it, once read.
+    pub tag: Tag,
+}
+
+/// The pool a block's coinbase script names. A best-effort attribution: the tag is whatever the miner
+/// wrote, so it says what the block claims, not who mined it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Tag {
+    /// Its coinbase isn't read yet.
+    #[default]
+    Unread,
+    /// It carries no tag we know.
+    Untagged,
+    Pool(&'static str),
+}
+
+/// Pools by what they write into the coinbase script (lowercased), first match wins. Radar's block pages
+/// use the same list (apps/web/src/lib/core/pools.ts), plus pools seen on Dash since.
+const POOL_TAGS: &[(&[&str], &str)] = &[
+    (&["f2pool", "🐟", "七彩神仙鱼"], "F2Pool"),
+    (&["poolin"], "Poolin"),
+    (&["luxor"], "Luxor"),
+    (&["antpool"], "AntPool"),
+    (&["viabtc"], "ViaBTC"),
+    (&["btc.com", "btccom"], "BTC.com"),
+    (&["binance"], "Binance Pool"),
+    (&["sbicrypto", "sbi crypto"], "SBI Crypto"),
+    (&["trustpool"], "Trustpool"),
+    (&["2miners"], "2Miners"),
+    (&["prohashing"], "ProHashing"),
+    (&["miningpoolhub"], "Mining Pool Hub"),
+    (&["zpool"], "Zpool"),
+    (&["suprnova"], "Suprnova"),
+    (&["coinmine"], "Coinmine"),
+    (&["p2pool"], "P2Pool"),
+    (&["mining-dutch"], "Mining-Dutch"),
+    (&["powerpool"], "PowerPool"),
+    (&["dash.org", "dashpool", "dash pool"], "Dash pool"),
+];
+
+/// The pool a coinbase scriptSig (hex) names.
+pub fn tag_of(script_hex: &str) -> Tag {
+    let bytes: Vec<u8> = (0..script_hex.len() / 2)
+        .filter_map(|i| u8::from_str_radix(script_hex.get(2 * i..2 * i + 2)?, 16).ok())
+        .collect();
+    let text = String::from_utf8_lossy(&bytes).to_lowercase();
+    POOL_TAGS
+        .iter()
+        .find(|(needles, _)| needles.iter().any(|n| text.contains(n)))
+        .map_or(Tag::Untagged, |(_, name)| Tag::Pool(name))
+}
+
+/// Blocks and signalling blocks per pool among `headers`, the most blocks first and untagged ones last;
+/// None while any coinbase is unread.
+pub fn pools_of(d: &Deployment, headers: &[Header]) -> Option<Value> {
+    let mut by: HashMap<Option<&str>, (i64, i64)> = HashMap::new();
+    for h in headers {
+        let pool = match h.tag {
+            Tag::Unread => return None,
+            Tag::Untagged => None,
+            Tag::Pool(p) => Some(p),
+        };
+        let (blocks, signalling) = by.entry(pool).or_default();
+        *blocks += 1;
+        *signalling += i64::from(signals(h.version, d.bit));
+    }
+    let mut by: Vec<_> = by.into_iter().collect();
+    by.sort_by_key(|&(pool, (blocks, _))| (pool.is_none(), std::cmp::Reverse(blocks), pool));
+    Some(
+        by.into_iter()
+            .map(|(pool, (blocks, signalling))| json!({"pool": pool, "blocks": blocks, "signalling": signalling}))
+            .collect(),
+    )
 }
 
 /// Groups headers (ascending, contiguous) into windows of `d`, counting its signals.
@@ -283,6 +356,8 @@ const MAX_HISTORY: i64 = 60_000;
 const FAILURES_SHOWN: u32 = 2;
 /// Blocks the average interval is measured over.
 const PACE_BLOCKS: i64 = 2016;
+/// Blocks whose coinbase is read per batch.
+const COINBASE_CHUNK: usize = 100;
 /// Recent blocks the "signalling lately" figure covers.
 const RECENT_BLOCKS: i64 = 576;
 /// How often the signing quorum's members are looked up again.
@@ -386,6 +461,10 @@ async fn tick(src: &Source<'_>, memo: &mut Memo) -> Result<Value> {
         }
     };
     sync_headers(src, from, tip).await?;
+    // Who mined this window's blocks is a nice-to-have: a failure only leaves it out of this reading.
+    if let Err(e) = sync_coinbases(src, tip).await {
+        tracing::warn!(net = src.net.name(), "activation: coinbase tags: {e:#}");
+    }
     // Our headers and dashd's reading must describe the same chain: a reorg in between makes this
     // reading stale, so try again next tick.
     let ours: Option<String> = src
@@ -557,6 +636,58 @@ async fn sync_headers(src: &Source<'_>, from: i64, tip: i64) -> Result<()> {
     Ok(())
 }
 
+/// Brings `activation_coinbase` to the tip for the window the tip is in: the coinbase script of each of
+/// its blocks (as `activation_headers` has them, so a reorged block is read again), and none older.
+async fn sync_coinbases(src: &Source<'_>, tip: i64) -> Result<()> {
+    let w = deployments(src.net).iter().map(|d| d.window).max().unwrap_or(1);
+    let lo = tip - tip.rem_euclid(w);
+    let missing: Vec<(i64, String)> = src
+        .db
+        .write(move |c| {
+            c.execute("DELETE FROM activation_coinbase WHERE height < ?1", [lo])?;
+            Ok(query_all(
+                c,
+                "SELECT h.height, h.hash FROM activation_headers h \
+                 LEFT JOIN activation_coinbase c ON c.height = h.height AND c.hash = h.hash \
+                 WHERE h.height >= ?1 AND c.height IS NULL ORDER BY h.height",
+                [lo],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )?)
+        })
+        .await?;
+    for chunk in missing.chunks(COINBASE_CHUNK) {
+        let blocks = src.rpc.batch(&chunk.iter().map(|(_, h)| ("getblock", json!([h, 1]))).collect::<Vec<_>>()).await?;
+        let mut calls = Vec::with_capacity(chunk.len());
+        for ((height, hash), b) in chunk.iter().zip(&blocks) {
+            let tx = b["tx"][0].as_str().with_context(|| format!("block {height}: no coinbase"))?;
+            calls.push(("getrawtransaction", json!([tx, true, hash])));
+        }
+        let txs = src.rpc.batch(&calls).await?;
+        let mut rows = Vec::with_capacity(chunk.len());
+        for ((height, hash), tx) in chunk.iter().zip(&txs) {
+            let script =
+                tx["vin"][0]["coinbase"].as_str().with_context(|| format!("block {height}: no coinbase script"))?;
+            rows.push((*height, hash.clone(), script.to_owned()));
+        }
+        src.db
+            .write(move |c| {
+                let tx = c.transaction()?;
+                {
+                    let mut st = tx.prepare(
+                        "INSERT OR REPLACE INTO activation_coinbase (height, hash, script) VALUES (?1, ?2, ?3)",
+                    )?;
+                    for (height, hash, script) in &rows {
+                        st.execute(params![height, hash, script])?;
+                    }
+                }
+                tx.commit()?;
+                Ok(())
+            })
+            .await?;
+    }
+    Ok(())
+}
+
 /// The mined EHF signal's height, as dashd reports it.
 fn ehf_height(rpc: &Value, d: &Deployment) -> Option<i64> {
     rpc[d.name]["bip9"]["ehf_height"].as_i64()
@@ -565,9 +696,20 @@ fn ehf_height(rpc: &Value, d: &Deployment) -> Option<i64> {
 fn load_headers(c: &Connection, from: i64) -> Result<Vec<Header>> {
     Ok(query_all(
         c,
-        "SELECT height, time, mediantime, version FROM activation_headers WHERE height >= ?1 ORDER BY height",
+        "SELECT h.height, h.time, h.mediantime, h.version, c.script FROM activation_headers h \
+         LEFT JOIN activation_coinbase c ON c.height = h.height AND c.hash = h.hash \
+         WHERE h.height >= ?1 ORDER BY h.height",
         [from],
-        |r| Ok(Header { height: r.get(0)?, time: r.get(1)?, mediantime: r.get(2)?, version: r.get(3)? }),
+        |r| {
+            let script: Option<String> = r.get(4)?;
+            Ok(Header {
+                height: r.get(0)?,
+                time: r.get(1)?,
+                mediantime: r.get(2)?,
+                version: r.get(3)?,
+                tag: script.as_deref().map_or(Tag::Unread, tag_of),
+            })
+        },
     )?)
 }
 
@@ -808,11 +950,15 @@ fn deployment_json(
         // Which of its blocks signalled so far, like getdeploymentinfo's `signalling` ('#' yes, '-' no).
         let first = headers.first().map_or(0, |h| h.height);
         let from = (c.window.start - first).max(0) as usize;
-        let s: String = headers[from.min(headers.len())..]
-            .iter()
-            .map(|h| if signals(h.version, d.bit) { '#' } else { '-' })
-            .collect();
+        let mined = &headers[from.min(headers.len())..];
+        let s: String = mined.iter().map(|h| if signals(h.version, d.bit) { '#' } else { '-' }).collect();
         v["signalling"] = json!(s);
+        // Which pools those blocks name, while miners' signals count.
+        if c.state == State::Started
+            && let Some(pools) = pools_of(d, mined)
+        {
+            v["pools"] = pools;
+        }
         v
     });
 
@@ -1039,6 +1185,7 @@ mod tests {
                 time: 1_800_000_000 + h * 150,
                 mediantime: 1_800_000_000 + h * 150 - 900,
                 version: version(h),
+                ..Default::default()
             })
             .collect()
     }
@@ -1057,6 +1204,86 @@ mod tests {
         // The tip on a window's last block: the next block opens a fresh window.
         let j = walk(&d, &ws, (State::Started, 1100), Some(1000));
         assert_eq!((j[2].window.start, j[2].window.mined, j[2].attempt), (1300, 0, Some(2)));
+    }
+
+    #[test]
+    fn coinbase_tags_name_pools() {
+        // Coinbase scripts of mainnet blocks 2,576,448, 2,576,449 and a merged-mined Mining-Dutch block.
+        assert_eq!(
+            tag_of("034050271a2f5669614254432f4d696e656420627920787579616e6665692f103408c9009d8700c63b25bbd5cdf30900"),
+            Tag::Pool("ViaBTC")
+        );
+        assert_eq!(
+            tag_of("03415027194d696e656420627920416e74506f6f6c207e000b0101b0b62c00006568a41c0400"),
+            Tag::Pool("AntPool")
+        );
+        assert_eq!(tag_of(&hex_of(b"\x03P'\x00\xfa\xbemm/Mining-Dutch/")), Tag::Pool("Mining-Dutch"));
+        assert_eq!(tag_of("0350270100"), Tag::Untagged);
+        assert_eq!(tag_of("zz"), Tag::Untagged);
+    }
+
+    fn hex_of(b: &[u8]) -> String {
+        b.iter().map(|x| format!("{x:02x}")).collect()
+    }
+
+    #[test]
+    fn pools_count_blocks_and_signals() {
+        let at = |version, tag| Header { version, tag, ..Default::default() };
+        let hs = [
+            at(0x2000_0000, Tag::Pool("ViaBTC")),
+            at(0x2000_2000, Tag::Untagged),
+            at(0x2000_2000, Tag::Pool("F2Pool")),
+            at(0x2000_0000, Tag::Pool("ViaBTC")),
+            at(0x2000_2000, Tag::Untagged),
+            at(0x2000_2000, Tag::Untagged),
+            at(0x2000_2000, Tag::Pool("AntPool")),
+        ];
+        assert_eq!(
+            pools_of(&V24, &hs).unwrap(),
+            json!([
+                {"pool": "ViaBTC", "blocks": 2, "signalling": 0},
+                {"pool": "AntPool", "blocks": 1, "signalling": 1},
+                {"pool": "F2Pool", "blocks": 1, "signalling": 1},
+                {"pool": null, "blocks": 3, "signalling": 3},
+            ])
+        );
+        assert_eq!(pools_of(&V24, &[]).unwrap(), json!([]));
+        assert_eq!(pools_of(&V24, &[hs[0], at(0x2000_2000, Tag::Unread)]), None);
+    }
+
+    #[test]
+    fn a_coinbase_counts_only_for_the_block_it_was_read_from() {
+        let c = db::open_memory();
+        c.execute_batch(
+            "INSERT INTO activation_headers VALUES (10, 'aa', 1, 1, 536879104), (11, 'bb', 2, 2, 536870912), (12, 'cc', 3, 3, 536870912);
+             INSERT INTO activation_coinbase VALUES (10, 'aa', '2f5669614254432f'), (11, 'old', '2f5669614254432f');",
+        )
+        .unwrap();
+        let tags: Vec<Tag> = load_headers(&c, 10).unwrap().iter().map(|h| h.tag).collect();
+        // 11's coinbase is from a block a reorg replaced; 12's isn't read yet.
+        assert_eq!(tags, [Tag::Pool("ViaBTC"), Tag::Unread, Tag::Unread]);
+    }
+
+    #[test]
+    fn document_lists_pools_while_signalling() {
+        // STARTED from 1100; the tip window (1300–1329) has every coinbase read.
+        let mut hs = headers(1000, 330, |h| if h % 3 == 0 { 0x2000_0000 } else { 0x2000_2000 });
+        for h in hs.iter_mut().filter(|h| h.height >= 1300) {
+            h.tag = if h.height % 3 == 0 { Tag::Pool("ViaBTC") } else { Tag::Pool("F2Pool") };
+        }
+        let rpc = json!({"v24": {"bip9": {"status": "started", "status_next": "started", "since": 1100, "ehf_height": 1040}}});
+        let seeds = HashMap::from([("v24".to_owned(), (State::Defined, 0))]);
+        let doc = build(Network::Testnet, &hs, 1329, &rpc, &seeds, &HashMap::new(), None, 0, &HashMap::new()).unwrap();
+        let w = &doc["deployments"][0]["window"];
+        assert_eq!(w["state"], "started");
+        assert_eq!(
+            w["pools"],
+            json!([{"pool": "F2Pool", "blocks": 20, "signalling": 20}, {"pool": "ViaBTC", "blocks": 10, "signalling": 0}])
+        );
+        // One unread coinbase: no attribution rather than a partial one.
+        hs[329].tag = Tag::Unread;
+        let doc = build(Network::Testnet, &hs, 1329, &rpc, &seeds, &HashMap::new(), None, 0, &HashMap::new()).unwrap();
+        assert!(doc["deployments"][0]["window"].get("pools").is_none());
     }
 
     #[test]
@@ -1102,7 +1329,7 @@ mod tests {
         let hs: Vec<Header> = (2_564_352..=2_568_200)
             .map(|h| {
                 let t = d.start + 900 + (h - 2_568_000) * 150;
-                Header { height: h, time: t, mediantime: t - 900, version: 0x2000_0000 }
+                Header { height: h, time: t, mediantime: t - 900, version: 0x2000_0000, ..Default::default() }
             })
             .collect();
         let seeds = HashMap::from([("v24".to_owned(), (State::Defined, 0))]);
@@ -1134,7 +1361,7 @@ mod tests {
         let hs: Vec<Header> = (2_564_352..=tip)
             .map(|h| {
                 let t = d.start + 900 + (h - 2_568_000) * 150;
-                Header { height: h, time: t, mediantime: t - 900, version: 0x2000_0000 }
+                Header { height: h, time: t, mediantime: t - 900, version: 0x2000_0000, ..Default::default() }
             })
             .collect();
         let seeds = HashMap::from([("v24".to_owned(), (State::Defined, 0))]);
@@ -1150,7 +1377,13 @@ mod tests {
     fn a_signal_mined_before_the_timeout_still_starts() {
         let d = MAINNET[0];
         let hs: Vec<Header> = (2_564_352..=2_568_200)
-            .map(|h| Header { height: h, time: d.timeout + 900, mediantime: d.timeout + 1, version: 0x2000_0000 })
+            .map(|h| Header {
+                height: h,
+                time: d.timeout + 900,
+                mediantime: d.timeout + 1,
+                version: 0x2000_0000,
+                ..Default::default()
+            })
             .collect();
         let seeds = HashMap::from([("v24".to_owned(), (State::Defined, 0))]);
         let rpc = json!({"v24": {"bip9": {"status": "defined", "status_next": "defined", "since": 0, "ehf_height": 2_568_100}}});
@@ -1201,6 +1434,7 @@ mod tests {
                 time: t0 - (tip - h) * 158,
                 mediantime: t0 - (tip - h) * 158 - 900,
                 version: 0x2000_0000,
+                ..Default::default()
             })
             .collect();
         let seeds = HashMap::from([("v24".to_owned(), (State::Defined, 0))]);
@@ -1246,6 +1480,7 @@ mod fixture {
                     time,
                     mediantime: time - 900,
                     version: if signal { 0x2000_2000 } else { 0x2000_0000 },
+                    tag: Tag::Pool(if signal { "F2Pool" } else { "ViaBTC" }),
                 }
             })
             .collect();

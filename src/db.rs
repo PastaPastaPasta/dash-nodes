@@ -266,6 +266,13 @@ CREATE TABLE IF NOT EXISTS activation_headers (
     version    INTEGER NOT NULL
 );
 
+-- The coinbase script of each block in the window the tip is in, for who mined it (see activation.rs).
+CREATE TABLE IF NOT EXISTS activation_coinbase (
+    height INTEGER PRIMARY KEY,
+    hash   TEXT NOT NULL,
+    script TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS payments (
     height INTEGER NOT NULL,
     protx  TEXT NOT NULL,
