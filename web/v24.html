@@ -4,12 +4,12 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>DashHQ Radar: Dash Core 24 activation</title>
-  <meta name="description" content="Where Dash Core 24's activation stands: the masternode signal, miners' signalling window by window, the lock-in threshold and when the next window opens.">
+  <meta name="description" content="Where Dash Core 24's activation stands: whether this window can lock in, which pools signal, miners' signalling window by window, the falling lock-in threshold and the masternode signal.">
   <link rel="canonical" href="https://radar.dashhq.org/v24">
   <meta property="og:site_name" content="DashHQ Radar">
   <meta property="og:type" content="website">
   <meta property="og:title" content="DashHQ Radar: Dash Core 24 activation">
-  <meta property="og:description" content="Where Dash Core 24's activation stands: the masternode signal, miners' signalling window by window, the lock-in threshold and when the next window opens.">
+  <meta property="og:description" content="Where Dash Core 24's activation stands: whether this window can lock in, which pools signal, miners' signalling window by window, the falling lock-in threshold and the masternode signal.">
   <meta property="og:url" content="https://radar.dashhq.org/v24">
   <meta name="twitter:card" content="summary">
   <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
@@ -34,6 +34,26 @@
     <dl class="stat-row" id="status-stats"></dl>
     <ol class="milestones" id="milestones" aria-label="What happens next"></ol>
     <p class="muted small" id="status-note"></p>
+  </section>
+
+  <section class="ov-section" aria-labelledby="lock-in-title" id="lock-in" data-anchor="Can this window lock in?" hidden>
+    <div class="ov-head">
+      <h2 id="lock-in-title">Can this window lock in?</h2>
+      <p class="ov-lede" id="lock-in-lede"></p>
+    </div>
+    <dl class="stat-row" id="lock-in-stats"></dl>
+    <h3 id="projection-title">At today's pace</h3>
+    <p id="projection"></p>
+    <p id="silent-pools" hidden></p>
+    <p class="muted small" id="projection-note"></p>
+  </section>
+
+  <section class="ov-section" aria-labelledby="pools-title" id="pools" data-anchor="Pools signalling" hidden>
+    <div class="ov-head">
+      <h2 id="pools-title">Pools signalling</h2>
+      <p class="ov-lede" id="pools-lede"></p>
+    </div>
+    <div class="table-wrap"><table class="data" id="pools-table"></table></div>
   </section>
 
   <section class="ov-section" aria-labelledby="signal-title" id="signal" data-anchor="The masternode signal" hidden>

@@ -1,5 +1,5 @@
 // /v24: Dash Core 24's activation (the crawler's activation.rs, /api/v1/{net}/activation).
-import { api, chrome, currentNet, el, everyVisible, fmt, href, dateTime, shortHash, badge, labelled, share } from "./common.js";
+import { api, chrome, currentNet, el, everyVisible, fmt, href, dateTime, shortHash, badge, labelled, share, pct } from "./common.js";
 import { svg, valueAxis } from "./charts.js";
 
 chrome("v24");
@@ -56,9 +56,11 @@ function render(doc) {
   const pace = doc.block_seconds;
   renderBanner(doc, d, stale);
   renderStatus(doc, d, o);
+  renderLockIn(doc, d);
+  renderPools(d);
   renderSignal(d, o);
   renderMiners(d, o, pace);
-  renderThresholds(d, o, pace);
+  renderThresholds(doc, d, o, pace);
   renderHow(doc, d);
   if (focused) document.querySelector(`[data-key="${focused}"]`)?.focus();
   shown = key; // only once drawn, so a reading that failed to draw is tried again
@@ -124,12 +126,8 @@ function renderStatus(doc, d, o) {
     : `${fmt(t)} of ${fmt(p.window)} blocks in the first window, falling to ${share(p.threshold_min, p.window)}`;
   const stats = [
     stat("Status", badge(kind, label), d.since ? `since block ${fmt(d.since)}` : `start time ${dateTime(p.start_time)}`),
-    ["defined", "started"].includes(d.state) ? stat("Lock-in threshold", share(t, p.window), thresholdNote) : null,
-    o.phase === "signalling"
-      ? stat("This window", `${fmt(w.count)} / ${fmt(w.threshold)}`,
-        !o.needed ? `threshold reached: locks in at ${when(o.lock_in_if_reached)}`
-          : `${o.possible ? `${fmt(o.needed)} more needed in ${fmt(o.remaining)} blocks` : "can't reach it any more"}; ends ${when(o.window_end)}`,
-        !o.needed ? "good" : o.possible ? null : "warning")
+    ["defined", "started"].includes(d.state) && o.phase !== "signalling" ? stat("Lock-in threshold", share(t, p.window), thresholdNote) : null,
+    o.phase === "signalling" ? null
       : o.earliest_start ? stat("Next window that counts", `block ${fmt(o.earliest_start.height)}`,
         `${o.earliest_start.estimated ? "about " : ""}${dateTime(o.earliest_start.time)}${o.phase === "waiting_for_signal" ? ", at the earliest" : ""}`) : null,
     o.earliest_activation ? stat("Earliest activation", `block ${fmt(o.earliest_activation.height)}`, `about ${dateTime(o.earliest_activation.time)}`) : null,
@@ -147,6 +145,117 @@ function renderStatus(doc, d, o) {
     `Times to come are estimates at the last ${fmt(doc.pace_blocks)} blocks' pace, ${Math.round(doc.block_seconds)} s a block; `,
     "a slower or faster chain moves them, and the masternode signal can come later than its earliest block.");
   $("status").hidden = false;
+}
+
+// ---- can this window lock in ----
+
+/** The share the outlook goes by: this window's once it has a day of blocks, else the last day's. */
+function todaysPace(d) {
+  const w = d.window;
+  if (d.state === "started" && w && w.mined > 0 && w.mined >= d.recent.blocks) return { signalled: w.count, blocks: w.mined, basis: "window" };
+  return d.recent.blocks > 0 ? { signalled: d.recent.count, blocks: d.recent.blocks, basis: "recent" } : null;
+}
+
+/** Whether the window being counted can still lock in, and whether it does at `rate`. */
+function windowOutlook(d, rate) {
+  const w = d.window;
+  if (d.state !== "started" || w?.threshold == null) return null;
+  const size = d.params.window;
+  const remaining = size - w.mined;
+  const needed = Math.max(0, w.threshold - w.count);
+  const projected = Math.min(size, Math.floor(w.count + rate * remaining));
+  const verdict = needed === 0 ? "reached" : needed > remaining ? "impossible" : projected >= w.threshold ? "on-track" : "needs-more";
+  return { verdict, count: w.count, mined: w.mined, remaining, threshold: w.threshold, needed, projected, end: w.start.height + size - 1 };
+}
+
+/** A height's time (Unix seconds) at the recent pace from the tip. */
+const estimate = (doc, height) => doc.tip.time + (height - doc.tip.height) * doc.block_seconds;
+
+/**
+ * The first window that locks in if miners keep signalling at `rate` (the one being counted by where its
+ * pace leads, then each to come against its falling threshold), or `{ never: "floor" | "timeout" }`.
+ */
+function projectLockIn(doc, d, rate) {
+  const p = d.params;
+  if (!d.schedule.length) return null;
+  const last = d.schedule.length - 1;
+  const at = (attempt, start) => ({
+    attempt, threshold: d.schedule[Math.min(attempt, last)].threshold, start, end: start + p.window - 1,
+    lockIn: start + p.window, activation: start + 2 * p.window,
+  });
+  const timedOut = (x) => p.timeout != null && estimate(doc, x.end) >= p.timeout;
+  const now = windowOutlook(d, rate);
+  if (!now || d.window.attempt == null) return null;
+  const current = at(d.window.attempt, d.window.start.height);
+  if (now.verdict === "reached" || now.verdict === "on-track") return current;
+  if (timedOut(current)) return { never: "timeout" };
+  for (let a = current.attempt + 1, start = current.start + p.window; ; a++, start += p.window) {
+    const x = at(a, start);
+    if (Math.floor(rate * p.window) >= x.threshold) return x;
+    if (timedOut(x)) return { never: "timeout" };
+    if (a >= last || x.threshold <= p.threshold_min) return { never: "floor" };
+  }
+}
+
+const ofShare = (n, of) => pct(of > 0 ? n / of : 0);
+const onDay = (doc, height) => day({ time: estimate(doc, height) });
+
+function renderLockIn(doc, d) {
+  const pace = todaysPace(d);
+  const rate = pace ? pace.signalled / pace.blocks : 0;
+  const w = pace ? windowOutlook(d, rate) : null;
+  $("lock-in").hidden = !w;
+  if (!w) return;
+  const p = d.params;
+  const attempt = (d.window.attempt ?? 0) + 1;
+  const next = d.schedule[Math.min(attempt, d.schedule.length - 1)]?.threshold ?? p.threshold_min;
+  $("lock-in-lede").textContent = {
+    reached: `Yes. This window has ${fmt(w.count)} signalling blocks, at least its threshold of ${fmt(w.threshold)}, so v24 locks in at block ${fmt(w.end + 1)}.`,
+    "on-track": `Yes, at this pace. It needs ${fmt(w.needed)} more signalling blocks in the ${fmt(w.remaining)} left, and at ${pct(rate)} it ends with about ${fmt(w.projected)} of the ${fmt(w.threshold)} it needs.`,
+    "needs-more": `Not at this pace. It needs ${fmt(w.needed)} more signalling blocks in the ${fmt(w.remaining)} left, ${ofShare(w.needed, w.remaining)} of them. At ${pct(rate)} it ends with about ${fmt(w.projected)} of the ${fmt(w.threshold)} it needs.`,
+    impossible: `No. It needs ${fmt(w.needed)} more signalling blocks and only ${fmt(w.remaining)} are left. The next chance is the next window, at a threshold of ${fmt(next)} of ${fmt(p.window)}.`,
+  }[w.verdict];
+  const good = w.verdict === "reached" || w.verdict === "on-track";
+  $("lock-in-stats").replaceChildren(
+    stat("Signalling so far", w.mined > 0 ? ofShare(w.count, w.mined) : "–", w.mined > 0 ? `${fmt(w.count)} of ${fmt(w.mined)} blocks` : "no blocks in this window yet"),
+    stat("Blocks left", fmt(w.remaining), `to block ${fmt(w.end)}, about ${onDay(doc, w.end)}`),
+    stat("Threshold", fmt(w.threshold), `of ${fmt(p.window)} (${share(w.threshold, p.window)}), window #${attempt}`),
+    stat("Needed from the rest", w.needed > w.remaining ? "out of reach" : ofShare(w.needed, w.remaining),
+      `${fmt(w.needed)} of the ${fmt(w.remaining)} left`, good ? "good" : "warning"));
+  const basis = pace.basis === "window"
+    ? `Today's pace is this window's so far: ${fmt(pace.signalled)} of ${fmt(pace.blocks)} blocks signalled (${pct(rate)}).`
+    : `Today's pace is the last ${fmt(pace.blocks)} blocks': ${fmt(pace.signalled)} signalled (${pct(rate)}).`;
+  const x = projectLockIn(doc, d, rate);
+  const floor = p.threshold_min / p.window;
+  const gap = Math.max(0.1, Math.round((floor - rate) * 1000) / 10);
+  const outcome = !x ? ""
+    : x.never === "timeout" ? `At that pace no window locks in before the timeout, ${dateTime(p.timeout)}.`
+    : x.never === "floor" ? `At that pace no window locks in: even the lowest threshold, ${fmt(p.threshold_min)} of ${fmt(p.window)} blocks (${share(p.threshold_min, p.window)}), is above it. Signalling has to rise by about ${gap.toFixed(1)} percentage points.`
+    : `At that pace window #${x.attempt + 1} (blocks ${fmt(x.start)}–${fmt(x.end)}, threshold ${fmt(x.threshold)} of ${fmt(p.window)}) is the first to lock in, about ${onDay(doc, x.end)}. v24 would then activate at block ${fmt(x.activation)}, about ${onDay(doc, x.activation)}.`;
+  $("projection").textContent = `${basis} ${outcome}`;
+  $("projection").dataset.lockIn = x ? (x.never ?? String(x.attempt)) : "";
+  const silent = (d.window.pools ?? []).filter((q) => q.pool != null && q.blocks > 0 && q.signalling === 0);
+  $("silent-pools").hidden = !(silent.length && w.mined);
+  $("silent-pools").textContent = silent.map((q) =>
+    `Blocks tagged ${q.pool}: ${fmt(q.blocks)} of this window's ${fmt(w.mined)} (${ofShare(q.blocks, w.mined)}), none of them signalling.`).join(" ");
+  $("projection-note").textContent = `An estimate: the share moves as pools switch, and dates assume ${Math.round(doc.block_seconds)} s a block.`;
+}
+
+/** Blocks and signalling blocks per pool this window, by coinbase tag. Hidden until the collector has them. */
+function renderPools(d) {
+  const w = d.window;
+  const pools = d.state === "started" ? w?.pools : null;
+  $("pools").hidden = !pools?.length;
+  if (!pools?.length) return;
+  const heads = ["Pool", "Blocks", "Signalled", "Signalling"];
+  $("pools-lede").textContent = `Who mined this window's ${fmt(w.mined)} blocks and how many of them signalled. Best effort: we go by the tag in each block's coinbase, which is whatever the miner wrote, and some blocks carry none.`;
+  $("pools-table").replaceChildren(
+    el("thead", {}, el("tr", {}, ...heads.map((h, i) => el("th", { class: i === 1 || i === 2 ? "r" : null, text: h })))),
+    el("tbody", {}, ...pools.map((q) => labelled(heads, el("tr", {},
+      el("td", { text: q.pool ?? "Untagged" }),
+      el("td", { class: "r num" }, fmt(q.blocks), " ", el("small", { class: "muted", text: ofShare(q.blocks, w.mined) })),
+      el("td", { class: "r num", text: `${fmt(q.signalling)} of ${fmt(q.blocks)}` }),
+      el("td", {}, q.signalling === q.blocks ? badge("good", "yes") : q.signalling === 0 ? badge("warning", "no") : badge("none", "partly")))))));
 }
 
 /** The road from here: [label, milestone, already happened]. */
@@ -380,7 +489,7 @@ function renderWindows(d, o, pace) {
 
 // ---- thresholds ----
 
-function renderThresholds(d, o, pace) {
+function renderThresholds(doc, d, o, pace) {
   const p = d.params;
   const heads = ["Window", "From block", "Starts", "Threshold", "Share", "Signalled"];
   const done = new Map(d.windows.filter((w) => w.attempt != null).map((w) => [w.attempt, w]));
@@ -392,6 +501,9 @@ function renderThresholds(d, o, pace) {
   // The schedule's windows, then (on a network where it took longer) the last ones that counted.
   const beyond = [...done.keys()].filter((a) => a >= d.schedule.length).sort((a, b) => a - b).slice(-3);
   const floor = d.schedule.at(-1).threshold;
+  const pace2 = todaysPace(d);
+  const projected = pace2 && !decided ? projectLockIn(doc, d, pace2.signalled / pace2.blocks) : null;
+  const lockIn = projected && projected.never == null ? projected.attempt : null;
   const rows = [...d.schedule, ...beyond.map((a) => ({ attempt: a, threshold: floor, gap: a > d.schedule.length && a === beyond[0] }))].map((s) => {
     const w = done.get(s.attempt);
     const k = anchor ? s.attempt - anchor[0] : -1;
@@ -399,7 +511,8 @@ function renderThresholds(d, o, pace) {
       time: anchor[1].time != null ? Math.round(anchor[1].time + k * p.window * pace) : null, estimated: true } : null;
     const isNow = d.window?.attempt === s.attempt && d.state === "started";
     return labelled(heads, el("tr", { class: [isNow ? "now" : null, s.gap ? "gap" : null].filter(Boolean).join(" ") || null },
-      el("td", {}, `#${s.attempt + 1}`, isNow ? [" ", el("span", { class: "pill", text: "now" })] : null),
+      el("td", {}, `#${s.attempt + 1}`, isNow ? [" ", el("span", { class: "pill", text: "now" })] : null,
+        s.attempt === lockIn ? [" ", el("span", { class: "pill", text: "locks in at today's pace" })] : null),
       el("td", { class: "num", text: start ? fmt(start.height) : "–" }),
       el("td", { text: start?.time != null ? `${start.estimated ? "about " : ""}${dateTime(start.time)}` : "–" }),
       el("td", { class: "r num", text: `${fmt(s.threshold)} of ${fmt(p.window)}` }),
