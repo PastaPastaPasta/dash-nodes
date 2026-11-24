@@ -596,7 +596,7 @@ function renderWindows(d, o, pace) {
     const every = Math.ceil(list.length / Math.max(2, Math.floor(W / 64)));
     const now = list.findIndex((s) => s.current);
     list.forEach((s, i) => {
-      if (i !== now && ((list.length - 1 - i) % every || (now >= 0 && Math.abs(i - now) < every / 2))) return;
+      if (i !== now && ((list.length - 1 - i) % every || (now >= 0 && Math.abs(i - now) * slot < 56))) return;
       const t = svg("text", { x: center(i), y: H - 18, "text-anchor": "middle", class: "tick" });
       t.textContent = `#${s.attempt + 1}`;
       const t2 = svg("text", { x: center(i), y: H - 5, "text-anchor": "middle", class: "tick" });
@@ -634,7 +634,7 @@ function renderThresholds(doc, d, o, pace) {
       el("td", {}, `#${s.attempt + 1}`, isNow ? [" ", el("span", { class: "pill", text: "now" })] : null,
         s.attempt === lockIn ? [" ", el("span", { class: "pill", text: "locks in at today's pace" })] : null),
       el("td", { class: "num", text: start ? fmt(start.height) : "–" }),
-      el("td", { text: start?.time != null ? `${start.estimated ? "about " : ""}${dateTime(start.time)}` : "–" }),
+      el("td", {}, start?.time != null && start.estimated ? el("span", { class: "about", text: "about " }) : null, start?.time != null ? dateTime(start.time) : "–"),
       el("td", { class: "r num" }, fmt(s.threshold), el("small", { class: "muted", text: ` ${share(s.threshold, p.window)}` })),
       el("td", { class: w ? "r num" : "r num none", text: w ? `${fmt(w.count)}${w.mined < p.window ? ` of ${fmt(w.mined)} so far` : ""}` : "–" })));
   });

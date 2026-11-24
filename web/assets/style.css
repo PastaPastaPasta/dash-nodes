@@ -834,7 +834,7 @@ tr.gap td { border-top: 2px dashed var(--grid); }
   #thresholds-table tr.gap { border-top: 2px dashed var(--grid); }
   #thresholds-table tr.now { background: color-mix(in srgb, var(--brand) 8%, transparent); }
   #thresholds-table td { padding: 0; border: 0; background: none; text-align: left; white-space: normal; }
-  #thresholds-table td:nth-child(2) { display: none; }
+  #thresholds-table td:nth-child(2), #thresholds-table th:nth-child(2), #thresholds-table .about { display: none; }
   #thresholds-table td:nth-child(1) { font-weight: 600; }
   #thresholds-table td:nth-child(3) { grid-row: 2; color: var(--ink-2); font-size: 13px; }
   #thresholds-table td:nth-child(4), #thresholds-table td:nth-child(5) { text-align: right; }
