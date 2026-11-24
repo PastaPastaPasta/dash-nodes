@@ -409,7 +409,7 @@ export function chrome(page, { footer = true, ownScroll = false } = {}) {
   document.title = `${document.title}${net === "testnet" ? " · testnet" : ""}`;
   const nav = el("nav", { class: "main" },
     ...[["overview", "/", "Overview"], ["masternodes", "/masternodes", "Masternodes"], ["platform", "/platform", "Platform"], ["changes", "/changes", "Changes"], ["map", "/map", "Map"], ["api", "/api", "API"]].map(([id, path, label]) =>
-      el("a", { href: href(path), class: id === "api" || id === "changes" ? `nav-${id}` : null, "aria-current": id === page ? "page" : null, text: label })));
+      el("a", { href: href(path), class: ["api", "changes", "overview"].includes(id) ? `nav-${id}` : null, "aria-current": id === page ? "page" : null, text: label })));
   const seg = el("div", { class: "seg net", role: "group", "aria-label": "Network" },
     ...NETWORKS.map((n) => el("button", {
       type: "button", "data-net": n, "aria-pressed": String(n === net),
@@ -427,10 +427,12 @@ export function chrome(page, { footer = true, ownScroll = false } = {}) {
   });
   paintTheme();
   // Named here because narrow screens hide the text and the logo is decoration.
-  const brand = el("a", { class: "brand", href: href("/"), "aria-label": net === "testnet" ? "DashHQ Radar, testnet" : "DashHQ Radar" });
+  // Phones show a short name and, where the network switch is in the menu, which network this is.
+  const brand = el("a", { class: "brand", href: href("/"), "aria-label": net === "testnet" ? "DashHQ Radar, testnet" : "DashHQ Radar, mainnet",
+    "aria-current": page === "overview" ? "page" : null });
   brand.append(el("img", { src: "/assets/icons/mark-96.png", alt: "", width: 22, height: 22 }));
-  brand.append(el("span", { text: "DashHQ Radar" }));
-  if (net === "testnet") brand.append(el("b", { class: "net-badge", text: "Testnet" }));
+  brand.append(el("span", { class: "brand-name", text: "DashHQ Radar" }), el("span", { class: "brand-short", text: "Radar" }));
+  brand.append(el("b", { class: `net-badge ${net}`, text: net === "testnet" ? "Testnet" : "Mainnet" }));
   // Phones: the network switch, theme and status fold into a menu behind one button.
   const more = el("button", { class: "more-toggle", type: "button", "aria-label": "Network and display settings", "aria-expanded": "false", "aria-controls": "top-right" });
   more.innerHTML = MORE;
