@@ -850,9 +850,12 @@ tr.gap td { border-top: 2px dashed var(--grid); }
 .v24-mlabel, .v24-plabel { position: absolute; padding: 0 6px; font-size: 12.5px; line-height: 16px; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .v24-mlabel { top: 0; font-weight: 650; color: var(--ink); }
 .v24-plabel { bottom: 0; color: var(--ink-2); }
-.v24-pools { display: flex; gap: 2px; }
-.v24-pools > span { flex-basis: 0; min-width: 3px; container-type: inline-size; display: flex; align-items: center; overflow: hidden; }
-.v24-pools > .v24-yes + .v24-no { margin-left: 4px; }
+.v24-pools { display: flex; }
+.v24-pools > span { flex-basis: 0; min-width: 0; container-type: inline-size; display: flex; align-items: center; overflow: hidden; }
+/* Separators drawn over the segments, so the bar keeps one scale with its "needed" tick. */
+.v24-pools > span + span { box-shadow: inset 2px 0 0 var(--page); }
+.v24-pools > .v24-yes + .v24-no { box-shadow: inset 4px 0 0 var(--page); }
+.v24-pools > span + span .v24-seg { padding-left: 9px; }
 .v24-seg { padding: 0 7px; overflow: hidden; white-space: nowrap; font-size: 12.5px; font-weight: 650; font-variant-numeric: tabular-nums; color: var(--surface); }
 .v24-seg-not { display: none; }
 @container (max-width: 64px) { .v24-seg { display: none; } }
