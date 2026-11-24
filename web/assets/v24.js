@@ -199,6 +199,44 @@ function projectLockIn(doc, d, rate) {
 
 const ofShare = (n, of) => (of > 0 ? share(n, of) : "0.0%");
 const onDay = (doc, height) => day({ time: estimate(doc, height) });
+/** A share of a bar's width, as CSS. */
+const at = (ratio) => `${Math.min(1, Math.max(0, ratio)) * 100}%`;
+/** Places a label over a bar at `ratio` of its width, shifted by the same share of its own width so it never leaves the bar. */
+const pinAt = (ratio) => ({ left: at(ratio), transform: `translateX(-${at(ratio)})` });
+
+const INFO_ICON = '<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M8 7.3v3.9" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><circle cx="8" cy="4.9" r="1" fill="currentColor"/></svg>';
+/**
+ * An info button and its note, for the fine print a reading doesn't need at a glance. The note is a popover: it opens
+ * on click, tap or Enter, and Escape or a click elsewhere closes it. Returns [button, note]; the note goes anywhere.
+ */
+function infoTip(id, label, ...body) {
+  const note = el("div", { id, popover: "auto", class: "v24-tip" }, ...body);
+  const button = el("button", { type: "button", class: "v24-info", "aria-label": label, title: label, popovertarget: id });
+  button.innerHTML = INFO_ICON;
+  const place = () => {
+    const b = button.getBoundingClientRect(), t = note.getBoundingClientRect(), m = 12;
+    const left = Math.max(m, Math.min(b.left + b.width / 2 - t.width / 2, innerWidth - m - t.width));
+    const below = b.bottom + 6, above = b.top - 6 - t.height;
+    note.style.left = `${left}px`;
+    note.style.top = `${below + t.height <= innerHeight - m || above < m ? below : above}px`;
+  };
+  note.addEventListener("toggle", (e) => {
+    const open = e.newState === "open";
+    if (open) place();
+    for (const ev of ["scroll", "resize"]) (open ? addEventListener : removeEventListener)(ev, place, { capture: true, passive: true });
+  });
+  return [button, note];
+}
+
+const VERDICT = {
+  reached: ["good", "Threshold reached"],
+  "on-track": ["good", "On pace"],
+  "needs-more": ["warning", "Not on pace"],
+  impossible: ["critical", "Out of reach"],
+};
+const poolName = (q) => q.pool ?? "Untagged";
+/** A legend entry: swatch, label, figure. */
+const legendKey = (cls, label, value) => el("span", {}, el("i", { class: cls }), label, el("b", { text: value }));
 
 function renderLockIn(doc, d) {
   const pace = todaysPace(d);
@@ -208,55 +246,124 @@ function renderLockIn(doc, d) {
   $("lock-in").hidden = !w;
   if (!w) return;
   const p = d.params;
-  const attempt = (d.window.attempt ?? 0) + 1;
-  const next = d.schedule[Math.min(attempt, d.schedule.length - 1)]?.threshold ?? p.threshold_min;
-  $("lock-in-lede").textContent = {
-    reached: `Yes. This window has ${fmt(w.count)} signalling blocks, at least its threshold of ${fmt(w.threshold)}, so v24 locks in at block ${fmt(w.end + 1)}.`,
-    "on-track": `Yes, at this pace. It needs ${fmt(w.needed)} more signalling blocks in the ${fmt(w.remaining)} left, and at ${ratePct} it ends with about ${fmt(w.projected)} of the ${fmt(w.threshold)} it needs.`,
-    "needs-more": `Not at this pace. It needs ${fmt(w.needed)} more signalling blocks in the ${fmt(w.remaining)} left, ${ofShare(w.needed, w.remaining)} of them. At ${ratePct} it ends with about ${fmt(w.projected)} of the ${fmt(w.threshold)} it needs.`,
-    impossible: `No. It needs ${fmt(w.needed)} more signalling blocks and only ${fmt(w.remaining)} are left. The next chance is the next window, at a threshold of ${fmt(next)} of ${fmt(p.window)}.`,
+  const [tone, chip] = VERDICT[w.verdict];
+  const needsShare = `Needs ${ofShare(w.needed, w.remaining)} of the blocks left; signalling runs at ${ratePct}.`;
+  const line = {
+    reached: `v24 locks in at block ${fmt(w.end + 1)}.`,
+    "on-track": needsShare,
+    "needs-more": needsShare,
+    impossible: `Needs ${fmt(w.needed)} more signalling blocks; only ${fmt(w.remaining)} are left.`,
   }[w.verdict];
-  const good = w.verdict === "reached" || w.verdict === "on-track";
+  $("lock-in-answer").dataset.verdict = w.verdict;
+  $("lock-in-answer").replaceChildren(el("span", { class: `v24-verdict ${tone}`, text: chip }), el("span", { text: line }));
+  renderWindowBar(w, p.window);
   $("lock-in-stats").replaceChildren(
-    stat("Signalling so far", w.mined > 0 ? ofShare(w.count, w.mined) : "–", w.mined > 0 ? `${fmt(w.count)} of ${fmt(w.mined)} blocks` : "no blocks in this window yet"),
-    stat("Blocks left", fmt(w.remaining), `to block ${fmt(w.end)}, about ${onDay(doc, w.end)}`),
-    stat("Threshold", fmt(w.threshold), `of ${fmt(p.window)} (${share(w.threshold, p.window)}), window #${attempt}`),
+    stat("Signalling", w.mined > 0 ? ofShare(w.count, w.mined) : "–", w.mined > 0 ? `${fmt(w.count)} of ${fmt(w.mined)}` : null),
+    stat("Blocks left", fmt(w.remaining), `ends about ${onDay(doc, w.end)}`),
+    stat("Needed", fmt(w.threshold), `${share(w.threshold, p.window)} of ${fmt(p.window)}`),
     stat("Needed from the rest", w.needed > w.remaining ? "out of reach" : ofShare(w.needed, w.remaining),
-      `${fmt(w.needed)} of the ${fmt(w.remaining)} left`, good ? "good" : "warning"));
+      `${fmt(w.needed)} of ${fmt(w.remaining)}`, tone));
+  renderProjection(doc, d, pace, rate, ratePct);
+}
+
+/**
+ * The window as one bar of its blocks: those that signalled fill from the left, those that didn't from the right, and
+ * the blocks still to come split between them at today's pace. The threshold is a marker; it locks in when green
+ * reaches it.
+ */
+function renderWindowBar(w, size) {
+  const x = (n) => at(n / size);
+  const lost = w.mined - w.count;
+  const projected = Math.max(w.count, Math.min(w.projected, size - lost));
+  const paced = w.remaining > 0;
+  const seg = (cls, style) => el("i", { class: cls, style });
+  $("window-bar").replaceChildren(
+    el("div", { class: `v24-bar${paced ? " paced" : ""}`, role: "img",
+      "aria-label": `This window's ${fmt(size)} blocks: ${fmt(w.count)} signalled, ${fmt(lost)} did not and ${fmt(w.remaining)} are left. ` +
+        `${fmt(w.threshold)} must signal; at today's pace about ${fmt(projected)} do.` },
+    el("span", { class: "v24-mlabel", style: pinAt(w.threshold / size), "aria-hidden": "true", text: `${fmt(w.threshold)} needed` }),
+    el("div", { class: "v24-track", "aria-hidden": "true" },
+      seg("v24-yes", { left: "0", width: x(w.count) }),
+      seg("v24-yes v24-paced", { left: x(w.count), width: x(projected - w.count) }),
+      seg("v24-no v24-paced", { left: x(projected), width: x(size - lost - projected) }),
+      seg("v24-no", { right: "0", width: x(lost) })),
+    el("b", { class: "v24-mark", style: { left: x(w.threshold) }, "aria-hidden": "true" }),
+    paced ? [
+      el("b", { class: "v24-pace", style: { left: x(projected) }, "aria-hidden": "true" }),
+      el("span", { class: "v24-plabel", style: pinAt(projected / size), "aria-hidden": "true", text: `about ${fmt(projected)} at today's pace` }),
+    ] : null),
+    el("div", { class: "legend", "aria-hidden": "true" },
+      legendKey("v24-yes", "Signalled ", fmt(w.count)),
+      legendKey("v24-no", "Not signalled ", fmt(lost)),
+      legendKey("v24-sw-pace", "Left, at today's pace ", fmt(w.remaining))));
+}
+
+/** Which window locks in at today's pace, in one line; how that's worked out sits behind an info button. */
+function renderProjection(doc, d, pace, rate, ratePct) {
+  const p = d.params;
+  const x = projectLockIn(doc, d, rate);
+  const box = $("projection");
+  box.hidden = !x;
+  box.dataset.lockIn = x ? (x.never ?? String(x.attempt)) : "";
+  if (!x) return box.replaceChildren();
   const basis = pace.basis === "window"
     ? `Today's pace is this window's so far: ${fmt(pace.signalled)} of ${fmt(pace.blocks)} blocks signalled (${ratePct}).`
     : `Today's pace is the last ${fmt(pace.blocks)} blocks': ${fmt(pace.signalled)} signalled (${ratePct}).`;
-  const x = projectLockIn(doc, d, rate);
   const floor = p.threshold_min / p.window;
   const gap = Math.max(0.1, Math.round((floor - rate) * 1000) / 10);
-  const outcome = !x ? ""
-    : x.never === "timeout" ? `At that pace no window locks in before the timeout, ${dateTime(p.timeout)}.`
+  const short = x.never === "timeout" ? "At today's pace no window locks in before the timeout."
+    : x.never === "floor" ? `At today's pace no window locks in: even the lowest threshold is ${share(p.threshold_min, p.window)}.`
+    : `At today's pace window #${x.attempt + 1} locks in, about ${onDay(doc, x.end)}.`;
+  const outcome = x.never === "timeout" ? `At that pace no window locks in before the timeout, ${dateTime(p.timeout)}.`
     : x.never === "floor" ? `At that pace no window locks in: even the lowest threshold, ${fmt(p.threshold_min)} of ${fmt(p.window)} blocks (${share(p.threshold_min, p.window)}), is above it. Signalling has to rise by about ${gap.toFixed(1)} percentage points.`
     : `At that pace window #${x.attempt + 1} (blocks ${fmt(x.start)}–${fmt(x.end)}, threshold ${fmt(x.threshold)} of ${fmt(p.window)}) is the first to lock in, about ${onDay(doc, x.end)}. v24 would then activate at block ${fmt(x.activation)}, about ${onDay(doc, x.activation)}.`;
-  $("projection").textContent = `${basis} ${outcome}`;
-  $("projection").dataset.lockIn = x ? (x.never ?? String(x.attempt)) : "";
-  const silent = (d.window.pools ?? []).filter((q) => q.pool != null && q.blocks > 0 && q.signalling === 0);
-  $("silent-pools").hidden = !(silent.length && w.mined);
-  $("silent-pools").textContent = silent.map((q) =>
-    `Blocks tagged ${q.pool}: ${fmt(q.blocks)} of this window's ${fmt(w.mined)} (${ofShare(q.blocks, w.mined)}), none of them signalling.`).join(" ");
-  $("projection-note").textContent = `An estimate: the share moves as pools switch, and dates assume ${Math.round(doc.block_seconds)} s a block.`;
+  const [button, note] = infoTip("projection-tip", "How the outlook is worked out",
+    el("p", { text: `${basis} ${outcome}` }),
+    el("p", { class: "muted", text: `An estimate: the share moves as pools switch, and dates assume ${Math.round(doc.block_seconds)} s a block.` }));
+  box.replaceChildren(el("span", { text: short }), " ", button, note);
+}
+
+/** Each pool's signalling blocks, then its blocks that didn't signal: a pool that signals for some is in both. */
+function segmentsOf(pools) {
+  const yes = pools.filter((q) => q.signalling > 0).map((q) => ({ name: poolName(q), blocks: q.signalling, on: true }));
+  const no = pools.filter((q) => q.blocks > q.signalling).map((q) => ({ name: poolName(q), blocks: q.blocks - q.signalling, on: false }))
+    .sort((a, b) => b.blocks - a.blocks);
+  return [...yes, ...no];
 }
 
 /** Blocks and signalling blocks per pool this window, by coinbase tag. Hidden until the collector has them. */
 function renderPools(d) {
   const w = d.window;
   const pools = d.state === "started" ? w?.pools : null;
-  $("pools").hidden = !pools?.length;
-  if (!pools?.length) return;
-  const heads = ["Pool", "Blocks", "Signalled", "Signalling"];
-  $("pools-lede").textContent = `Who mined this window's ${fmt(w.mined)} blocks and how many of them signalled. Best effort: we go by the tag in each block's coinbase, which is whatever the miner wrote, and some blocks carry none.`;
+  $("pools").hidden = !pools?.length || !(w.mined > 0);
+  if ($("pools").hidden) return;
+  const [button, note] = infoTip("pools-tip", "About the pool tags",
+    el("p", { text: `Who mined this window's ${fmt(w.mined)} blocks and how many of them signalled. Best effort: we go by the tag in each block's coinbase, which is whatever the miner wrote, and some blocks carry none.` }));
+  $("pools-lede").replaceChildren(`This window's ${fmt(w.mined)} blocks by pool. `, button, note);
+  const segments = segmentsOf(pools);
+  const blocker = segments.find((s) => !s.on);
+  const yes = segments.filter((s) => s.on).reduce((a, s) => a + s.blocks, 0);
+  const needed = w.threshold == null ? null : w.threshold / d.params.window;
+  const say = (s) => `${s.name}: ${ofShare(s.blocks, w.mined)}, ${s.on ? "signalling" : "not signalling"}`;
+  $("pools-bar").replaceChildren(
+    el("div", { class: "v24-bar", role: "img", "aria-label": `Share of this window's blocks by pool: ${segments.map(say).join("; ")}` },
+      needed != null ? el("span", { class: "v24-mlabel", style: pinAt(needed), "aria-hidden": "true", text: `${Math.round(needed * 100)}% needed` }) : null,
+      el("div", { class: "v24-pools", "aria-hidden": "true" }, ...segments.map((s) =>
+        el("span", { class: s.on ? "v24-yes" : "v24-no", style: { flexGrow: String(s.blocks) }, title: say(s), "data-pool": s.name, "data-blocker": s === blocker },
+          el("span", { class: "v24-seg" }, el("span", { class: "v24-seg-name", text: s.name }), " ", el("span", { text: ofShare(s.blocks, w.mined) }),
+            s === blocker ? el("span", { class: "v24-seg-not", text: " · not signalling" }) : null)))),
+      needed != null ? el("b", { class: "v24-mark tick", style: { left: at(needed) }, "aria-hidden": "true" }) : null),
+    el("div", { class: "legend", "aria-hidden": "true" },
+      legendKey("v24-yes", "Signalling ", ofShare(yes, w.mined)),
+      legendKey("v24-no", "Not signalling ", ofShare(w.mined - yes, w.mined))));
+  const heads = ["Pool", "Blocks", "Signalling"];
   $("pools-table").replaceChildren(
-    el("thead", {}, el("tr", {}, ...heads.map((h, i) => el("th", { class: i === 1 || i === 2 ? "r" : null, text: h })))),
+    el("thead", {}, el("tr", {}, ...heads.map((h, i) => el("th", { class: i === 1 ? "r" : null, text: h })))),
     el("tbody", {}, ...pools.map((q) => labelled(heads, el("tr", {},
-      el("td", { text: q.pool ?? "Untagged" }),
-      el("td", { class: "r num" }, fmt(q.blocks), " ", el("small", { class: "muted", text: ofShare(q.blocks, w.mined) })),
-      el("td", { class: "r num", text: `${fmt(q.signalling)} of ${fmt(q.blocks)}` }),
-      el("td", {}, q.signalling === q.blocks ? badge("good", "yes") : q.signalling === 0 ? badge("warning", "no") : badge("none", "partly")))))));
+      el("td", { text: poolName(q) }),
+      el("td", { class: "r num" }, el("b", { text: fmt(q.blocks) }), " ", el("small", { class: "muted", text: ofShare(q.blocks, w.mined) })),
+      el("td", {}, q.signalling === q.blocks ? badge("good", "yes") : q.signalling === 0 ? badge("warning", "no")
+        : badge("none", `${fmt(q.signalling)} of ${fmt(q.blocks)}`)))))));
 }
 
 /** The road from here: [label, milestone, already happened]. */

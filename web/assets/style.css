@@ -29,6 +29,8 @@
   --rel-candidate: #0f8a78; --rel-build: #b0772a;
   --good: #0ca30c; --warning: #fab219; --serious: #ec835a; --critical: #d03b3b;
   --none: #e2e8f0;
+  /* /v24's bars: signalling blocks and the rest, dark enough for white labels. */
+  --v24-yes: #1b7f45; --v24-no: #a65a14;
   /* map */
   --ocean: #d5e1ee; --land: #f8fafc; --border-line: #b3c2d3; --state-line: #d3dde8; --label: #6b7c92;
   --shadow: 0 1px 2px rgba(14, 26, 43, .06), 0 8px 28px rgba(14, 26, 43, .10);
@@ -43,6 +45,7 @@
     --ring: rgba(170, 200, 235, 0.13); --brand: #3ba3f2; --brand-ink: #06111f;
     --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181; --s6: #008300;
     --other: #4d607a; --good: #22b04b; --none: #1d2e46;
+    --v24-yes: #4fc58a; --v24-no: #f2a066;
     --rel-candidate: #2bb59c; --rel-build: #c9913f;
     --ocean: #0a1321; --land: #15243a; --border-line: #2c4060; --state-line: #1d2f48; --label: #6b819e;
     --shadow: 0 1px 2px rgba(0, 0, 0, .3), 0 10px 32px rgba(0, 0, 0, .38);
@@ -55,6 +58,7 @@
   --ring: rgba(170, 200, 235, 0.13); --brand: #3ba3f2; --brand-ink: #06111f;
   --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181; --s6: #008300;
   --other: #4d607a; --good: #22b04b; --none: #1d2e46;
+  --v24-yes: #4fc58a; --v24-no: #f2a066;
   --rel-candidate: #2bb59c; --rel-build: #c9913f;
   --ocean: #0a1321; --land: #15243a; --border-line: #2c4060; --state-line: #1d2f48; --label: #6b819e;
   --shadow: 0 1px 2px rgba(0, 0, 0, .3), 0 10px 32px rgba(0, 0, 0, .38);
@@ -715,6 +719,7 @@ button.link { font: inherit; font-size: 13px; background: none; border: 0; paddi
 .stat-row small { display: block; font-size: 12.5px; font-weight: 450; font-stretch: 100%; color: var(--muted); margin-top: 3px; }
 .stat-row .stat-good { border-left: 4px solid var(--good); }
 .stat-row .stat-warning { border-left: 4px solid var(--warning); }
+.stat-row .stat-critical { border-left: 4px solid var(--critical); }
 /* The earnings notes are sentences: give them room. */
 #earn-stats { grid-template-columns: repeat(auto-fill, minmax(min(240px, 100%), 1fr)); }
 /* The change-kind filter wraps on narrow screens instead of running off the side. */
@@ -817,6 +822,56 @@ tr.gap td { border-top: 2px dashed var(--grid); }
 #thresholds-table td, #thresholds-table th { white-space: nowrap; }
 .prose p { color: var(--ink-2); margin: 0 0 12px; }
 .v24-card .hero-links { margin: 0; }
+/* Can this window lock in, and which pools signal: a verdict, then the window and the pools as bars. */
+.v24-answer { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: -6px 0 22px; font-size: 16px; line-height: 1.4; }
+.v24-verdict { --c: var(--axis); display: inline-flex; align-items: center; gap: 7px; height: 30px; padding: 0 12px; border-radius: 15px; font-size: 15px; font-weight: 650; color: var(--ink); background: color-mix(in srgb, var(--c) 20%, var(--surface)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--c) 45%, transparent); }
+.v24-verdict::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--c); }
+.v24-verdict.good { --c: var(--v24-yes); }
+.v24-verdict.warning { --c: var(--v24-no); }
+.v24-verdict.critical { --c: var(--critical); }
+.v24-bar-box { margin: 0 0 4px; max-width: 980px; }
+.v24-bar { position: relative; padding-top: 22px; }
+.v24-bar.paced { padding-bottom: 22px; }
+.v24-track, .v24-pools { position: relative; height: 28px; border-radius: 6px; overflow: hidden; }
+.v24-track { background: var(--surface-2); }
+.v24-track > i { position: absolute; top: 0; bottom: 0; }
+.v24-yes { background: var(--v24-yes); }
+.v24-no { background: var(--v24-no); }
+.v24-track > .v24-paced, .legend i.v24-sw-pace {
+  background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--c, var(--ink-2)) 60%, transparent) 0 3px, transparent 3px 7px);
+}
+.v24-paced.v24-yes { --c: var(--v24-yes); }
+.v24-paced.v24-no { --c: var(--v24-no); }
+.legend i.v24-sw-pace { box-shadow: inset 0 0 0 1px var(--axis); }
+.legend b { color: var(--ink); font-weight: 650; font-variant-numeric: tabular-nums; }
+.v24-mark { position: absolute; top: 17px; height: 38px; width: 2px; margin-left: -1px; border-radius: 1px; background: var(--ink); box-shadow: 0 0 0 1px var(--page); }
+.v24-mark.tick { height: 11px; box-shadow: none; }
+.v24-pace { position: absolute; top: 22px; height: 33px; margin-left: -1px; border-left: 2px dotted var(--ink-2); }
+.v24-mlabel, .v24-plabel { position: absolute; padding: 0 6px; font-size: 12.5px; line-height: 16px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.v24-mlabel { top: 0; font-weight: 650; color: var(--ink); }
+.v24-plabel { bottom: 0; color: var(--ink-2); }
+.v24-pools { display: flex; gap: 2px; }
+.v24-pools > span { flex-basis: 0; min-width: 3px; container-type: inline-size; display: flex; align-items: center; overflow: hidden; }
+.v24-pools > .v24-yes + .v24-no { margin-left: 4px; }
+.v24-seg { padding: 0 7px; overflow: hidden; white-space: nowrap; font-size: 12.5px; font-weight: 650; font-variant-numeric: tabular-nums; color: var(--surface); }
+.v24-seg-not { display: none; }
+@container (max-width: 64px) { .v24-seg { display: none; } }
+@container (max-width: 120px) { .v24-seg-name { display: none; } }
+@container (min-width: 230px) { .v24-seg-not { display: inline; } }
+#pools .v24-bar-box { margin-bottom: 18px; }
+.v24-stats { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.v24-stats .stat-good { border-left-color: var(--v24-yes); }
+.v24-stats .stat-warning { border-left-color: var(--v24-no); }
+@media (max-width: 640px) { .v24-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px 18px; } }
+.v24-pace-line { margin: 0; }
+.v24-info { display: inline-grid; place-items: center; width: 24px; height: 24px; margin: -3px 0; padding: 0; border: 0; border-radius: 50%; background: transparent; color: var(--ink-2); cursor: pointer; vertical-align: middle; -webkit-tap-highlight-color: transparent; }
+.v24-info:hover, .v24-info:focus-visible { background: var(--surface-2); color: var(--ink); }
+.v24-info:focus-visible { outline: 2px solid var(--brand); outline-offset: 1px; }
+@media (pointer: coarse) { .v24-info { width: 40px; height: 40px; margin: -11px -8px; } }
+.v24-tip { position: fixed; inset: auto; margin: 0; width: max-content; max-width: min(380px, calc(100vw - 24px)); padding: 10px 12px; border: 0; border-radius: 10px; background: var(--surface); color: var(--ink); box-shadow: 0 0 0 1px var(--ring), var(--shadow); font-size: 13.5px; line-height: 1.5; }
+.v24-tip p { margin: 0; }
+.v24-tip p + p { margin-top: 8px; }
 @media (forced-colors: active) {
   .windows-chart .bar, .windows-chart .mark, .window-chart .actual, .milestones li.done::before { forced-color-adjust: none; }
+  .v24-track, .v24-pools, .v24-mark, .v24-verdict, .legend i.v24-sw-pace { forced-color-adjust: none; }
 }
