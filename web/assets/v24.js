@@ -1,5 +1,5 @@
 // /v24: Dash Core 24's activation (the crawler's activation.rs, /api/v1/{net}/activation).
-import { api, chrome, currentNet, el, everyVisible, fmt, href, dateTime, shortHash, badge, labelled, share, pct } from "./common.js";
+import { api, chrome, currentNet, el, everyVisible, fmt, href, dateTime, shortHash, badge, labelled, share } from "./common.js";
 import { svg, valueAxis } from "./charts.js";
 
 chrome("v24");
@@ -197,12 +197,13 @@ function projectLockIn(doc, d, rate) {
   }
 }
 
-const ofShare = (n, of) => pct(of > 0 ? n / of : 0);
+const ofShare = (n, of) => (of > 0 ? share(n, of) : "0.0%");
 const onDay = (doc, height) => day({ time: estimate(doc, height) });
 
 function renderLockIn(doc, d) {
   const pace = todaysPace(d);
   const rate = pace ? pace.signalled / pace.blocks : 0;
+  const ratePct = pace ? share(pace.signalled, pace.blocks) : "–";
   const w = pace ? windowOutlook(d, rate) : null;
   $("lock-in").hidden = !w;
   if (!w) return;
@@ -211,8 +212,8 @@ function renderLockIn(doc, d) {
   const next = d.schedule[Math.min(attempt, d.schedule.length - 1)]?.threshold ?? p.threshold_min;
   $("lock-in-lede").textContent = {
     reached: `Yes. This window has ${fmt(w.count)} signalling blocks, at least its threshold of ${fmt(w.threshold)}, so v24 locks in at block ${fmt(w.end + 1)}.`,
-    "on-track": `Yes, at this pace. It needs ${fmt(w.needed)} more signalling blocks in the ${fmt(w.remaining)} left, and at ${pct(rate)} it ends with about ${fmt(w.projected)} of the ${fmt(w.threshold)} it needs.`,
-    "needs-more": `Not at this pace. It needs ${fmt(w.needed)} more signalling blocks in the ${fmt(w.remaining)} left, ${ofShare(w.needed, w.remaining)} of them. At ${pct(rate)} it ends with about ${fmt(w.projected)} of the ${fmt(w.threshold)} it needs.`,
+    "on-track": `Yes, at this pace. It needs ${fmt(w.needed)} more signalling blocks in the ${fmt(w.remaining)} left, and at ${ratePct} it ends with about ${fmt(w.projected)} of the ${fmt(w.threshold)} it needs.`,
+    "needs-more": `Not at this pace. It needs ${fmt(w.needed)} more signalling blocks in the ${fmt(w.remaining)} left, ${ofShare(w.needed, w.remaining)} of them. At ${ratePct} it ends with about ${fmt(w.projected)} of the ${fmt(w.threshold)} it needs.`,
     impossible: `No. It needs ${fmt(w.needed)} more signalling blocks and only ${fmt(w.remaining)} are left. The next chance is the next window, at a threshold of ${fmt(next)} of ${fmt(p.window)}.`,
   }[w.verdict];
   const good = w.verdict === "reached" || w.verdict === "on-track";
@@ -223,8 +224,8 @@ function renderLockIn(doc, d) {
     stat("Needed from the rest", w.needed > w.remaining ? "out of reach" : ofShare(w.needed, w.remaining),
       `${fmt(w.needed)} of the ${fmt(w.remaining)} left`, good ? "good" : "warning"));
   const basis = pace.basis === "window"
-    ? `Today's pace is this window's so far: ${fmt(pace.signalled)} of ${fmt(pace.blocks)} blocks signalled (${pct(rate)}).`
-    : `Today's pace is the last ${fmt(pace.blocks)} blocks': ${fmt(pace.signalled)} signalled (${pct(rate)}).`;
+    ? `Today's pace is this window's so far: ${fmt(pace.signalled)} of ${fmt(pace.blocks)} blocks signalled (${ratePct}).`
+    : `Today's pace is the last ${fmt(pace.blocks)} blocks': ${fmt(pace.signalled)} signalled (${ratePct}).`;
   const x = projectLockIn(doc, d, rate);
   const floor = p.threshold_min / p.window;
   const gap = Math.max(0.1, Math.round((floor - rate) * 1000) / 10);
