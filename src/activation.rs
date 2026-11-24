@@ -300,24 +300,22 @@ pub fn tag_of(script_hex: &str) -> Tag {
 /// Blocks and signalling blocks per pool among `headers`, the most blocks first and untagged ones last;
 /// None while any coinbase is unread.
 pub fn pools_of(d: &Deployment, headers: &[Header]) -> Option<Value> {
-    let mut by: Vec<(Option<&str>, i64, i64)> = Vec::new();
+    let mut by: HashMap<Option<&str>, (i64, i64)> = HashMap::new();
     for h in headers {
         let pool = match h.tag {
             Tag::Unread => return None,
             Tag::Untagged => None,
             Tag::Pool(p) => Some(p),
         };
-        let i = by.iter().position(|(p, ..)| *p == pool).unwrap_or_else(|| {
-            by.push((pool, 0, 0));
-            by.len() - 1
-        });
-        by[i].1 += 1;
-        by[i].2 += i64::from(signals(h.version, d.bit));
+        let (blocks, signalling) = by.entry(pool).or_default();
+        *blocks += 1;
+        *signalling += i64::from(signals(h.version, d.bit));
     }
-    by.sort_by(|a, b| a.0.is_none().cmp(&b.0.is_none()).then(b.1.cmp(&a.1)).then(a.0.cmp(&b.0)));
+    let mut by: Vec<_> = by.into_iter().collect();
+    by.sort_by_key(|&(pool, (blocks, _))| (pool.is_none(), std::cmp::Reverse(blocks), pool));
     Some(
         by.into_iter()
-            .map(|(pool, blocks, signalling)| json!({"pool": pool, "blocks": blocks, "signalling": signalling}))
+            .map(|(pool, (blocks, signalling))| json!({"pool": pool, "blocks": blocks, "signalling": signalling}))
             .collect(),
     )
 }
@@ -1251,6 +1249,19 @@ mod tests {
         );
         assert_eq!(pools_of(&V24, &[]).unwrap(), json!([]));
         assert_eq!(pools_of(&V24, &[hs[0], at(0x2000_2000, Tag::Unread)]), None);
+    }
+
+    #[test]
+    fn a_coinbase_counts_only_for_the_block_it_was_read_from() {
+        let c = db::open_memory();
+        c.execute_batch(
+            "INSERT INTO activation_headers VALUES (10, 'aa', 1, 1, 536879104), (11, 'bb', 2, 2, 536870912), (12, 'cc', 3, 3, 536870912);
+             INSERT INTO activation_coinbase VALUES (10, 'aa', '2f5669614254432f'), (11, 'old', '2f5669614254432f');",
+        )
+        .unwrap();
+        let tags: Vec<Tag> = load_headers(&c, 10).unwrap().iter().map(|h| h.tag).collect();
+        // 11's coinbase is from a block a reorg replaced; 12's isn't read yet.
+        assert_eq!(tags, [Tag::Pool("ViaBTC"), Tag::Unread, Tag::Unread]);
     }
 
     #[test]

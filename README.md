@@ -43,8 +43,9 @@ mnowatch.org/user-agents and the old dashninja.pl:
   lock-in threshold. It reads every block header since shortly before the windows that matter, works the states out
   with Core's rules (v24.0.0's parameters), checks them against dashd's `getdeploymentinfo`, and estimates the dates to
   come from the recent block pace. While miners' signals count, it also reads the coinbase of each block in the current
-  window and counts blocks and signals per pool its tag names (best effort: a tag is what the miner wrote). `dash-nodes activation --rpc <url> --db <file>` prints one reading. dashd must be
-  24.0.0 or newer: earlier builds don't define the mainnet deployment.
+  window and counts blocks and signals per pool its tag names (best effort: a tag is what the miner wrote).
+  `dash-nodes activation --rpc <url> --db <file>` prints one reading. dashd must be 24.0.0 or newer: earlier builds
+  don't define the mainnet deployment.
 - **Map:** every masternode (or every reachable node, counted per city) placed by the city its IP
   geolocates to (DB-IP City Lite), clustered, colored by port-check status, version or type, with the
   list's filters. It replaces the old map.dashhq.org / map.thepasta.org (`PastaPastaPasta/dash-mn-map`).
