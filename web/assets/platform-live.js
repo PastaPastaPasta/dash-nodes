@@ -3,7 +3,7 @@
 // rest of the page, since the SDK is a 9 MB download (12.8 MB unpacked).
 import { el, fmt, credits, dateTime, ago, badge, kv, labelled } from "./common.js";
 
-const SDK = "/assets/vendor/evo-sdk-5.0.1/evo-sdk.module.js";
+const SDK = "/assets/vendor/evo-sdk-5.1.0-rc.2/evo-sdk.module.js";
 /** The withdrawals system contract and its document type. */
 const WITHDRAWALS = "4fJLR2GYTPFdomuTVvNy3VRrvWgvkKPzqehEBpNf2nk6";
 const STATUS = [["none", "Queued"], ["none", "Pooled"], ["warning", "Broadcast"], ["good", "Complete"], ["serious", "Expired (refunded)"]];
