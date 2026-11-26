@@ -1,0 +1,9 @@
+# The API and the masternode pages run on a Cloudflare Worker with a daily request
+# allowance, and these AI crawlers exhaust it (explorer.dashhq.org pages they render
+# read /api/v1/status here on every load).
+User-agent: meta-externalagent
+User-agent: Reflectionbot
+Disallow: /
+
+User-agent: *
+Allow: /
