@@ -302,6 +302,7 @@ services:
       BENCH_CONCURRENCY: ${BENCH_CONCURRENCY:-2}
       # Each upload is a Worker request; results only need to reach the site hourly.
       BENCH_PUBLISH_INTERVAL: ${BENCH_PUBLISH_INTERVAL:-3600}
+      BENCH_REFRESH_INTERVAL: ${BENCH_REFRESH_INTERVAL:-3600}
       STATE_DIR: /state
       # The same routes as the app's crawler.
       TOR_PROXY: 172.30.88.10:9050
