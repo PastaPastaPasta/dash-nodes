@@ -100,12 +100,13 @@ pub struct BenchArgs {
     /// Seconds between publishing rounds.
     #[arg(long, env = "BENCH_PUBLISH_INTERVAL", default_value_t = 600)]
     publish_interval: u64,
+    /// Seconds between re-reads of the masternode lists and reference hashes from SOURCE.
+    #[arg(long, env = "BENCH_REFRESH_INTERVAL", default_value_t = 600)]
+    refresh_interval: u64,
     #[command(flatten)]
     transport: TransportArgs,
 }
 
-/// How often the masternode lists and reference hashes are re-read from SOURCE.
-const REFRESH_EVERY: Duration = Duration::from_secs(600);
 /// Everything is uploaded again this often, whether it changed or not.
 const FULL_PUBLISH_EVERY: Duration = Duration::from_secs(24 * 3600);
 /// How often the results are snapshotted to the Worker's state store.
@@ -423,7 +424,8 @@ impl Bench {
                 pace = self.pace();
                 // Nothing testable yet (the source just started, say): try again soon.
                 let any = self.nets.iter().any(|(_, st)| st.reference.is_some());
-                next_refresh = now + if any { REFRESH_EVERY } else { Duration::from_secs(60) };
+                let every = if any { self.args.refresh_interval.max(60) } else { 60 };
+                next_refresh = now + Duration::from_secs(every);
                 tracing::info!(
                     "bench: {} masternodes to test, one start every {:.0} s",
                     self.testable_now().count(),
