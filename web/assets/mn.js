@@ -491,7 +491,7 @@ function startLive(box, m, p) {
   if (m.removed) { box.replaceChildren(el("p", { class: "muted", text: "It left the masternode list." })); return; }
   const go = () => import("./platform-live.js").then((x) => x.live(box, net, m.protx, p),
     (e) => box.replaceChildren(el("p", { class: "muted", text: `Couldn't load: ${e.message}` })));
-  const button = el("button", { class: "btn", type: "button", text: "Check live (a 9 MB download, once)", onclick: () => { button.disabled = true; go(); } });
+  const button = el("button", { class: "btn", type: "button", text: "Check live (an 11 MB download, once)", onclick: () => { button.disabled = true; go(); } });
   box.replaceChildren(el("p", { class: "muted small", text: "Its claimable balance, blocks this epoch and every withdrawal, read from Platform with proofs, and our epoch numbers checked against them." }), button);
   if (navigator.connection?.saveData || !("IntersectionObserver" in window)) return;
   const seen = new IntersectionObserver((entries) => {
