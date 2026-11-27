@@ -25,11 +25,16 @@ test("an IP matches with or without its port, IPv6 too", () => {
   assert.deepEqual(findEvonodes(doc.evonodes, "89.125.209.234:9999"), [A]);
   assert.deepEqual(findEvonodes(doc.evonodes, "2001:DB8::1"), [B]);
   assert.deepEqual(findEvonodes(doc.evonodes, "89.125.209.23"), []);
+  // Two evonodes on one IP: the port picks one.
+  const E = evo(`e0e0${"e".repeat(60)}`, "89.125.209.234:20001", 3);
+  assert.deepEqual(findEvonodes([A, E], "89.125.209.234"), [A, E]);
+  assert.deepEqual(findEvonodes([A, E], "89.125.209.234:20001"), [E]);
 });
 
 test("a ProTx matches in full or by a prefix of at least 4 hex digits, in any case", () => {
   assert.deepEqual(findEvonodes(doc.evonodes, A.protx.toUpperCase()), [A]);
   assert.deepEqual(findEvonodes(doc.evonodes, "7047"), [A]);
+  assert.deepEqual(findEvonodes(doc.evonodes, `0x${A.protx}`), [A]);
   assert.deepEqual(findEvonodes(doc.evonodes, "7048"), [B, C]);
   assert.deepEqual(findEvonodes(doc.evonodes, "704"), []);
 });

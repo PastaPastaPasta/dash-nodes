@@ -774,7 +774,10 @@ pub async fn run(ctx: Arc<NetCtx>) {
             tracing::warn!(net = ctx.net.name(), "platform rewards: {e:#}");
         }
         refresh_board(&ctx).await;
-        tokio::time::sleep(POLL_INTERVAL).await;
+        tokio::select! {
+            () = tokio::time::sleep(POLL_INTERVAL) => {}
+            () = ctx.platform_wake.notified() => {}
+        }
     }
 }
 
@@ -1543,8 +1546,6 @@ async fn balances(peers: &mut Peers, protx: &[String]) -> Result<Vec<([u8; 32], 
     Ok(out)
 }
 
-/// Every evonode's protocol version vote: getProtocolVersionUpgradeVoteStatus { start_pro_tx_hash = 1,
-/// count = 2 }, a page at a time from the first ProTx (each page starts at, and repeats, the last one).
 pub async fn run_votes(ctx: Arc<NetCtx>) {
     let client = platform::client();
     wait_for_evonodes(&ctx).await;
@@ -1557,8 +1558,8 @@ pub async fn run_votes(ctx: Arc<NetCtx>) {
 }
 
 /// The upgrade vote's tally (getProtocolVersionUpgradeState) and each evonode's vote, as two evonodes
-/// agree on them. The tally is kept with the current epoch the last round read, and only while Drive
-/// counts the same epoch: a new one waits for the round that reads it.
+/// agree on them. Both are kept only while Drive counts the epoch the last round read: a new epoch wakes
+/// the round, and its votes wait for it.
 async fn read_votes(ctx: &NetCtx, client: &reqwest::Client) -> Result<()> {
     let mut peers = Peers::load(ctx, client).await?;
     let (newest, _) = ctx.db.read(stored_ends).await?;
@@ -1570,22 +1571,27 @@ async fn read_votes(ctx: &NetCtx, client: &reqwest::Client) -> Result<()> {
         "upgrade state",
         peers.agreed("getProtocolVersionUpgradeState", &v0(&[]), SMALL_ANSWER, parse_upgrade_state).await,
     );
+    let Some((versions, meta)) = tally else { return Ok(()) };
     let votes = soft(net, "votes", votes(&mut peers).await);
-    if tally.is_none() && votes.is_none() {
-        bail!("no answer");
+    let stored = ctx.db.read(|c| Ok(self::current(c)?.and_then(|n| n["epoch"].as_u64()))).await?;
+    if stored != Some(meta.epoch) {
+        if stored.is_some_and(|e| meta.epoch > e) {
+            ctx.platform_wake.notify_one();
+        }
+        return Ok(());
     }
-    ctx.db
+    let (now, votes) = ctx
+        .db
         .write(move |c| {
             let tx = c.transaction()?;
             let now_ts = db::now();
-            if let Some((versions, meta)) = tally
-                && let Some(mut now) = self::current(&tx)?
-                && now["epoch"].as_u64() == Some(meta.epoch)
-            {
-                now["versions"] = json!(versions);
-                now["votes_updated"] = json!(now_ts);
-                set_meta(&tx, NOW_KEY, &now.to_string())?;
-            }
+            // The round may have moved on since: its epoch is the one the votes have to be from.
+            let Some(mut now) = self::current(&tx)?.filter(|n| n["epoch"].as_u64() == Some(meta.epoch)) else {
+                return Ok((None, None));
+            };
+            now["versions"] = json!(versions);
+            now["votes_updated"] = json!(now_ts);
+            set_meta(&tx, NOW_KEY, &now.to_string())?;
             if let Some(votes) = &votes {
                 tx.execute("DELETE FROM platform_votes", [])?;
                 let mut st = tx.prepare("INSERT INTO platform_votes (protx, version, ts) VALUES (?1, ?2, ?3)")?;
@@ -1594,13 +1600,26 @@ async fn read_votes(ctx: &NetCtx, client: &reqwest::Client) -> Result<()> {
                 }
             }
             tx.commit()?;
-            Ok(())
+            Ok((Some(now), votes.map(|v| v.into_iter().map(|(id, v)| (hex(&id), v as i64)).collect())))
         })
         .await?;
-    refresh_board(ctx).await;
+    // Only the vote changed: the rest of the board stands, without reading months of payouts again.
+    if let Some(now) = now {
+        let mut board = ctx.platform_board.write().unwrap();
+        if let Some(b) = board.as_ref() {
+            let mut b = (**b).clone();
+            b.now = Some(now);
+            if let Some(votes) = votes {
+                b.votes = votes;
+            }
+            *board = Some(Arc::new(b));
+        }
+    }
     Ok(())
 }
 
+/// Every evonode's protocol version vote: getProtocolVersionUpgradeVoteStatus { start_pro_tx_hash = 1,
+/// count = 2 }, a page at a time from the first ProTx (each page starts at, and repeats, the last one).
 async fn votes(peers: &mut Peers) -> Result<BTreeMap<[u8; 32], u64>> {
     let mut out = BTreeMap::new();
     let mut start: Option<[u8; 32]> = None;
@@ -2065,7 +2084,8 @@ fn pool_so_far(now: &Value) -> Option<u64> {
 
 /// Everything per evonode the network table, the list and evonode pages need, keyed by ProTx, and the
 /// network-wide sums. Built once per round (`refresh_board`), not per request: the sums read every
-/// payout of months.
+/// payout of months. The upgrade vote's reads only swap in `now` and `votes`.
+#[derive(Clone)]
 pub struct Board {
     now: Option<Value>,
     last: HashMap<String, (i64, i64)>,

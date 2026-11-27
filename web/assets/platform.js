@@ -72,22 +72,26 @@ function renderUpgrade() {
 
 // ---- when is my evonode's turn ----
 
-function renderNext() {
+/** The lookup's answer; `typing` keeps a miss quiet until the query is submitted. */
+function showTurn(typing = false) {
   const s = doc.schedule;
   $("next-note").textContent = s
     ? `An estimate from the validator sets ${ago(s.ts)}, at about ${Math.round(s.block_secs)} seconds a block lately: ` +
       "a missed turn, or a new validator set, shifts it."
     : "The validator sets haven't been read lately, so no turn can be estimated right now.";
-  const show = () => {
-    const v = turnView(doc, $("next-q").value, { fmt, inAbout, dateTime });
-    const out = $("next-result");
-    out.className = `turn-result${v.kind === "turn" ? "" : " miss"}`;
-    if (!v.protx) return out.replaceChildren(v.text);
-    out.replaceChildren(mnLink(v.protx), v.service ? ` at ${host(v.service)}` : "", ` ${v.text}`);
-  };
+  const v = turnView(doc, $("next-q").value, { fmt, inAbout, dateTime });
+  const out = $("next-result");
+  if (typing && (v.kind === "none" || v.kind === "many")) return out.replaceChildren();
+  out.className = `turn-result${v.kind === "turn" ? "" : " miss"}`;
+  if (!v.protx) return out.replaceChildren(v.text);
+  out.replaceChildren(mnLink(v.protx), v.service ? ` at ${host(v.service)}` : "", ` ${v.text}`);
+}
+
+function renderNext() {
+  showTurn();
   let timer;
-  $("next-q").addEventListener("input", () => { clearTimeout(timer); timer = setTimeout(show, 200); });
-  $("next-form").addEventListener("submit", (ev) => { ev.preventDefault(); clearTimeout(timer); show(); });
+  $("next-q").addEventListener("input", () => { clearTimeout(timer); timer = setTimeout(() => showTurn(true), 200); });
+  $("next-form").addEventListener("submit", (ev) => { ev.preventDefault(); clearTimeout(timer); showTurn(); });
   $("next").hidden = false;
 }
 
@@ -243,8 +247,15 @@ async function main() {
   const summary = await api(`${net}/summary`).catch(() => null);
   renderNow(summary);
   renderUpgrade();
-  setInterval(renderUpgrade, 60_000);
   renderNext();
+  // The vote and the schedule are read every two minutes: an open page keeps up with them (and with "as of").
+  setInterval(async () => {
+    if (document.hidden) return;
+    const fresh = await api(`${net}/platform`).catch(() => null);
+    if (fresh?.now) doc = fresh;
+    renderUpgrade();
+    showTurn();
+  }, 60_000);
   renderEpochs();
   renderAll();
 }

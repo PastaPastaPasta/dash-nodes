@@ -10,9 +10,8 @@
 export function upgradeView(doc, nowSecs, { fmt, pct, inAbout, ago }) {
   const u = doc.upgrade;
   const n = doc.now;
-  // When the counts were read (older crawlers only have the round's time). The vote moves with every block.
-  const read = ago(u.updated ?? n.updated);
-  const asOf = read === "just now" ? "as of just now" : `as of ${read}`;
+  // When the counts were read: null until the crawler has this epoch, and older crawlers only have the round's time.
+  const asOf = "updated" in u && u.updated == null ? "not read yet this epoch" : `as of ${ago(u.updated ?? n.updated)}`;
   const locked = u.phase === "locked_in" && u.next_epoch != null && u.next_epoch > u.current;
   const v = locked ? u.next_epoch : u.phase === "voting" ? u.candidate ?? null : null;
   const ends = n.ends > nowSecs ? `ends ${inAbout(n.ends)}` : "ends any moment";

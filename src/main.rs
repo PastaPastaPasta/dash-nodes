@@ -349,6 +349,7 @@ async fn serve(args: ServeArgs) -> Result<()> {
             reference: RwLock::default(),
             platform_schedule: RwLock::default(),
             platform_board: RwLock::default(),
+            platform_wake: tokio::sync::Notify::new(),
             activation: RwLock::default(),
         });
         let floor = floor.unwrap_or(net.dip3_enforcement_height());

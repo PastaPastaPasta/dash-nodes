@@ -9,10 +9,12 @@ export const host = (service) => {
   return s.split(":").length === 2 ? s.replace(/:\d+$/, "") : s;
 };
 
-/** The evonodes a query names: a ProTx hash or its start (at least 4 hex digits), or an IP with or without port. */
+/** The evonodes a query names: a ProTx hash or its start (at least 4 hex digits, 0x or not), or an IP with or without port. */
 export function findEvonodes(evonodes, query) {
-  const q = query.trim().toLowerCase();
+  const q = query.trim().toLowerCase().replace(/^0x(?=[0-9a-f])/, "");
   if (!q) return [];
+  const byService = evonodes.filter((e) => e.service?.toLowerCase() === q);
+  if (byService.length) return byService;
   const byIp = evonodes.filter((e) => e.service && host(e.service) === host(q));
   if (byIp.length) return byIp;
   if (!/^[0-9a-f]{4,64}$/.test(q)) return [];

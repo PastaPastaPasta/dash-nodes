@@ -117,4 +117,6 @@ test("vote counts say how old they are, from the vote's own read when the crawle
   // An older crawler has no upgrade.updated: the round's time stands for it.
   assert.equal(upgradeView(page(up), NOW, f).asOf, "as of 15 min ago");
   assert.equal(upgradeView(page(up), NOW, { ...f, ago: () => "just now" }).asOf, "as of just now");
+  // A new epoch's tally the crawler hasn't read yet doesn't pass for a fresh one.
+  assert.equal(upgradeView(page({ ...up, updated: null }), NOW, f).asOf, "not read yet this epoch");
 });
