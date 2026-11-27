@@ -1606,12 +1606,17 @@ async fn read_votes(ctx: &NetCtx, client: &reqwest::Client, woken: &mut Option<u
             Ok((Some(now), votes.map(|v| v.into_iter().map(|(id, v)| (hex(&id), v as i64)).collect())))
         })
         .await?;
-    // Only the vote changed: the rest of the board stands, without reading months of payouts again.
+    // Only the vote changed: the rest of the board stands, without reading months of payouts again. A board
+    // the round has built for a newer epoch since keeps its own `now`.
     if let Some(now) = now {
         let mut board = ctx.platform_board.write().unwrap();
-        if let Some(b) = board.as_ref() {
+        if let Some(b) = board.as_ref()
+            && let Some(mut cached) = b.now.clone().filter(|n| n["epoch"].as_u64() == Some(meta.epoch))
+        {
+            cached["versions"] = now["versions"].clone();
+            cached["votes_updated"] = now["votes_updated"].clone();
             let mut b = (**b).clone();
-            b.now = Some(now);
+            b.now = Some(cached);
             if let Some(votes) = votes {
                 b.votes = votes;
             }

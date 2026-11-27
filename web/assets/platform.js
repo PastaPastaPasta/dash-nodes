@@ -251,9 +251,13 @@ async function main() {
   renderUpgrade();
   renderNext();
   // The vote and the schedule are read every two minutes: an open page keeps up with them (and with "as of").
+  let ticks = 0;
   setInterval(async () => {
     if (document.hidden) return;
+    const tick = ++ticks;
     const fresh = await api(`${net}/platform`).catch(() => null);
+    // A slow answer that a later tick has already overtaken is dropped.
+    if (tick !== ticks) return;
     if (fresh?.now) doc = fresh;
     renderUpgrade();
     showTurn(!submitted);

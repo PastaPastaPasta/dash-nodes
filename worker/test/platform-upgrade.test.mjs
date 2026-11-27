@@ -119,4 +119,7 @@ test("vote counts say how old they are, from the vote's own read when the crawle
   assert.equal(upgradeView(page(up), NOW, { ...f, ago: () => "just now" }).asOf, "as of just now");
   // A new epoch's tally the crawler hasn't read yet doesn't pass for a fresh one.
   assert.equal(upgradeView(page({ ...up, updated: null }), NOW, f).asOf, "not read yet this epoch");
+  // Unread isn't "nobody voted".
+  const unread = upgradeView(page({ phase: "active", current: 14, candidate: null, votes: 0, required: 244, enabled_evonodes: 364, versions: [], updated: null }), NOW, f);
+  assert.match(unread.lede, /This epoch's votes haven't been read yet/);
 });

@@ -2,8 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { findEvonodes, host, turnView, turnsAway } from "../../web/assets/platform-turn.js";
 
-const f = { fmt: (n) => n.toLocaleString("en-US"), inAbout: (ts) => `in ${Math.round((ts - TS) / 60)} min`, dateTime: () => "27 Nov 2026, 03:00 UTC" };
 const TS = 1_795_741_225;
+const f = { fmt: (n) => n.toLocaleString("en-US"), inAbout: (ts) => `in ${Math.round((ts - TS) / 60)} min`, dateTime: () => "27 Nov 2026, 03:00 UTC", now: TS + 60 };
 const BLOCK = 115.5;
 const evo = (protx, service, slots, status = "enabled") =>
   ({ protx, service, status, next: slots ? TS + Math.round(slots * BLOCK) : null, slots });
@@ -29,6 +29,12 @@ test("an IP matches with or without its port, IPv6 too", () => {
   const E = evo(`e0e0${"e".repeat(60)}`, "89.125.209.234:20001", 3);
   assert.deepEqual(findEvonodes([A, E], "89.125.209.234"), [A, E]);
   assert.deepEqual(findEvonodes([A, E], "89.125.209.234:20001"), [E]);
+  // A port that isn't the evonode's names no evonode.
+  assert.deepEqual(findEvonodes([A], "89.125.209.234:20002"), []);
+  assert.deepEqual(findEvonodes(doc.evonodes, "[2001:db8::1]:9998"), []);
+  // IPv6 in any spelling.
+  assert.deepEqual(findEvonodes(doc.evonodes, "2001:0db8:0:0:0:0:0:1"), [B]);
+  assert.deepEqual(findEvonodes(doc.evonodes, "[2001:0db8::1]:9999"), [B]);
 });
 
 test("a ProTx matches in full or by a prefix of at least 4 hex digits, in any case", () => {
@@ -62,4 +68,6 @@ test("misses, ambiguities, banned and idle evonodes each say so", () => {
   assert.equal(turnView(doc, "d00d", f).kind, "banned");
   assert.equal(turnView(doc, "10.0.0.3", f).kind, "idle");
   assert.equal(turnView({ ...doc, schedule: null }, "7047", f).kind, "unknown");
+  // A schedule a stalled publisher left behind is no estimate.
+  assert.equal(turnView(doc, "7047", { ...f, now: TS + 16 * 60 }).kind, "unknown");
 });

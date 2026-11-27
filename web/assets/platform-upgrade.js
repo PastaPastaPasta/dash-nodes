@@ -11,7 +11,8 @@ export function upgradeView(doc, nowSecs, { fmt, pct, inAbout, ago }) {
   const u = doc.upgrade;
   const n = doc.now;
   // When the counts were read: null until the crawler has this epoch, and older crawlers only have the round's time.
-  const asOf = "updated" in u && u.updated == null ? "not read yet this epoch" : `as of ${ago(u.updated ?? n.updated)}`;
+  const unread = "updated" in u && u.updated == null;
+  const asOf = unread ? "not read yet this epoch" : `as of ${ago(u.updated ?? n.updated)}`;
   const locked = u.phase === "locked_in" && u.next_epoch != null && u.next_epoch > u.current;
   const v = locked ? u.next_epoch : u.phase === "voting" ? u.candidate ?? null : null;
   const ends = n.ends > nowSecs ? `ends ${inAbout(n.ends)}` : "ends any moment";
@@ -32,11 +33,13 @@ export function upgradeView(doc, nowSecs, { fmt, pct, inAbout, ago }) {
     const older = u.versions.some(([ver, votes]) => ver !== u.current && votes > 0);
     return {
       state: "active", version: u.current, title: `Protocol ${u.current} is live`, badge: null,
-      lede: !voted
-        ? `No upgrade is being voted on: no evonode has voted yet this epoch, and Platform runs protocol ${u.current}.`
-        : older
-          ? `No upgrade is being voted on: no evonode has voted for a protocol above ${u.current}, the one Platform runs now.`
-          : `No upgrade is being voted on: every vote is for the protocol Platform runs now, ${u.current}.`,
+      lede: unread
+        ? `Platform runs protocol ${u.current}. This epoch's votes haven't been read yet; they appear within a few minutes.`
+        : !voted
+          ? `No upgrade is being voted on: no evonode has voted yet this epoch, and Platform runs protocol ${u.current}.`
+          : older
+            ? `No upgrade is being voted on: no evonode has voted for a protocol above ${u.current}, the one Platform runs now.`
+            : `No upgrade is being voted on: every vote is for the protocol Platform runs now, ${u.current}.`,
       meter: null, stats: others, note, pending: 0, asOf,
     };
   }
