@@ -4,12 +4,12 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>DashHQ Radar: Platform rewards</title>
-  <meta name="description" content="What Dash evonodes earn on Platform: rewards per epoch, the protocol upgrade vote, who proposes next, and every evonode compared.">
+  <meta name="description" content="What Dash evonodes earn on Platform: rewards per epoch, the protocol upgrade vote, when each evonode proposes next, and every evonode compared.">
   <link rel="canonical" href="https://radar.dashhq.org/platform">
   <meta property="og:site_name" content="DashHQ Radar">
   <meta property="og:type" content="website">
   <meta property="og:title" content="DashHQ Radar: Platform rewards">
-  <meta property="og:description" content="What Dash evonodes earn on Platform: rewards per epoch, the protocol upgrade vote, who proposes next, and every evonode compared.">
+  <meta property="og:description" content="What Dash evonodes earn on Platform: rewards per epoch, the protocol upgrade vote, when each evonode proposes next, and every evonode compared.">
   <meta property="og:url" content="https://radar.dashhq.org/platform">
   <meta name="twitter:card" content="summary">
   <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
@@ -47,12 +47,17 @@
     <p class="muted small" id="upgrade-note"></p>
   </section>
 
-  <section class="ov-section" aria-labelledby="next-title" id="next" data-anchor="Who proposes next" hidden>
+  <section class="ov-section" aria-labelledby="next-title" id="next" data-anchor="Your evonode's turn" hidden>
     <div class="ov-head">
-      <h2 id="next-title">Who proposes next</h2>
-      <p class="ov-lede" id="next-lede"></p>
+      <h2 id="next-title">When is my evonode's turn?</h2>
+      <p class="ov-lede">Paste its ProTx hash (or the start of it) or its IP.</p>
     </div>
-    <ol class="next-list" id="next-list"></ol>
+    <form class="turn-form" id="next-form" role="search">
+      <input type="search" id="next-q" placeholder="ProTx hash or IP" aria-label="Evonode ProTx hash or IP" autocomplete="off" spellcheck="false">
+      <button class="btn primary" type="submit">Look up</button>
+    </form>
+    <p class="turn-result" id="next-result" aria-live="polite"></p>
+    <p class="muted small" id="next-note"></p>
   </section>
 
   <section class="ov-section" aria-labelledby="epochs-title" id="epochs" data-anchor="Epochs" hidden>

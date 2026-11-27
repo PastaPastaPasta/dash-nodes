@@ -1,7 +1,8 @@
 // Publisher: copies what the crawler's API serves into the Worker's R2, so nodes.dashhq.org never
 // talks to the crawler host. Runs next to the app (deploy/docker-compose.yml, service "publisher").
 //
-//   node scripts/publish.mjs            loop: status and activation every minute, a network's documents after each of its
+//   node scripts/publish.mjs            loop: status and activation every minute, Platform rewards every two (the
+//                                       upgrade vote is read that often), a network's documents after each of its
 //                                       crawls (and hourly), retrying a failed network with backoff
 //   node scripts/publish.mjs --once     one full pass, then exit (also: seeding a local `wrangler dev`)
 //
@@ -34,6 +35,8 @@ const STATE_FILE = process.env.STATE_FILE || "";
 const REFRESH_EVERY = 60 * 60_000;
 /** Dash Core's releases are fetched from GitHub this often (unauthenticated: 60 requests an hour). */
 const RELEASES_EVERY = 60 * 60_000;
+/** Platform rewards between crawls: the crawler reads the upgrade vote every two minutes (rewards.rs VOTE_INTERVAL). */
+const PLATFORM_EVERY = 2 * 60_000;
 const once = process.argv.includes("--once");
 
 /** A secret from env `name`, else from the file in `${name}_FILE` (or `file`); "" if neither has one. */
@@ -248,6 +251,7 @@ async function main() {
   const lastPass = new Map(); // net -> time of the last successful pass
   const failures = new Map(); // net -> consecutive failed passes
   const retryAt = new Map(); // net -> earliest next attempt after a failure
+  let platformAt = 0; // when to publish Platform rewards next, between crawls
   let releasesAt = 0; // when to fetch Dash Core's releases next
   for (;;) {
     const started = Date.now();
@@ -265,6 +269,13 @@ async function main() {
     for (const net of NETS) {
       await putIfServed(`v1/${net}/activation.json`, () => get(`${net}/activation`, [503], 20_000))
         .catch((e) => { if (e.status !== 503) log(`${net}: activation failed:`, e.message); });
+    }
+    if (status && started >= platformAt) {
+      platformAt = started + PLATFORM_EVERY - 5_000;
+      for (const net of NETS) {
+        await putIfServed(`v1/${net}/platform.json`, () => get(`${net}/platform`, [], 20_000))
+          .catch((e) => log(`${net}: platform failed:`, e.message));
+      }
     }
     if (started >= releasesAt) {
       // A failure tries again in 10 minutes; pages keep the last list meanwhile.

@@ -746,11 +746,11 @@ button.link { font: inherit; font-size: 13px; background: none; border: 0; paddi
 .meter-axis span:nth-child(2) { position: absolute; transform: translateX(-50%); white-space: nowrap; color: var(--ink-2); }
 .meter-axis span:first-child, .meter-axis span:last-child { position: static; }
 .meter-axis { min-height: 1.5em; }
-.next-list { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 0 28px; }
-.next-list li { display: grid; grid-template-columns: 44px 1fr auto; align-items: baseline; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--grid); }
-.next-list .slot { color: var(--muted); font-size: 13px; }
-.next-list .who small { display: block; font-size: 12px; }
-.next-list .when { color: var(--ink-2); font-size: 13.5px; white-space: nowrap; }
+.turn-form { display: flex; gap: 8px; max-width: 620px; }
+.turn-form input[type="search"] { flex: 1; min-width: 0; padding: 8px 10px; }
+.turn-result { margin: 14px 0 4px; font-size: 16px; color: var(--ink); text-wrap: pretty; }
+.turn-result:empty { display: none; }
+.turn-result.miss { color: var(--ink-2); }
 svg.spread, svg.epoch-bars { width: 100%; height: auto; display: block; }
 svg.spread .band { fill: color-mix(in srgb, var(--s1) 30%, transparent); }
 svg.spread .median { fill: var(--s1); }
@@ -790,7 +790,6 @@ svg.epoch-bars rect:hover, svg.epoch-bars rect:focus { fill: var(--brand); outli
 .card.rewards .live h3 { margin: 0; color: var(--ink); font-size: 15px; }
 .card.rewards .live h3.section { margin-top: 16px; color: var(--ink-2); font-size: 14px; }
 @media (max-width: 760px) {
-  .next-list li { grid-template-columns: 36px 1fr auto; }
   .rail-axis, .meter-axis { font-size: 12px; }
 }
 

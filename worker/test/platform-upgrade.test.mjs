@@ -2,16 +2,17 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { upgradeView } from "../../web/assets/platform-upgrade.js";
 
+const NOW = 1_800_000_000;
 const f = {
   fmt: (n) => (n == null ? "–" : Math.round(n).toLocaleString("en-US")),
   pct: (x, digits = 1) => `${(x * 100).toFixed(digits)}%`,
   inAbout: () => "in 20 min",
+  ago: (ts) => (ts == null ? "never" : `${Math.round((NOW - ts) / 60)} min ago`),
 };
-const NOW = 1_800_000_000;
 const evo = (vote, supports, status = "enabled") => ({ status, vote, supports });
 const page = (upgrade, evonodes = [], now = {}) => ({
   upgrade: { versions: [], next_epoch: null, next_epoch_reported_by: 0, ...upgrade },
-  now: { epoch: 20_372, ends: NOW + 1200, ...now },
+  now: { epoch: 20_372, ends: NOW + 1200, updated: NOW - 900, ...now },
   evonodes,
 });
 
@@ -40,7 +41,7 @@ test("running 14 with votes for 15 shows the vote in progress, with the live thr
   assert.deepEqual(v.meter, { votes: 20, required: 29, enabled: 43, met: false });
   const byLabel = Object.fromEntries(v.stats.map((s) => [s.label, s]));
   assert.equal(byLabel["Voted for 15"].value, "20");
-  assert.equal(byLabel["Voted for 15"].note, "46.5% of enabled evonodes");
+  assert.equal(byLabel["Voted for 15"].note, "as of 15 min ago: 46.5% of enabled evonodes");
   assert.equal(byLabel["Votes needed"].note, "1 + 67% of 43 enabled, rounded down");
   // Banned evonodes aren't in the electorate; one enabled evonode runs 15 but last voted 14.
   assert.equal(byLabel["Run software for 15"].value, "3");
@@ -105,4 +106,15 @@ test("a next-epoch protocol that isn't newer is no lock-in", () => {
     versions: [[14, 20]], next_epoch: 14 }), NOW, f);
   assert.equal(v.state, "active");
   assert.equal(v.title, "Protocol 14 is live");
+});
+
+test("vote counts say how old they are, from the vote's own read when the crawler sends it", () => {
+  const up = { phase: "voting", current: 14, candidate: 15, votes: 10, required: 244, required_pct: 67, enabled_evonodes: 364, versions: [[15, 10]] };
+  const fresh = upgradeView(page({ ...up, updated: NOW - 120 }), NOW, f);
+  assert.equal(fresh.asOf, "as of 2 min ago");
+  assert.match(fresh.stats.find((s) => s.label === "Voted for 15").note, /^as of 2 min ago: /);
+  assert.match(fresh.note, /as two evonodes agreed on it, as of 2 min ago\./);
+  // An older crawler has no upgrade.updated: the round's time stands for it.
+  assert.equal(upgradeView(page(up), NOW, f).asOf, "as of 15 min ago");
+  assert.equal(upgradeView(page(up), NOW, { ...f, ago: () => "just now" }).asOf, "as of just now");
 });

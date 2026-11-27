@@ -359,6 +359,7 @@ async fn serve(args: ServeArgs) -> Result<()> {
         supervise("platform", &ctx, platform::run);
         supervise("rewards", &ctx, rewards::run);
         supervise("validator sets", &ctx, rewards::run_quorums);
+        supervise("upgrade vote", &ctx, rewards::run_votes);
         supervise("activation", &ctx, activation::run);
         tracing::info!("{}: dashd at {url}", net.name());
         nets.insert(net, ctx);
