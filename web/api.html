@@ -144,7 +144,7 @@
       <h3>GET /api/v1/{net}/platform</h3>
       <p class="sub">Evonodes' Platform rewards, in credits. Each finished epoch's pool (Core block rewards paid into Platform, plus
         fees) goes to the evonodes that proposed its blocks, pro rata by blocks, in Drive's integer arithmetic. We read Drive's record of
-        every finished epoch, from epoch 34 on mainnet (<code>getFinalizedEpochInfos</code>), and the live state every 15 minutes, over
+        every finished epoch, from epoch 34 on mainnet (<code>getFinalizedEpochInfos</code>), the live state every 15 minutes and the upgrade vote every 2, over
         gRPC-web from evonodes, using an answer only when two of them agree.</p>
       <p class="sub"><code>now</code>: the current <code>epoch</code>, its <code>start</code>, estimated <code>ends</code> (from the
         <code>epoch_secs</code> of recent epochs), Platform <code>height</code>, <code>blocks</code> and <code>proposers</code> so far,
@@ -152,7 +152,8 @@
         the <code>current</code> protocol, the <code>candidate</code> with the most votes above it, its <code>votes</code> (evonodes whose
         blocks this epoch voted for it), <code>required</code> (1 + <code>required_pct</code>% of <code>enabled_evonodes</code>, rounded down; <code>required_pct</code> is Drive's share for the protocol that judges the votes, 67 since protocol 3),
         <code>versions</code> as <code>[[version, votes], …]</code>, <code>phase</code> (<code>active</code>, <code>voting</code> or
-        <code>locked_in</code>, when evonodes report a higher <code>next_epoch</code> protocol) and <code>next_epoch_reported_by</code>.
+        <code>locked_in</code>, when evonodes report a higher <code>next_epoch</code> protocol), <code>next_epoch_reported_by</code>
+        and <code>updated</code> (when the vote was read; null until it has been this epoch).
         <code>returns</code>: the <code>median_monthly</code> evonode Platform reward at the pace of the last six epochs (over the
         <code>evonodes_paid</code> evonodes registered before those six epochs started and paid in them) and the
         <code>median_platform_yield</code> on 4,000 DASH over the last 90 days. <code>epochs</code>, newest first, up to 120:

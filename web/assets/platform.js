@@ -2,6 +2,7 @@
 import { api, chrome, currentNet, el, fmt, pct, href, ago, dateTime, amount, inAbout, shortHash, badge, segmented, searchBox, toDash, labelled, lastSpan } from "./common.js";
 import { svg, sized, axisScale, valueAxis, epochAxis } from "./charts.js";
 import { upgradeView } from "./platform-upgrade.js";
+import { turnView, host } from "./platform-turn.js";
 import { monthlyCell, monthlySortKey } from "./history.js";
 
 chrome("platform");
@@ -48,7 +49,7 @@ function renderNow(summary) {
 // ---- the protocol upgrade vote ----
 
 function renderUpgrade() {
-  const view = upgradeView(doc, Date.now() / 1000, { fmt, pct, inAbout });
+  const view = upgradeView(doc, Date.now() / 1000, { fmt, pct, inAbout, ago });
   $("upgrade").dataset.state = view.state;
   $("upgrade-title").replaceChildren(view.title, ...(view.badge ? [badge(view.badge.tone, view.badge.text)] : []));
   $("upgrade-lede").textContent = view.lede;
@@ -69,21 +70,30 @@ function renderUpgrade() {
   $("upgrade").hidden = false;
 }
 
-// ---- who proposes next ----
+// ---- when is my evonode's turn ----
+
+/** Whether the lookup's query was submitted: until then a miss stays quiet. */
+let submitted = false;
+/** The lookup's answer; `typing` keeps a miss quiet until the query is submitted. */
+function showTurn(typing = false) {
+  const s = doc.schedule;
+  $("next-note").textContent = s
+    ? `An estimate from the validator sets ${ago(s.ts)}, at about ${Math.round(s.block_secs)} seconds a block lately: ` +
+      "a missed turn, or a new validator set, shifts it."
+    : "The validator sets haven't been read lately, so no turn can be estimated right now.";
+  const v = turnView(doc, $("next-q").value, { fmt, inAbout, dateTime });
+  const out = $("next-result");
+  if (typing && (v.kind === "none" || v.kind === "many")) return out.replaceChildren();
+  out.className = `turn-result${v.kind === "turn" ? "" : " miss"}`;
+  if (!v.protx) return out.replaceChildren(v.text);
+  out.replaceChildren(mnLink(v.protx), v.service ? ` at ${host(v.service)}` : "", ` ${v.text}`);
+}
 
 function renderNext() {
-  const s = doc.schedule;
-  if (!s?.next?.length) return;
-  const byProtx = new Map(doc.evonodes.map((e) => [e.protx, e]));
-  $("next-lede").textContent = `Evonodes take turns proposing blocks: one validator set at a time, in ProTx order, then the next set. ` +
-    `At about ${Math.round(s.block_secs)} seconds a block lately, this is when the next ones are due. An estimate from the validator sets ${ago(s.ts)}: ` +
-    "a missed turn, or a new set, shifts it.";
-  $("next-list").replaceChildren(...s.next.slice(0, 12).map((x) => {
-    const e = byProtx.get(x.protx);
-    return el("li", {}, el("span", { class: "slot num", text: `+${x.slots}` }),
-      el("span", { class: "who" }, mnLink(x.protx), e?.service ? el("small", { class: "muted mono", text: noPort(e.service) }) : null),
-      el("span", { class: "when", text: inAbout(x.eta) }));
-  }));
+  showTurn();
+  let timer;
+  $("next-q").addEventListener("input", () => { submitted = false; clearTimeout(timer); timer = setTimeout(() => showTurn(true), 200); });
+  $("next-form").addEventListener("submit", (ev) => { ev.preventDefault(); submitted = true; clearTimeout(timer); showTurn(); });
   $("next").hidden = false;
 }
 
@@ -240,6 +250,18 @@ async function main() {
   renderNow(summary);
   renderUpgrade();
   renderNext();
+  // The vote and the schedule are read every two minutes: an open page keeps up with them (and with "as of").
+  let ticks = 0;
+  setInterval(async () => {
+    if (document.hidden) return;
+    const tick = ++ticks;
+    const fresh = await api(`${net}/platform`).catch(() => null);
+    // A slow answer that a later tick has already overtaken is dropped.
+    if (tick !== ticks) return;
+    if (fresh?.now) doc = fresh;
+    renderUpgrade();
+    showTurn(!submitted);
+  }, 60_000);
   renderEpochs();
   renderAll();
 }

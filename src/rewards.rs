@@ -5,9 +5,9 @@
 //! earned is worked out here exactly as Drive paid it (`payouts`).
 //!
 //! Every POLL_INTERVAL: new finalized epochs, the current epoch and its blocks so far, identity
-//! balances (what each evonode can withdraw), the protocol upgrade vote, and some lifetime totals from
-//! Platform Explorer (third party) for the epochs before 34. Every QUORUM_INTERVAL: the validator sets,
-//! for when each evonode proposes next and which turns it misses.
+//! balances (what each evonode can withdraw), and some lifetime totals from Platform Explorer (third
+//! party) for the epochs before 34. Every VOTE_INTERVAL: the protocol upgrade vote. Every
+//! QUORUM_INTERVAL: the validator sets, for when each evonode proposes next and which turns it misses.
 //!
 //! The calls are unproved gRPC-web, as in platform.rs, to evonodes that passed its checks. An answer
 //! counts only once two evonodes at different IPs give the same one, at the same chain state. Finalized
@@ -36,6 +36,9 @@ use crate::platform::{self, Field, fields, msg, uint};
 use crate::state::NetCtx;
 
 const POLL_INTERVAL: Duration = Duration::from_secs(15 * 60);
+/// The upgrade vote moves with every block: its tally is one small answer, and each evonode's vote a few
+/// pages of 100.
+const VOTE_INTERVAL: Duration = Duration::from_secs(2 * 60);
 /// A mainnet block takes about 140 s: sampling more often sees nearly every proposer turn.
 const QUORUM_INTERVAL: Duration = Duration::from_secs(90);
 /// Most items Drive returns per query (`max_returned_elements`, and the ID limit of getIdentitiesBalances).
@@ -771,7 +774,10 @@ pub async fn run(ctx: Arc<NetCtx>) {
             tracing::warn!(net = ctx.net.name(), "platform rewards: {e:#}");
         }
         refresh_board(&ctx).await;
-        tokio::time::sleep(POLL_INTERVAL).await;
+        tokio::select! {
+            () = tokio::time::sleep(POLL_INTERVAL) => {}
+            () = ctx.platform_wake.notified() => {}
+        }
     }
 }
 
@@ -1018,31 +1024,27 @@ async fn round(
     let blocks = soft(net, "blocks this epoch", epoch_blocks(&mut peers, current.epoch).await);
     let ids = ctx.db.read(registered_evonodes).await?;
     let balances = soft(net, "balances", balances(&mut peers, &ids).await);
-    let versions = soft(
-        net,
-        "upgrade state",
-        peers.agreed("getProtocolVersionUpgradeState", &v0(&[]), SMALL_ANSWER, parse_upgrade_state).await.map(|v| v.0),
-    );
-    let votes = soft(net, "votes", votes(&mut peers).await);
     // For the log: how many of each came back ("failed" for a part that didn't).
     let n = |x: Option<usize>| x.map_or_else(|| "failed".to_owned(), |n| n.to_string());
-    let counts =
-        (n(blocks.as_ref().map(Vec::len)), n(balances.as_ref().map(Vec::len)), n(votes.as_ref().map(BTreeMap::len)));
+    let counts = (n(blocks.as_ref().map(Vec::len)), n(balances.as_ref().map(Vec::len)));
     let network = ctx.net;
     ctx.db
         .write(move |c| {
             let tx = c.transaction()?;
             let now_ts = db::now();
-            // Without a fresh vote count, the last one stands.
-            let versions = match versions {
-                Some(v) => json!(v),
-                None => self::current(&tx)?.map_or(json!([]), |n| n["versions"].clone()),
+            // The vote is read by run_votes: it stands as it was, unless this is a new epoch it's not from.
+            let last = self::current(&tx)?;
+            let same_epoch = last.as_ref().is_some_and(|n| n["epoch"].as_u64() == Some(current.epoch));
+            let (versions, votes_updated) = match last.filter(|_| same_epoch) {
+                Some(n) => (n["versions"].clone(), n["votes_updated"].clone()),
+                None => (json!([]), Value::Null),
             };
             let now = json!({
                 "epoch": current.epoch, "start": current.start_ms / 1000, "first_height": current.first_block_height,
                 "first_core_height": current.first_core_height,
                 "protocol_version": meta.protocol_version.max(current.protocol_version), "height": meta.height,
-                "core_height": core_height, "time": time, "versions": versions, "updated": now_ts,
+                "core_height": core_height, "time": time, "versions": versions, "votes_updated": votes_updated,
+                "updated": now_ts,
             });
             if let Some(blocks) = &blocks {
                 tx.execute("DELETE FROM platform_epoch_blocks", [])?;
@@ -1070,13 +1072,6 @@ async fn round(
                     }
                 }
             }
-            if let Some(votes) = &votes {
-                tx.execute("DELETE FROM platform_votes", [])?;
-                let mut st = tx.prepare("INSERT INTO platform_votes (protx, version, ts) VALUES (?1, ?2, ?3)")?;
-                for (id, v) in votes {
-                    st.execute(params![hex(id), *v as i64, now_ts])?;
-                }
-            }
             set_meta(&tx, NOW_KEY, &now.to_string())?;
             prune(&tx, network, now_ts)?;
             tx.commit()?;
@@ -1085,12 +1080,11 @@ async fn round(
         .await?;
     tracing::info!(
         net,
-        "platform rewards: epoch {}, {} new finished epochs, {} proposers so far, {} balances, {} votes",
+        "platform rewards: epoch {}, {} new finished epochs, {} proposers so far, {} balances",
         current.epoch,
         n(stored),
         counts.0,
-        counts.1,
-        counts.2
+        counts.1
     );
     if ctx.net == Network::Mainnet {
         explorer_totals(ctx, explorer).await;
@@ -1550,6 +1544,86 @@ async fn balances(peers: &mut Peers, protx: &[String]) -> Result<Vec<([u8; 32], 
         out.extend(peers.agreed("getIdentitiesBalances", &v0(&req), SMALL_ANSWER, parse_pairs).await?.0);
     }
     Ok(out)
+}
+
+pub async fn run_votes(ctx: Arc<NetCtx>) {
+    let client = platform::client();
+    wait_for_evonodes(&ctx).await;
+    // The newest epoch the round was woken for: once per epoch, so a failing round keeps its own pace.
+    let mut woken = None;
+    loop {
+        if let Err(e) = read_votes(&ctx, &client, &mut woken).await {
+            tracing::warn!(net = ctx.net.name(), "platform rewards: upgrade vote: {e:#}");
+        }
+        tokio::time::sleep(VOTE_INTERVAL).await;
+    }
+}
+
+/// The upgrade vote's tally (getProtocolVersionUpgradeState) and each evonode's vote, as two evonodes
+/// agree on them. Both are kept only while Drive counts the epoch the last round read: a new epoch wakes
+/// the round, and its votes wait for it.
+async fn read_votes(ctx: &NetCtx, client: &reqwest::Client, woken: &mut Option<u64>) -> Result<()> {
+    let mut peers = Peers::load(ctx, client).await?;
+    let (newest, _) = ctx.db.read(stored_ends).await?;
+    peers.min_time_ms = newest.map_or(0, |b| b.first_block_time * 1000);
+    peers.behind_epoch = newest.map(|b| b.epoch);
+    let net = ctx.net.name();
+    let tally = soft(
+        net,
+        "upgrade state",
+        peers.agreed("getProtocolVersionUpgradeState", &v0(&[]), SMALL_ANSWER, parse_upgrade_state).await,
+    );
+    let Some((versions, meta)) = tally else { return Ok(()) };
+    let votes = soft(net, "votes", votes(&mut peers).await);
+    let stored = ctx.db.read(|c| Ok(self::current(c)?.and_then(|n| n["epoch"].as_u64()))).await?;
+    if stored != Some(meta.epoch) {
+        if stored.is_some_and(|e| meta.epoch > e) && *woken != Some(meta.epoch) {
+            *woken = Some(meta.epoch);
+            ctx.platform_wake.notify_one();
+        }
+        return Ok(());
+    }
+    let (now, votes) = ctx
+        .db
+        .write(move |c| {
+            let tx = c.transaction()?;
+            let now_ts = db::now();
+            // The round may have moved on since: its epoch is the one the votes have to be from.
+            let Some(mut now) = self::current(&tx)?.filter(|n| n["epoch"].as_u64() == Some(meta.epoch)) else {
+                return Ok((None, None));
+            };
+            now["versions"] = json!(versions);
+            now["votes_updated"] = json!(now_ts);
+            set_meta(&tx, NOW_KEY, &now.to_string())?;
+            if let Some(votes) = &votes {
+                tx.execute("DELETE FROM platform_votes", [])?;
+                let mut st = tx.prepare("INSERT INTO platform_votes (protx, version, ts) VALUES (?1, ?2, ?3)")?;
+                for (id, v) in votes {
+                    st.execute(params![hex(id), *v as i64, now_ts])?;
+                }
+            }
+            tx.commit()?;
+            Ok((Some(now), votes.map(|v| v.into_iter().map(|(id, v)| (hex(&id), v as i64)).collect())))
+        })
+        .await?;
+    // Only the vote changed: the rest of the board stands, without reading months of payouts again. A board
+    // the round has built for a newer epoch since keeps its own `now`.
+    if let Some(now) = now {
+        let mut board = ctx.platform_board.write().unwrap();
+        if let Some(b) = board.as_ref()
+            && let Some(mut cached) = b.now.clone().filter(|n| n["epoch"].as_u64() == Some(meta.epoch))
+        {
+            cached["versions"] = now["versions"].clone();
+            cached["votes_updated"] = now["votes_updated"].clone();
+            let mut b = (**b).clone();
+            b.now = Some(cached);
+            if let Some(votes) = votes {
+                b.votes = votes;
+            }
+            *board = Some(Arc::new(b));
+        }
+    }
+    Ok(())
 }
 
 /// Every evonode's protocol version vote: getProtocolVersionUpgradeVoteStatus { start_pro_tx_hash = 1,
@@ -2018,7 +2092,8 @@ fn pool_so_far(now: &Value) -> Option<u64> {
 
 /// Everything per evonode the network table, the list and evonode pages need, keyed by ProTx, and the
 /// network-wide sums. Built once per round (`refresh_board`), not per request: the sums read every
-/// payout of months.
+/// payout of months. The upgrade vote's reads only swap in `now` and `votes`.
+#[derive(Clone)]
 pub struct Board {
     now: Option<Value>,
     last: HashMap<String, (i64, i64)>,
@@ -2229,7 +2304,8 @@ pub fn network_json(c: &Connection, view: &View, net: Network) -> Result<Value> 
     let current_pv = now["protocol_version"].as_u64().unwrap_or(0);
     let versions: Vec<(u64, u64)> = serde_json::from_value(now["versions"].clone()).unwrap_or_default();
     let next_epoch: Vec<i64> = evonodes.iter().filter_map(|e| e.next_epoch).collect();
-    let upgrade = upgrade_json(current_pv, &versions, &next_epoch, enabled);
+    let mut upgrade = upgrade_json(current_pv, &versions, &next_epoch, enabled);
+    upgrade["updated"] = now["votes_updated"].clone();
     let durations: Vec<i64> = b.epochs.iter().filter_map(|e| e["duration"].as_i64()).take(6).collect();
     let epoch_secs = if durations.is_empty() {
         epoch_secs(net) as i64

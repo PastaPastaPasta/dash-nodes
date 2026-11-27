@@ -5,11 +5,14 @@
 /**
  * @param doc the /platform document
  * @param nowSecs the time to judge the epoch's end against, in seconds
- * @param f { fmt, pct, inAbout } from common.js
+ * @param f { fmt, pct, inAbout, ago } from common.js
  */
-export function upgradeView(doc, nowSecs, { fmt, pct, inAbout }) {
+export function upgradeView(doc, nowSecs, { fmt, pct, inAbout, ago }) {
   const u = doc.upgrade;
   const n = doc.now;
+  // When the counts were read: null until the crawler has this epoch, and older crawlers only have the round's time.
+  const unread = "updated" in u && u.updated == null;
+  const asOf = unread ? "not read yet this epoch" : `as of ${ago(u.updated ?? n.updated)}`;
   const locked = u.phase === "locked_in" && u.next_epoch != null && u.next_epoch > u.current;
   const v = locked ? u.next_epoch : u.phase === "voting" ? u.candidate ?? null : null;
   const ends = n.ends > nowSecs ? `ends ${inAbout(n.ends)}` : "ends any moment";
@@ -22,7 +25,7 @@ export function upgradeView(doc, nowSecs, { fmt, pct, inAbout }) {
     .filter(([ver]) => locked || ver !== v)
     .map(([ver, votes]) => ({ label: `Voted for ${ver}`, value: fmt(votes), note: ver === u.current ? "the protocol running now" : null }));
   const note = (u.next_epoch_reported_by ? `${fmt(u.next_epoch_reported_by)} evonodes report which protocol Drive runs next epoch: ${u.next_epoch}. ` : "") +
-    "Vote counts are what Drive reports (getProtocolVersionUpgradeState), as two evonodes agreed on it. The table below shows each evonode's vote.";
+    `Vote counts are what Drive reports (getProtocolVersionUpgradeState), as two evonodes agreed on it, ${asOf}. The table below shows each evonode's vote.`;
   const runs = v == null ? null : { label: `Run software for ${v}`, value: fmt(supports.length), note: "as their Drive told our checker" };
 
   if (v == null) {
@@ -30,12 +33,14 @@ export function upgradeView(doc, nowSecs, { fmt, pct, inAbout }) {
     const older = u.versions.some(([ver, votes]) => ver !== u.current && votes > 0);
     return {
       state: "active", version: u.current, title: `Protocol ${u.current} is live`, badge: null,
-      lede: !voted
-        ? `No upgrade is being voted on: no evonode has voted yet this epoch, and Platform runs protocol ${u.current}.`
-        : older
-          ? `No upgrade is being voted on: no evonode has voted for a protocol above ${u.current}, the one Platform runs now.`
-          : `No upgrade is being voted on: every vote is for the protocol Platform runs now, ${u.current}.`,
-      meter: null, stats: others, note, pending: 0,
+      lede: unread
+        ? `Platform runs protocol ${u.current}. This epoch's votes haven't been read yet; they appear within a few minutes.`
+        : !voted
+          ? `No upgrade is being voted on: no evonode has voted yet this epoch, and Platform runs protocol ${u.current}.`
+          : older
+            ? `No upgrade is being voted on: no evonode has voted for a protocol above ${u.current}, the one Platform runs now.`
+            : `No upgrade is being voted on: every vote is for the protocol Platform runs now, ${u.current}.`,
+      meter: null, stats: others, note, pending: 0, asOf,
     };
   }
   if (locked) {
@@ -43,7 +48,7 @@ export function upgradeView(doc, nowSecs, { fmt, pct, inAbout }) {
       state: "locked_in", version: v, title: `Protocol ${v}: `, badge: { tone: "good", text: "locked in" },
       lede: `Drive has scheduled protocol ${v} for the next epoch. Platform runs ${u.current} until epoch ${fmt(n.epoch)} ${ends}; ` +
         `protocol ${v} starts with epoch ${fmt(n.epoch + 1)}.`,
-      meter: null, stats: [runs, ...others], note, pending: 0,
+      meter: null, stats: [runs, ...others], note, pending: 0, asOf,
     };
   }
   const met = u.votes >= u.required;
@@ -59,12 +64,12 @@ export function upgradeView(doc, nowSecs, { fmt, pct, inAbout }) {
       (met ? "It has enough votes now." : `It needs ${fmt(u.required - u.votes)} more.`),
     meter: { votes: u.votes, required: u.required, enabled: u.enabled_evonodes, met },
     stats: [
-      { label: `Voted for ${v}`, value: fmt(u.votes), note: `${pct(u.votes / Math.max(1, u.enabled_evonodes))} of enabled evonodes`, tone: met ? "good" : null },
+      { label: `Voted for ${v}`, value: fmt(u.votes), note: `${asOf}: ${pct(u.votes / Math.max(1, u.enabled_evonodes))} of enabled evonodes`, tone: met ? "good" : null },
       { label: "Votes needed", value: fmt(u.required), note: needed },
       runs,
       { label: "Upgraded, vote not counted yet", value: fmt(pending.length), note: "it counts once they propose a block" },
       ...others,
     ],
-    note, pending: pending.length,
+    note, pending: pending.length, asOf,
   };
 }
