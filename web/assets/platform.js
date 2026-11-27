@@ -72,6 +72,8 @@ function renderUpgrade() {
 
 // ---- when is my evonode's turn ----
 
+/** Whether the lookup's query was submitted: until then a miss stays quiet. */
+let submitted = false;
 /** The lookup's answer; `typing` keeps a miss quiet until the query is submitted. */
 function showTurn(typing = false) {
   const s = doc.schedule;
@@ -90,8 +92,8 @@ function showTurn(typing = false) {
 function renderNext() {
   showTurn();
   let timer;
-  $("next-q").addEventListener("input", () => { clearTimeout(timer); timer = setTimeout(() => showTurn(true), 200); });
-  $("next-form").addEventListener("submit", (ev) => { ev.preventDefault(); clearTimeout(timer); showTurn(); });
+  $("next-q").addEventListener("input", () => { submitted = false; clearTimeout(timer); timer = setTimeout(() => showTurn(true), 200); });
+  $("next-form").addEventListener("submit", (ev) => { ev.preventDefault(); submitted = true; clearTimeout(timer); showTurn(); });
   $("next").hidden = false;
 }
 
@@ -254,7 +256,7 @@ async function main() {
     const fresh = await api(`${net}/platform`).catch(() => null);
     if (fresh?.now) doc = fresh;
     renderUpgrade();
-    showTurn();
+    showTurn(!submitted);
   }, 60_000);
   renderEpochs();
   renderAll();

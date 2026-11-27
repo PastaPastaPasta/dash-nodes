@@ -1549,8 +1549,10 @@ async fn balances(peers: &mut Peers, protx: &[String]) -> Result<Vec<([u8; 32], 
 pub async fn run_votes(ctx: Arc<NetCtx>) {
     let client = platform::client();
     wait_for_evonodes(&ctx).await;
+    // The newest epoch the round was woken for: once per epoch, so a failing round keeps its own pace.
+    let mut woken = None;
     loop {
-        if let Err(e) = read_votes(&ctx, &client).await {
+        if let Err(e) = read_votes(&ctx, &client, &mut woken).await {
             tracing::warn!(net = ctx.net.name(), "platform rewards: upgrade vote: {e:#}");
         }
         tokio::time::sleep(VOTE_INTERVAL).await;
@@ -1560,7 +1562,7 @@ pub async fn run_votes(ctx: Arc<NetCtx>) {
 /// The upgrade vote's tally (getProtocolVersionUpgradeState) and each evonode's vote, as two evonodes
 /// agree on them. Both are kept only while Drive counts the epoch the last round read: a new epoch wakes
 /// the round, and its votes wait for it.
-async fn read_votes(ctx: &NetCtx, client: &reqwest::Client) -> Result<()> {
+async fn read_votes(ctx: &NetCtx, client: &reqwest::Client, woken: &mut Option<u64>) -> Result<()> {
     let mut peers = Peers::load(ctx, client).await?;
     let (newest, _) = ctx.db.read(stored_ends).await?;
     peers.min_time_ms = newest.map_or(0, |b| b.first_block_time * 1000);
@@ -1575,7 +1577,8 @@ async fn read_votes(ctx: &NetCtx, client: &reqwest::Client) -> Result<()> {
     let votes = soft(net, "votes", votes(&mut peers).await);
     let stored = ctx.db.read(|c| Ok(self::current(c)?.and_then(|n| n["epoch"].as_u64()))).await?;
     if stored != Some(meta.epoch) {
-        if stored.is_some_and(|e| meta.epoch > e) {
+        if stored.is_some_and(|e| meta.epoch > e) && *woken != Some(meta.epoch) {
+            *woken = Some(meta.epoch);
             ctx.platform_wake.notify_one();
         }
         return Ok(());
