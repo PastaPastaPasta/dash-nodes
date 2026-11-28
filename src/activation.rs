@@ -1063,6 +1063,21 @@ fn outlook(d: &Deployment, chain: &Chain, current: Option<&Judged>, ehf: Option<
             let t = c.threshold.unwrap_or(d.threshold_start);
             let remaining = w - c.window.mined;
             let needed = (t - c.window.count).max(0);
+            // Falling short, this window fails the deployment if its last block's median time is at the
+            // timeout (estimated from the pace); otherwise the next window starts, and any threshold is
+            // within one window's reach.
+            let mtp_end = tip.mediantime as f64 + (end - tip.height) as f64 * pace;
+            let next_attempt = (mtp_end < d.timeout as f64).then(|| {
+                let attempt = c.attempt.unwrap_or(0) + 1;
+                json!({
+                    "attempt": attempt,
+                    "threshold": threshold(d, attempt),
+                    "window_start": a(end + 1),
+                    "window_end": a(end + w),
+                    "lock_in": a(end + 1 + w),
+                    "activation": a(end + 1 + 2 * w),
+                })
+            });
             json!({
                 "phase": "signalling",
                 "window_end": a(end),
@@ -1073,6 +1088,7 @@ fn outlook(d: &Deployment, chain: &Chain, current: Option<&Judged>, ehf: Option<
                 "activation_if_reached": a(end + 1 + w),
                 "next_threshold": threshold(d, c.attempt.unwrap_or(0) + 1),
                 "next_window": a(end + 1),
+                "next_attempt": next_attempt,
             })
         }
         State::LockedIn => json!({"phase": "locked_in", "activation": a(c.since + w)}),
@@ -1353,6 +1369,39 @@ mod tests {
     }
 
     #[test]
+    fn an_out_of_reach_window_points_at_the_next_attempt() {
+        let d = MAINNET[0];
+        // Signal at 2,573,022: STARTED from 2,576,448; nothing signals, so with 801 blocks left it can't lock in.
+        let (signal, tip) = (2_573_022, 2_579_678);
+        let doc_at = |tip_mtp: i64| {
+            let hs: Vec<Header> = (2_572_416..=tip)
+                .map(|h| {
+                    let mtp = tip_mtp + (h - tip) * 158;
+                    Header { height: h, time: mtp + 900, mediantime: mtp, version: 0x2000_0000, ..Default::default() }
+                })
+                .collect();
+            let seeds = HashMap::from([("v24".to_owned(), (State::Defined, 0))]);
+            let rpc = json!({"v24": {"bip9": {"ehf_height": signal}}});
+            build(Network::Mainnet, &hs, tip, &rpc, &seeds, &HashMap::new(), None, 0, &HashMap::new()).unwrap()
+        };
+        let doc = doc_at(d.start + 30 * 86400);
+        let o = &doc["deployments"][0]["outlook"];
+        assert_eq!((o["phase"].as_str(), o["possible"].as_bool()), (Some("signalling"), Some(false)));
+        assert_eq!(o["activation_if_reached"]["height"], 2_584_512);
+        let n = &o["next_attempt"];
+        assert_eq!((n["attempt"].as_i64(), n["threshold"].as_i64()), (Some(1), Some(3218)));
+        let heights: Vec<_> =
+            ["window_start", "window_end", "lock_in", "activation"].iter().map(|k| n[k]["height"].as_i64()).collect();
+        assert_eq!(heights, [Some(2_580_480), Some(2_584_511), Some(2_584_512), Some(2_588_544)]);
+        assert_eq!(n["activation"]["estimated"], true);
+        // This window ending at the timeout fails the deployment unless it locks in: no attempt after it.
+        let doc = doc_at(d.timeout - 100 * 158);
+        let o = &doc["deployments"][0]["outlook"];
+        assert_eq!(o["phase"], "signalling");
+        assert!(o["next_attempt"].is_null());
+    }
+
+    #[test]
     fn a_late_signal_never_points_at_a_mined_window() {
         // The median time crossed the start at 2,568,000, but no signal yet with the tip well past the
         // window after it: the first window that can count is the next one to start, not a mined one.
@@ -1457,10 +1506,12 @@ mod fixture {
 
     /// Writes a mainnet document mid-signalling (attempt 2, after two short windows) to $ACTIVATION_FIXTURE,
     /// for checking the page by hand: `ACTIVATION_FIXTURE=/tmp/x.json cargo test fixture -- --ignored`.
+    /// With `ACTIVATION_FIXTURE_SHORT=1` the current window signals 30%, out of reach of its threshold.
     #[test]
     #[ignore]
     fn started_mainnet() {
         let Ok(path) = std::env::var("ACTIVATION_FIXTURE") else { return };
+        let rate = if std::env::var_os("ACTIVATION_FIXTURE_SHORT").is_some() { 30 } else { 81 };
         let d = MAINNET[0];
         let first = 2_572_416 - 4032;
         let tip = 2_572_416 + 2 * 4032 + 2900;
@@ -1472,7 +1523,7 @@ mod fixture {
                     i if i < 0 => false,
                     i if i < 4032 => i % 10 < 7,   // 70%: short of 80%
                     i if i < 8064 => i % 100 < 79, // 79%: short of 79.8%
-                    i => (i * 7919) % 100 < 81,    // 81% so far this window
+                    i => (i * 7919) % 100 < rate,  // 81% (or 30%) so far this window
                 };
                 let time = t0 + (h - 2_572_416) * 157;
                 Header {
