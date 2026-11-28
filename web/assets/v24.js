@@ -107,8 +107,8 @@ function headline(d, o) {
       const now = `Miners are signalling: ${fmt(d.window.count)} of the ${fmt(d.window.threshold)} blocks this window needs, with ${fmt(o.remaining)} blocks to go.`;
       if (o.possible !== false) return now;
       const n = o.next_attempt;
-      return n ? `${now} It can't get there, so the earliest activation is ${when(n.activation)}, if window #${n.attempt + 1} locks in.`
-        : `${now} It can't get there, and no window starts after it before the timeout (${dateTime(p.timeout)}): v24 can no longer activate in this deployment.`;
+      if (n) return `${now} It can't get there, so the earliest activation is ${when(n.activation)}, if window #${n.attempt + 1} locks in.`;
+      return n === null ? `${now} It can't get there, and no window starts after it before the timeout (${dateTime(p.timeout)}): v24 can no longer activate in this deployment.` : now;
     }
     case "locked_in":
       return `v24 is locked in. It activates at ${when(o.activation)}.`;
@@ -159,6 +159,7 @@ function activationStats(o) {
   if (o.phase !== "signalling") return [];
   if (o.possible) return [stat("Activation if this window locks in", `block ${fmt(o.activation_if_reached.height)}`, `about ${dateTime(o.activation_if_reached.time)}`)];
   const n = o.next_attempt;
+  if (n === undefined) return [];
   if (!n) return [stat("Activation", "no longer possible", "this window can't lock in, and it's the last before the timeout", "critical")];
   return [stat("Earliest activation", `block ${fmt(n.activation.height)}`,
     `about ${dateTime(n.activation.time)}, after lock-in at block ${fmt(n.lock_in.height)}`)];
@@ -415,6 +416,7 @@ function milestones(d, o) {
         ["Lock-in, if it reaches the threshold", o.lock_in_if_reached, false],
         ["Activation, if this window locks in", o.activation_if_reached, false]];
       const n = o.next_attempt;
+      if (n === undefined) return [signal, [`${ends}, out of reach`, o.window_end, false]];
       if (!n) return [signal, [`${ends}, out of reach and the last before the timeout`, o.window_end, false],
         ["v24 fails; it can no longer activate", o.next_window, false]];
       return [signal, [`${ends}, out of reach`, o.window_end, false],

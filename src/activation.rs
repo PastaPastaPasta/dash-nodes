@@ -1395,10 +1395,16 @@ mod tests {
         assert_eq!(heights, [Some(2_580_480), Some(2_584_511), Some(2_584_512), Some(2_588_544)]);
         assert_eq!(n["activation"]["estimated"], true);
         // This window ending at the timeout fails the deployment unless it locks in: no attempt after it.
-        let doc = doc_at(d.timeout - 100 * 158);
-        let o = &doc["deployments"][0]["outlook"];
-        assert_eq!(o["phase"], "signalling");
-        assert!(o["next_attempt"].is_null());
+        // The tip is 801 blocks before its last block, whose median time is estimated at 158 s a block.
+        let to_end = (2_580_479 - tip) * 158;
+        for (tip_mtp, next) in
+            [(d.timeout - to_end, false), (d.timeout - to_end - 1, true), (d.timeout - 100 * 158, false)]
+        {
+            let doc = doc_at(tip_mtp);
+            let o = &doc["deployments"][0]["outlook"];
+            assert_eq!(o["phase"], "signalling");
+            assert_eq!(!o["next_attempt"].is_null(), next, "tip median time {tip_mtp}");
+        }
     }
 
     #[test]
@@ -1535,7 +1541,7 @@ mod fixture {
                 }
             })
             .collect();
-        let rpc = json!({"v24": {"type": "bip9", "bip9": {"status": "started", "status_next": "started", "since": 2_572_416, "ehf_height": 2_569_300, "ehf": true}}});
+        let rpc = json!({"v24": {"type": "bip9", "active": false, "bip9": {"status": "started", "status_next": "started", "since": 2_572_416, "ehf_height": 2_569_300, "ehf": true}}});
         let seeds =
             HashMap::from([("v24".to_owned(), (State::Defined, 0)), ("evo_shares".to_owned(), (State::Defined, 0))]);
         let doc = build(
