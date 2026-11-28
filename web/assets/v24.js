@@ -103,8 +103,13 @@ function headline(d, o) {
         : `v24 can't start before ${start} (the chain's median time). Then masternodes signal it, and miners vote window by window.`;
     case "waiting_for_window":
       return `The masternodes' signal is in block ${fmt(d.ehf.height)}; miners start signalling at block ${fmt(o.earliest_start.height)}.`;
-    case "signalling":
-      return `Miners are signalling: ${fmt(d.window.count)} of the ${fmt(d.window.threshold)} blocks this window needs, with ${fmt(o.remaining)} blocks to go.`;
+    case "signalling": {
+      const now = `Miners are signalling: ${fmt(d.window.count)} of the ${fmt(d.window.threshold)} blocks this window needs, with ${fmt(o.remaining)} blocks to go.`;
+      if (o.possible !== false) return now;
+      const n = o.next_attempt;
+      if (n) return `${now} It can't get there, so the earliest activation is ${when(n.activation)}, if window #${n.attempt + 1} locks in.`;
+      return n === null ? `${now} It can't get there, and no window starts after it before the timeout (${dateTime(p.timeout)}): v24 can no longer activate in this deployment.` : now;
+    }
     case "locked_in":
       return `v24 is locked in. It activates at ${when(o.activation)}.`;
     case "active":
@@ -135,7 +140,7 @@ function renderStatus(doc, d, o) {
       : o.earliest_start ? stat("Next window that counts", `block ${fmt(o.earliest_start.height)}`,
         `${o.earliest_start.estimated ? "about " : ""}${dateTime(o.earliest_start.time)}${o.phase === "waiting_for_signal" ? ", at the earliest" : ""}`) : null,
     o.earliest_activation ? stat("Earliest activation", `block ${fmt(o.earliest_activation.height)}`, `about ${dateTime(o.earliest_activation.time)}`) : null,
-    o.activation_if_reached ? stat("Activation if this window locks in", `block ${fmt(o.activation_if_reached.height)}`, `about ${dateTime(o.activation_if_reached.time)}`) : null,
+    ...activationStats(o),
     o.activation && o.phase !== "active" ? stat("Activation", `block ${fmt(o.activation.height)}`, `about ${dateTime(o.activation.time)}`) : null,
     stat("Masternode signal", d.ehf.height ? `block ${fmt(d.ehf.height)}` : "not mined yet",
       d.ehf.height ? (d.ehf.block?.time ? dateTime(d.ehf.block.time) : "") : "needed before any window counts", d.ehf.height ? "good" : null),
@@ -147,6 +152,17 @@ function renderStatus(doc, d, o) {
   $("status-note").textContent = `Our dashd (${doc.dashd || "unknown version"}), block ${fmt(doc.tip.height)}, ${dateTime(doc.updated)}. ` +
     `Times to come are estimates at ${Math.round(doc.block_seconds)} s a block.`;
   $("status").hidden = false;
+}
+
+/** While signalling: this window's activation if it can still lock in, else the earliest one that can. */
+function activationStats(o) {
+  if (o.phase !== "signalling") return [];
+  if (o.possible) return [stat("Activation if this window locks in", `block ${fmt(o.activation_if_reached.height)}`, `about ${dateTime(o.activation_if_reached.time)}`)];
+  const n = o.next_attempt;
+  if (n === undefined) return [];
+  if (!n) return [stat("Activation", "no longer possible", "this window can't lock in, and it's the last before the timeout", "critical")];
+  return [stat("Earliest activation", `block ${fmt(n.activation.height)}`,
+    `about ${dateTime(n.activation.time)}, after lock-in at block ${fmt(n.lock_in.height)}`)];
 }
 
 // ---- can this window lock in ----
@@ -393,13 +409,21 @@ function milestones(d, o) {
         ["Lock-in, if that window reaches the threshold", o.earliest_lock_in, false],
         ["Activation, at the earliest", o.earliest_activation, false],
       ];
-    case "signalling":
-      return [
-        ["Masternodes' signal mined", d.ehf.block, true],
-        [`This window ends (attempt ${d.window.attempt + 1})`, o.window_end, false],
+    case "signalling": {
+      const signal = ["Masternodes' signal mined", d.ehf.block, true];
+      const ends = `This window ends (attempt ${d.window.attempt + 1})`;
+      if (o.possible) return [signal, [ends, o.window_end, false],
         ["Lock-in, if it reaches the threshold", o.lock_in_if_reached, false],
-        ["Activation, if this window locks in", o.activation_if_reached, false],
-      ];
+        ["Activation, if this window locks in", o.activation_if_reached, false]];
+      const n = o.next_attempt;
+      if (n === undefined) return [signal, [`${ends}, out of reach`, o.window_end, false]];
+      if (!n) return [signal, [`${ends}, out of reach and the last before the timeout`, o.window_end, false],
+        ["v24 fails; it can no longer activate", o.next_window, false]];
+      return [signal, [`${ends}, out of reach`, o.window_end, false],
+        [`Next window ends (attempt ${n.attempt + 1})`, n.window_end, false],
+        ["Lock-in, if it reaches the threshold", n.lock_in, false],
+        ["Earliest activation", n.activation, false]];
+    }
     case "locked_in":
       return [["Masternodes' signal mined", d.ehf.block, true], ["Locked in", { height: d.since, time: null, estimated: false }, true], ["Activation", o.activation, tip(o.activation)]];
     case "active":
@@ -543,7 +567,7 @@ function renderWindows(d, o, pace) {
   // Windows to come: from the first that can count (or the next one), until the threshold bottoms out.
   let next = null;
   if (o.phase === "waiting_for_signal" || o.phase === "waiting_for_window") next = { start: o.earliest_start, attempt: 0 };
-  else if (o.phase === "signalling" && o.next_window) next = { start: o.next_window, attempt: d.window.attempt + 1 };
+  else if (o.phase === "signalling" && o.next_attempt) next = { start: o.next_attempt.window_start, attempt: o.next_attempt.attempt };
   if (next) {
     for (let a = next.attempt, i = 0; i < 12; a++, i++) {
       const t = d.schedule[Math.min(a, d.schedule.length - 1)].threshold;
@@ -615,7 +639,7 @@ function renderThresholds(doc, d, o, pace) {
   const done = new Map(d.windows.filter((w) => w.attempt != null).map((w) => [w.attempt, w]));
   // Windows to come are dated from the next one (anchored where the tip is, like the milestones): the
   // earliest first window while waiting, the next window while signalling, none once it's decided.
-  const anchor = o.phase === "signalling" ? [d.window.attempt + 1, o.next_window]
+  const anchor = o.phase === "signalling" ? (o.next_attempt ? [o.next_attempt.attempt, o.next_attempt.window_start] : null)
     : o.earliest_start ? [0, o.earliest_start] : null;
   const decided = ["locked_in", "active", "failed"].includes(d.state) || o.phase === "timed_out";
   // The schedule's windows, then (on a network where it took longer) the last ones that counted.

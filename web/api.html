@@ -185,7 +185,9 @@
         <code>-</code> per block; while it counts, <code>pools</code>: <code>blocks</code> and <code>signalling</code> per <code>pool</code>
         its coinbase tag names, <code>null</code> for untagged, a best-effort attribution, left out until every block's
         coinbase is read), <code>windows</code> (the ones that counted, and the latest), <code>recent</code> (signals in the
-        last 576 blocks), <code>schedule</code> (the threshold per attempt) and <code>outlook</code> (the next milestones). Heights come
+        last 576 blocks), <code>schedule</code> (the threshold per attempt) and <code>outlook</code> (the next milestones; while
+        signalling, <code>next_attempt</code> is the window after this one, with its <code>window_end</code>, <code>lock_in</code> and
+        <code>activation</code>, or <code>null</code> when this window is the last before the timeout). Heights come
         with a <code>time</code> and <code>estimated</code>: true for blocks not mined yet, at <code>block_seconds</code> each.</p>
       <pre class="code">curl https://radar.dashhq.org/api/v1/mainnet/activation | jq '.deployments[0].outlook'</pre>
     </div>
